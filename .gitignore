@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs. experiments/docs/ENVIRONMENT.md tells you to create `.venv` right here,
+# and CPython's venv only started writing a self-excluding .gitignore in 3.13 — so ignore it
+# explicitly rather than relying on the tool that happened to create it.
+.venv/
+venv/
+
+# --- Research artifacts (regenerated, never committed) ---
+# Run outputs: per-task transcripts/rows/grades, streams, summaries.
+results/
+artifacts/
+runs/
+*.jsonl
+
+# Rendered figures and other local exports are never tracked.
+experiments/figures/
+*.png
+*.pdf
+*.svg
+
+# Aggregated tables derived from results/.
+*.csv
+
+# --- Secrets / local env ---
+.secrets.env
+.env
+.env.*
+!.env.example
+*.key

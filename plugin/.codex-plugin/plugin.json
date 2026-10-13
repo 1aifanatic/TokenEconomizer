@@ -1,0 +1,10 @@
+{
+  "name": "tokeneconomizer",
+  "version": "0.1.0",
+  "description": "Cuts a coding agent's token bill from outside the agent: learned per-repo facts injected at session start, an unused-capability deny list you approve (written to the project's .codex/config.toml), and a guard that redirects a turn stuck in a failing loop.",
+  "author": {"name": "TokenEconomizer authors"},
+  "repository": "https://github.com/microsoft/TokenEconomizer",
+  "license": "MIT",
+  "keywords": ["cost", "tokens", "context", "hooks"],
+  "hooks": "./hooks/codex-hooks.json"
+}

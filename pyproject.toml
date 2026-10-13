@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tokeneconomizer"
+version = "0.1.0"
+description = "Runtime cost control for coding agents (Claude Code, Codex, Copilot CLI, Pi), delivered from outside the agent as a plugin."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "TokenEconomizer authors" }]
+keywords = ["llm-agents", "cost-optimization", "swe-bench", "token-economy"]
+
+# The core package is intentionally STDLIB-ONLY: the three mechanisms + the vendored
+# pricing/reflect/spiral building blocks import nothing outside the standard library, so
+# `import tokeneconomizer` works in any Python >=3.10 with zero install-time dependencies.
+dependencies = []
+
+[project.scripts]
+# The live layer's command line (status, facts, untool, replay, ...). The plugin ships its own
+# launcher (plugin/scripts/te) and does not need the package installed.
+te = "te_live.cli:main"
+
+[project.optional-dependencies]
+# Test suite is offline (no Docker / no datasets).
+test = ["pytest>=7.0"]
+# The reference task-execution harness under experiments/te_harness/ (see
+# experiments/docs/HARNESS.md). It adds no
+# PyPI dependency -- it is stdlib-only at import time and the official SWE-bench grader is
+# imported lazily from a checkout named by TE_SWEBENCH_REPO -- so this extra installs
+# nothing. It exists to give "I intend to run the harness" a name, since what the harness
+# actually needs cannot come from pip: Docker, an agent CLI on PATH, an API key, the
+# benchmark images, and for Web-Bench a built Rush monorepo.
+harness = []
+# The repo-map external baseline (tokeneconomizer/baselines/repomap.py) generates aider's
+# token-budgeted map on the HOST -- the task container's Python is pinned to the issue's
+# era and cannot run a modern tree-sitter stack. This is the ONLY baseline with a host
+# dependency: rtk ships a static binary and Serena installs itself in-container.
+#
+# It stays an EXTRA, and aider is imported inside `preflight()` rather than at module
+# scope, so `import tokeneconomizer` keeps its zero-dependency guarantee even though the
+# baselines now ship inside the core package. A machine that will never run the repomap
+# arms never needs aider installed.
+baselines = ["aider-chat>=0.60"]
+
+[tool.setuptools.packages.find]
+# The core package and the plugin's live layer ONLY. The paper's reproduction code
+# (experiments/, including te_harness) is deliberately not distributed: `import
+# tokeneconomizer` must not be able to reach Docker or an agent CLI, and excluding it here is
+# what makes that structural rather than a convention.
+include = ["tokeneconomizer*", "te_live*"]
+exclude = ["experiments*", "te_harness*", "tests*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "experiments/tests"]
+addopts = "-q"

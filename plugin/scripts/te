@@ -1,0 +1,10 @@
+#!/bin/sh
+# TokenEconomizer command line (`te status`, `te untool show`, `te replay`, ...).
+dir=$(CDPATH= cd -- "${0%/*}" && pwd)
+for py in "${TE_PYTHON:-}" python3 python; do
+  if [ -n "$py" ] && command -v "$py" >/dev/null 2>&1; then
+    exec "$py" "$dir/te_bootstrap.py" cli "$@"
+  fi
+done
+echo "te: no python3 on PATH (set TE_PYTHON)" >&2
+exit 1

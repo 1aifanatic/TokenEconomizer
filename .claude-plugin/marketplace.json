@@ -1,0 +1,14 @@
+{
+  "name": "tokeneconomizer",
+  "owner": {
+    "name": "TokenEconomizer authors"
+  },
+  "description": "TokenEconomizer: runtime cost control for coding agents.",
+  "plugins": [
+    {
+      "name": "tokeneconomizer",
+      "source": "./plugin",
+      "description": "Learned per-repo facts at session start, approved unused-tool deny lists, and a spiral guard for failing loops."
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+#!/bin/sh
+# TokenEconomizer hook launcher: run the hook dispatcher under the first Python 3 on PATH.
+# Fails open -- with no usable Python the hook prints an empty object, which changes nothing.
+dir=$(CDPATH= cd -- "${0%/*}" && pwd)
+for py in "${TE_PYTHON:-}" python3 python; do
+  if [ -n "$py" ] && command -v "$py" >/dev/null 2>&1; then
+    exec "$py" "$dir/te_bootstrap.py" hook "$@"
+  fi
+done
+# Drain stdin with a builtin (no `cat` when PATH is empty), then answer "no change".
+while IFS= read -r _line; do :; done
+echo '{}'
