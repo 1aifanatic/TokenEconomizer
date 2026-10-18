@@ -9,16 +9,16 @@ import os
 
 import pytest
 
-from te_live import guard
-from te_live.config import LiveConfig, load_config, unset_config, write_config
-from te_live.paths import repo_identity, repo_state_dir
+from tokeneconomizer import loopguard as guard
+from tokeneconomizer.plugin.config import LiveConfig, load_config, unset_config, write_config
+from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tests.test_live_hooks import (GREEN, _first, _turn, env, repo, run_session,  # noqa: F401
                                    stuck_calls, trap_session)
 
 
 # ---- parsing ------------------------------------------------------------------------------
-@pytest.mark.parametrize("key,on", [("inject", "envfacts"), ("untool", "propose"),
-                                    ("spiral", "nudge")])
+@pytest.mark.parametrize("key,on", [("microskills", "envfacts"), ("toolprune", "propose"),
+                                    ("loopguard", "nudge")])
 def test_each_mechanism_takes_a_plain_on_and_off(key, on):
     cfg = LiveConfig()
     assert cfg.set(key, "off") and getattr(cfg, key) == "off"
@@ -29,50 +29,90 @@ def test_each_mechanism_takes_a_plain_on_and_off(key, on):
 
 def test_a_guard_threshold_is_typed_and_range_checked():
     cfg = LiveConfig()
-    assert cfg.set("spiral.min_turns", "12") and cfg.spiral_thresholds["min_turns"] == 12
-    assert cfg.set("spiral.backstop_mult", "2") and cfg.spiral_thresholds["backstop_mult"] == 2.0
-    assert not cfg.set("spiral.min_turns", "12.5")           # a count is a whole number
-    assert not cfg.set("spiral.stagnation", "1.5")           # a share is between 0 and 1
-    assert not cfg.set("spiral.min_turns", "0")
-    assert not cfg.set("spiral.no_such_threshold", "3")
-    assert cfg.spiral_thresholds == {"min_turns": 12, "backstop_mult": 2.0}
+    assert cfg.set("loopguard.min_turns", "12") and cfg.loopguard_thresholds["min_turns"] == 12
+    assert (cfg.set("loopguard.backstop_mult", "2")
+            and cfg.loopguard_thresholds["backstop_mult"] == 2.0)
+    assert not cfg.set("loopguard.min_turns", "12.5")        # a count is a whole number
+    assert not cfg.set("loopguard.stagnation", "1.5")        # a share is between 0 and 1
+    assert not cfg.set("loopguard.min_turns", "0")
+    assert not cfg.set("loopguard.no_such_threshold", "3")
+    assert cfg.loopguard_thresholds == {"min_turns": 12, "backstop_mult": 2.0}
     assert len(cfg.warnings) == 4
 
 
 def test_set_and_unset_keep_thresholds_in_their_own_object(tmp_path):
     path = str(tmp_path / "config.json")
-    write_config(path, {"spiral": "off", "spiral.min_turns": "12", "spiral.edit_churn": "6"})
-    assert json.load(open(path)) == {"spiral": "off",
-                                     "spiral_thresholds": {"edit_churn": 6, "min_turns": 12}}
+    write_config(path, {"loopguard": "off", "loopguard.min_turns": "12",
+                        "loopguard.edit_churn": "6"})
+    assert json.load(open(path)) == {"loopguard": "off",
+                                     "loopguard_thresholds": {"edit_churn": 6, "min_turns": 12}}
     with pytest.raises(ValueError):
-        write_config(path, {"spiral.min_turns": "-1"})        # nothing written on a rejection
-    unset_config(path, ["spiral.min_turns", "spiral"])
-    assert json.load(open(path)) == {"spiral_thresholds": {"edit_churn": 6}}
-    unset_config(path, ["spiral.edit_churn"])
+        write_config(path, {"loopguard.min_turns": "-1"})     # nothing written on a rejection
+    unset_config(path, ["loopguard.min_turns", "loopguard"])
+    assert json.load(open(path)) == {"loopguard_thresholds": {"edit_churn": 6}}
+    unset_config(path, ["loopguard.edit_churn"])
     assert json.load(open(path)) == {}
     with pytest.raises(ValueError):
-        unset_config(path, ["spiral.nope"])
+        unset_config(path, ["loopguard.nope"])
 
 
 def test_the_repository_file_beats_the_global_one_and_the_environment_beats_both(tmp_path):
     root, repo_dir = tmp_path / "root", tmp_path / "repo"
-    write_config(str(root / "config.json"), {"spiral_nudges": "3", "spiral.min_turns": "30"})
-    write_config(str(repo_dir / "config.json"), {"spiral.min_turns": "10"})
+    write_config(str(root / "config.json"), {"loopguard_nudges": "3",
+                                             "loopguard.min_turns": "30"})
+    write_config(str(repo_dir / "config.json"), {"loopguard.min_turns": "10"})
     cfg = load_config(str(root), str(repo_dir), env={})
-    assert cfg.spiral_nudges == 3 and cfg.spiral_thresholds == {"min_turns": 10}
+    assert cfg.loopguard_nudges == 3 and cfg.loopguard_thresholds == {"min_turns": 10}
     cfg = load_config(str(root), str(repo_dir), env={
-        "TE_SPIRAL_NUDGES": "2", "TE_SPIRAL_THRESHOLDS": '{"min_turns": 8, "stagnation": 0.5}',
-        "TE_INJECT_MAX_FACTS": "2", "TE_SPIRAL": "off"})
-    assert cfg.spiral_nudges == 2 and cfg.inject_max_facts == 2 and cfg.spiral == "off"
-    assert cfg.spiral_thresholds == {"min_turns": 8, "stagnation": 0.5}
+        "TE_LOOPGUARD_NUDGES": "2",
+        "TE_LOOPGUARD_THRESHOLDS": '{"min_turns": 8, "stagnation": 0.5}',
+        "TE_MICROSKILLS_MAX_FACTS": "2", "TE_LOOPGUARD": "off"})
+    assert cfg.loopguard_nudges == 2 and cfg.microskills_max_facts == 2
+    assert cfg.loopguard == "off"
+    assert cfg.loopguard_thresholds == {"min_turns": 8, "stagnation": 0.5}
     assert not cfg.warnings
 
 
+def test_the_names_before_the_rename_still_work(tmp_path):
+    """`inject`, `untool`, `spiral` and their settings and variables are read as the new names;
+    a file holding both spellings takes the new one; writing a setting stores its new name and
+    drops the old spelling; unsetting by either name removes both."""
+    root, repo_dir = tmp_path / "root", tmp_path / "repo"
+    os.makedirs(root)
+    with open(root / "config.json", "w") as fh:
+        json.dump({"loopguard": "off", "spiral": "guard", "inject_max_facts": 3,
+                   "untool": "auto", "propose_every": 7, "spiral_aggr": "aggressive",
+                   "spiral_thresholds": {"min_turns": 9}}, fh)
+    cfg = load_config(str(root), str(repo_dir), env={
+        "TE_SPIRAL_NUDGES": "2", "TE_UNTOOL_EVIDENCE": "4", "TE_INJECT": "off"})
+    assert cfg.loopguard == "off"                       # the new name wins in one file
+    assert (cfg.microskills_max_facts, cfg.toolprune, cfg.microskills_propose_every,
+            cfg.loopguard_aggr) == (3, "auto", 7, "aggressive")
+    assert cfg.loopguard_thresholds == {"min_turns": 9}
+    assert (cfg.loopguard_nudges, cfg.toolprune_evidence, cfg.microskills) == (2, 4, "off")
+    assert not cfg.warnings
+    # a new variable beats its old spelling
+    assert load_config(str(root), env={"TE_SPIRAL": "nudge",
+                                       "TE_LOOPGUARD": "stop"}).loopguard == "stop"
+    assert LiveConfig().set("spiral", "guard") and LiveConfig().set("loopguard", "guard")
+    path = str(root / "config.json")
+    write_config(path, {"spiral": "nudge", "spiral.edit_churn": "5"})
+    written = json.load(open(path))
+    assert written["loopguard"] == "nudge" and "spiral" not in written
+    assert written["loopguard_thresholds"] == {"min_turns": 9, "edit_churn": 5}
+    assert "spiral_thresholds" not in written
+    unset_config(path, ["untool", "inject_max_facts", "spiral.min_turns"])
+    written = json.load(open(path))
+    assert "untool" not in written and "toolprune" not in written
+    assert "inject_max_facts" not in written
+    assert written["loopguard_thresholds"] == {"edit_churn": 5}
+
+
 def test_the_fact_caps_default_to_the_cores_own():
-    from tokeneconomizer.mechanisms import envfacts
+    from tokeneconomizer.microskills import envfacts
     cfg = LiveConfig()
-    assert (cfg.inject_max_facts, cfg.inject_max_tokens) == (envfacts.MAX_FACTS,
-                                                             envfacts.MAX_TOKENS)
+    assert (cfg.microskills_max_facts, cfg.microskills_max_tokens) == (envfacts.MAX_FACTS,
+                                                                       envfacts.MAX_TOKENS)
 
 
 # ---- thresholds: preset, then learned, then pinned ----------------------------------------

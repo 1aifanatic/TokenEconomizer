@@ -1,7 +1,7 @@
 {
   "domain": "reposvul",
   "description": "ReposVul instances (Python split) audited for vulnerabilities, graded to F1.",
-  "source": "tokeneconomizer/workloads.py (regenerate: python scripts/export_workloads.py)",
+  "source": "experiments/te_bench/workloads.py (regenerate: python scripts/export_workloads.py)",
   "group_field": "instance",
   "seeds": [
     0,

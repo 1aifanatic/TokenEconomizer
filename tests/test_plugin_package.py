@@ -50,9 +50,9 @@ def test_manifests_agree_on_identity():
                                        ("copilot-hooks.json", "copilot")])
 def test_hook_files_run_the_launcher_on_every_event(name, host):
     doc = _json(PLUGIN, "hooks", name)
-    # no PreToolUse: the plugin never blocks a call. Copilot reports a failed tool in an event
-    # of its own, which the guard must see too.
-    want = EVENTS | ({"PostToolUseFailure"} if host == "copilot" else set())
+    # no PreToolUse: the plugin never blocks a call. Claude Code and Copilot report a failed
+    # tool in an event of its own, which the guard must see too.
+    want = EVENTS | ({"PostToolUseFailure"} if host in (None, "copilot") else set())
     assert set(doc["hooks"]) == want
     launcher = os.path.join(PLUGIN, "scripts", "te-hook")
     assert os.access(launcher, os.X_OK)
@@ -130,11 +130,13 @@ def test_the_bundle_runs_without_a_checkout(tmp_path):
     subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_plugin.py"),
                     "--out", str(out)], check=True, capture_output=True)
     bundle = out / "tokeneconomizer"
-    assert (bundle / "lib" / "te_live" / "hook.py").exists()
+    assert (bundle / "lib" / "tokeneconomizer" / "plugin" / "hook.py").exists()
+    assert not (bundle / "lib" / "te_live").exists()
     assert (bundle / ".github" / "plugin" / "plugin.json").exists()
     assert (bundle / "hooks" / "copilot-hooks.json").exists()
     assert (bundle / "lib" / "tokeneconomizer" / "__init__.py").exists()
     assert not (bundle / "lib" / "te_harness").exists()
+    assert not (bundle / "lib" / "te_bench").exists()
     assert not list(bundle.rglob("__pycache__"))
     m = json.loads((out / ".claude-plugin" / "marketplace.json").read_text())
     assert m["plugins"][0]["source"] == "./tokeneconomizer"
@@ -157,34 +159,95 @@ def test_the_bundle_runs_without_a_checkout(tmp_path):
 
 
 # ---- the layering the README promises ------------------------------------------------------
-def test_import_tokeneconomizer_cannot_reach_the_live_harness():
-    """`te_live` shells out to agent CLIs (opt-in side calls, the catalog probe); the core must
-    not be able to, which is why it is a sibling package and not `tokeneconomizer.live`."""
-    probe = ("import sys, tokeneconomizer, tokeneconomizer.arms, tokeneconomizer.mechanisms; "
-             "print(any(m.split('.')[0] == 'te_live' for m in sys.modules))")
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO)
-    assert out.stdout.strip() == "False", out.stdout + out.stderr
-    assert not os.path.exists(os.path.join(REPO, "tokeneconomizer", "live"))
+MECHANISMS = ("microskills", "toolprune", "loopguard", "trace")
+CORE_MODULES = ("config.py", "domain.py", "ledger.py", "pricing.py", "stage.py")
 
 
-def test_the_live_harness_is_stdlib_only_and_never_touches_the_benchmark_harness():
+def _imports(path):
+    """(module, level) of every import statement in a file."""
     import ast
-    live = os.path.join(REPO, "te_live")
-    for name in sorted(os.listdir(live)):
-        if not name.endswith(".py"):
-            continue
-        tree = ast.parse(open(os.path.join(live, name), encoding="utf-8").read())
-        for node in ast.walk(tree):
-            mods = ([a.name for a in node.names] if isinstance(node, ast.Import) else
-                    [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0
-                    else [])
-            for mod in mods:
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                yield a.name, 0
+        elif isinstance(node, ast.ImportFrom):
+            yield node.module or "", node.level
+            if node.level and not node.module:          # `from .. import plugin`
+                for a in node.names:
+                    yield a.name, node.level
+
+
+def _core_files():
+    pkg = os.path.join(REPO, "tokeneconomizer")
+    for name in CORE_MODULES + ("__init__.py",):
+        yield os.path.join(pkg, name), 0
+    for sub in MECHANISMS:
+        for name in sorted(os.listdir(os.path.join(pkg, sub))):
+            if name.endswith(".py"):
+                yield os.path.join(pkg, sub, name), 1
+
+
+def test_the_mechanisms_never_import_the_plugin_runtime():
+    """The plugin runs the mechanisms; the mechanisms never know it exists. Checked on the source
+    (no import names `plugin`, absolutely or relatively) and on a live import."""
+    for path, depth in _core_files():
+        for mod, level in _imports(path):
+            if level == 0:
+                assert not mod.startswith("tokeneconomizer.plugin"), f"{path} imports {mod}"
+            else:
+                # `from ..plugin import x` inside a subpackage, `from .plugin` at the top level
+                parts = mod.split(".")
+                reaches_top = level == depth + 1
+                assert not (reaches_top and parts[0] == "plugin"), f"{path} imports .{mod}"
+    probe = ("import sys, tokeneconomizer, tokeneconomizer.domain, tokeneconomizer.stage\n"
+             + "".join(f"import tokeneconomizer.{m}\n" for m in MECHANISMS)
+             + "print(sorted(m for m in sys.modules if m.startswith('tokeneconomizer.plugin') "
+               "or m.split('.')[0] in ('te_bench', 'te_harness', 'te_live')))")
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO)
+    assert out.stdout.strip() == "[]", out.stdout + out.stderr
+
+
+def test_the_plugin_ships_and_loads_no_benchmark_code():
+    """The benchmark adapters, the facade, the workloads, the baselines and the benchmark-only
+    controllers live with the experiments (`experiments/te_bench/`). The plugin's library is the
+    package alone, and running every part of the plugin loads none of them."""
+    shipped = os.path.join(PLUGIN, "lib", "tokeneconomizer")
+    assert sorted(n for n in os.listdir(shipped)
+                  if os.path.isdir(os.path.join(shipped, n)) and n != "__pycache__") == sorted(
+        MECHANISMS + ("plugin",))
+    for gone in ("adapters", "mechanisms", "vendor", "facade.py", "workloads.py", "runner.py",
+                 "arms.py", "baselines"):
+        assert not os.path.exists(os.path.join(shipped, gone)), gone
+    for gone in ("codex_spiral.py", "spiral_stage.py", "nudge_guard.py"):
+        assert not any(gone in files for _, _, files in os.walk(shipped)), gone
+    mods = ("hook", "controller", "fold", "cli", "denylist", "toolcheck", "repomap",
+            "sidecall", "judge", "probe")
+    probe = ("import sys\n" + "".join(f"import tokeneconomizer.plugin.{m}\n" for m in mods)
+             + "print(sorted({m.split('.')[0] for m in sys.modules} "
+               "& {'te_bench', 'te_harness', 'te_live'}))")
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=REPO)
+    assert out.stdout.strip() == "[]", out.stdout + out.stderr
+
+
+def test_the_package_is_stdlib_only_and_never_touches_the_benchmark_harness():
+    pkg = os.path.join(REPO, "tokeneconomizer")
+    for top, _, files in os.walk(pkg):
+        for name in sorted(files):
+            # the repository-map generator runs as a subprocess under a Python that has aider;
+            # nothing imports it
+            if not name.endswith(".py") or name == "repomap_gen.py":
+                continue
+            path = os.path.join(top, name)
+            for mod, level in _imports(path):
+                if level:
+                    continue
                 root = mod.split(".")[0]
-                assert root not in ("te_harness", "docker"), f"{name} imports {mod}"
+                assert root not in ("te_harness", "te_bench", "te_live", "docker"), \
+                    f"{path} imports {mod}"
                 # tomllib: standard library from 3.11, imported behind an ImportError guard
                 assert root in sys.stdlib_module_names or root in (
-                    "tokeneconomizer", "te_live", "tomllib"), \
-                    f"{name} imports non-stdlib {mod}"
+                    "tokeneconomizer", "tomllib"), f"{path} imports non-stdlib {mod}"
 
 
 def test_the_plugin_directory_is_also_a_pi_package():
@@ -199,6 +262,14 @@ def test_the_plugin_directory_is_also_a_pi_package():
     # call before it runs: the plugin guards nothing, on Pi as on the hook hosts.
     assert set(re.findall(r'pi\.on\("(\w+)"', src)) == {
         "session_start", "before_agent_start", "tool_result", "agent_end", "session_shutdown"}
+    # The repository root is the same package for `pi install git:github.com/...`, which clones
+    # the repository and reads the manifest at its root: same package, same extension file.
+    root = _json(os.path.dirname(PLUGIN), "package.json")
+    (root_ext,) = root["pi"]["extensions"]
+    assert os.path.realpath(os.path.join(os.path.dirname(PLUGIN), root_ext)) == \
+        os.path.realpath(os.path.join(PLUGIN, ext))
+    assert {k: v for k, v in root.items() if k != "pi"} == {k: v for k, v in pkg.items()
+                                                           if k != "pi"}
     # no lockfile: Claude Code installs a plugin's npm dependencies only when one exists,
     # and this package has none to install (the Pi API is a peer dependency)
     assert not any(os.path.exists(os.path.join(PLUGIN, f)) for f in
@@ -210,10 +281,10 @@ def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_pat
     core must be reachable from inside plugin/. Seen live: without plugin/lib the installed copy's
     hooks answered `{}` and every command crashed."""
     import shutil
-    for pkg in ("tokeneconomizer", "te_live"):
-        link = os.path.join(PLUGIN, "lib", pkg)
-        assert os.path.islink(link) and os.readlink(link) == f"../../{pkg}"
-        assert os.path.isfile(os.path.join(link, "__init__.py"))
+    assert os.listdir(os.path.join(PLUGIN, "lib")) == ["tokeneconomizer"]
+    link = os.path.join(PLUGIN, "lib", "tokeneconomizer")
+    assert os.path.islink(link) and os.readlink(link) == "../../tokeneconomizer"
+    assert os.path.isfile(os.path.join(link, "plugin", "hook.py"))
     # What an install does: copy the directory, following links. The copy runs on its own.
     copy = str(tmp_path / "cache" / "tokeneconomizer" / "0.1.0")
     shutil.copytree(PLUGIN, copy, symlinks=False,
@@ -222,3 +293,74 @@ def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_pat
                          text=True, env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h")),
                          timeout=60)
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+
+
+def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp_path):
+    """Codex installs a COPY of plugin/ that drops the `lib` symlink (seen live on 0.153.1), so
+    `codex plugin marketplace add <clone>` gave a plugin whose hooks answered `{}` and whose `te`
+    crashed. The copy now reads the marketplace's `source` from Codex's config.toml."""
+    import shutil
+    home = tmp_path / "codex"
+    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
+    shutil.copytree(PLUGIN, str(copy), symlinks=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
+    (copy / "lib").mkdir()
+
+    def te(source):
+        (home / "config.toml").write_text(
+            'check_for_update_on_startup = false\n\n[marketplaces.tokeneconomizer]\n'
+            f'source_type = "local"\nsource = "{source}"\n')
+        return subprocess.run([str(copy / "scripts" / "te"), "doctor"], capture_output=True,
+                              text=True, timeout=60, cwd=str(tmp_path),
+                              env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
+                                       TE_CORE_PATH="", PYTHONPATH=""))
+    out = te(REPO)
+    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+    out = te(str(tmp_path / "nowhere"))
+    assert out.returncode == 1 and "core package was not found" in out.stderr
+    assert "was not found for the plugin at" in (tmp_path / "h" / "errors.log").read_text()
+    # A git marketplace (`codex plugin marketplace add owner/repo`): config.toml names the URL,
+    # and Codex keeps its checkout under .tmp/marketplaces (seen on 0.153.1).
+    (home / ".tmp" / "marketplaces").mkdir(parents=True)
+    os.symlink(REPO, str(home / ".tmp" / "marketplaces" / "tokeneconomizer"))
+    out = te("https://github.com/microsoft/TokenEconomizer.git")
+    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+
+
+def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
+    """Codex has no plugin slash commands; its plugins carry skills. Ours live outside `skills/`,
+    which Claude Code and Copilot would load beside their slash commands."""
+    from tokeneconomizer.plugin import cli
+    manifest = _json(PLUGIN, ".codex-plugin", "plugin.json")
+    assert manifest["skills"] == "./codex-skills"
+    assert not os.path.exists(os.path.join(PLUGIN, "skills"))
+    root = os.path.join(PLUGIN, "codex-skills")
+    subcommands = set(cli.build_parser()._subparsers._group_actions[0].choices)
+    names = sorted(os.listdir(root))
+    assert names == ["tokeneconomizer-config", "tokeneconomizer-microskills",
+                     "tokeneconomizer-status", "tokeneconomizer-toolprune"]
+    for name in names:
+        text = open(os.path.join(root, name, "SKILL.md"), encoding="utf-8").read()
+        assert text.startswith(f'---\nname: "{name}"\ndescription: >\n')
+        cmd = re.search(r'bin/te" --host codex --cwd "\$\(pwd\)" (\w+)', text)
+        assert cmd and cmd.group(1) in subcommands and cmd.group(1) == name.split("-", 1)[1]
+
+
+def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
+    """`te facts` / `te untool` and `/tokeneconomizer:facts` / `:untool` were the names before
+    the mechanisms were renamed; they run exactly what `microskills` / `toolprune` run."""
+    from tokeneconomizer.plugin import cli
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "home"))
+    work = tmp_path / "work"
+    work.mkdir()
+    for new, old in (("microskills", "facts"), ("toolprune", "untool")):
+        outs = []
+        for name in (new, old):
+            assert cli.main(["--cwd", str(work), "--host", "claude", name]) == 0
+            outs.append(capsys.readouterr().out)
+        assert outs[0] == outs[1] and outs[0]
+        body = {}
+        for name in (new, old):
+            text = open(os.path.join(PLUGIN, "commands", f"{name}.md"), encoding="utf-8").read()
+            body[name] = re.search(r'"\$te" --cwd "\$\(pwd\)" (\w+)', text).group(1)
+        assert body[new] == body[old] == new

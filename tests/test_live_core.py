@@ -11,9 +11,9 @@ import os
 import pytest
 
 from tokeneconomizer import trace
-from te_live import config as live_config
-from te_live import hosts, paths, transcripts
-from te_live.store import Store
+from tokeneconomizer.plugin import config as live_config
+from tokeneconomizer.plugin import hosts, paths
+from tokeneconomizer.plugin.store import Store
 
 
 # ---- repository identity ---------------------------------------------------------------
@@ -90,13 +90,14 @@ def test_config_layers_and_never_raises_on_bad_values(tmp_path):
     repo_dir = os.path.join(root, "repos", "r")
     os.makedirs(repo_dir)
     with open(os.path.join(root, "config.json"), "w") as fh:
+        # names from before the mechanisms were renamed: still read
         json.dump({"spiral": "guard", "untool_evidence": 7, "bogus": 1}, fh)
     with open(os.path.join(repo_dir, "config.json"), "w") as fh:
         json.dump({"spiral": "nope", "inject": "envfacts+distiller"}, fh)
     cfg = live_config.load_config(root, repo_dir=repo_dir, env={"TE_UNTOOL": "auto"})
-    assert cfg.spiral == "guard"                  # the invalid repo value is ignored
-    assert cfg.untool_evidence == 7 and cfg.untool == "auto"
-    assert cfg.inject == "envfacts+distiller" and cfg.inject_effective == "envfacts"
+    assert cfg.loopguard == "stop"                # the invalid repo value is ignored
+    assert cfg.toolprune_evidence == 7 and cfg.toolprune == "auto"
+    assert cfg.microskills == "envfacts+distiller" and cfg.microskills_effective == "envfacts"
     joined = " ".join(cfg.warnings)
     assert "bogus" in joined and "nope" in joined and "paid=false" in joined
     assert live_config.load_config(root, env={"TE_DISABLE": "1"}).enabled is False
@@ -104,11 +105,11 @@ def test_config_layers_and_never_raises_on_bad_values(tmp_path):
 
 def test_write_config_validates_before_writing(tmp_path):
     path = str(tmp_path / "config.json")
-    live_config.write_config(path, {"spiral": "off", "paid": "true"})
-    assert json.load(open(path)) == {"spiral": "off", "paid": True}
+    live_config.write_config(path, {"loopguard": "off", "paid": "true"})
+    assert json.load(open(path)) == {"loopguard": "off", "paid": True}
     with pytest.raises(ValueError):
-        live_config.write_config(path, {"spiral": "sometimes"})
-    assert json.load(open(path))["spiral"] == "off"
+        live_config.write_config(path, {"loopguard": "sometimes"})
+    assert json.load(open(path))["loopguard"] == "off"
 
 
 # ---- Claude Code transcripts -----------------------------------------------------------------
@@ -132,11 +133,11 @@ def test_claude_usage_counts_each_message_once_and_includes_subagents(tmp_path):
     sub_dir = tmp_path / "sess" / "subagents"
     sub_dir.mkdir(parents=True)
     _claude_lines(str(sub_dir / "agent-1.jsonl"), blocks_per_message=2, n_messages=1)
-    u = transcripts.claude_session_usage(main)
+    u = trace.claude_session_usage(main)
     assert u["requests"] == 3                     # 2 main messages + 1 subagent message
     assert u["cache_read_input_tokens"] == 3000   # not 3 x 2 x 1000 + 2 x 1000
     assert u["model"] == "claude-opus-5-5" and u["files"] == 2
-    assert transcripts.claude_session_usage(main, include_subagents=False)["requests"] == 2
+    assert trace.claude_session_usage(main, include_subagents=False)["requests"] == 2
 
 
 def test_deferred_tools_are_read_from_attachments(tmp_path):
@@ -147,7 +148,7 @@ def test_deferred_tools_are_read_from_attachments(tmp_path):
             "removedNames": []}}) + "\n")
         fh.write(json.dumps({"type": "attachment", "attachment": {
             "type": "deferred_tools_delta", "addedNames": [], "removedNames": ["WebSearch"]}}) + "\n")
-    assert transcripts.claude_deferred_tools(p) == {"CronCreate"}
+    assert trace.claude_deferred_tools(p) == {"CronCreate"}
 
 
 # ---- Codex rollouts ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ def _rollout(path):
 def test_codex_rollout_reads_through_the_existing_trace_seam(tmp_path):
     src = _rollout(str(tmp_path / "rollout-x.jsonl"))
     out = str(tmp_path / "exec.jsonl")
-    assert transcripts.codex_rollout_to_exec(src, out) == 2       # reasoning is not a tool call
+    assert trace.codex_rollout_to_exec(src, out) == 2       # reasoning is not a tool call
     traj = trace.load_trajectory(out)
     assert traj[0][0] == "shell" and traj[0][1]["command"] == "/bin/bash -lc 'pytest -q'"
     assert traj[0][2] == "1 failed" and traj[0][3] is False
@@ -187,7 +188,7 @@ def test_codex_rollout_reads_through_the_existing_trace_seam(tmp_path):
 
 
 def test_codex_usage_is_converted_as_the_harness_converts_it(tmp_path):
-    u = transcripts.codex_session_usage(_rollout(str(tmp_path / "rollout-x.jsonl")))
+    u = trace.codex_session_usage(_rollout(str(tmp_path / "rollout-x.jsonl")))
     # last cumulative total; fresh input excludes both cache fields; reasoning joins output
     assert u["input_tokens"] == 3000 - 2000 - 200
     assert u["cache_read_input_tokens"] == 2000 and u["cache_creation_input_tokens"] == 200
@@ -197,7 +198,7 @@ def test_codex_usage_is_converted_as_the_harness_converts_it(tmp_path):
 def test_codex_capability_evidence_includes_the_models_own_exec_calls(tmp_path):
     """In code mode every tool call is one `exec` custom tool; `tools.view_image(` inside its
     input is image use, and only the capability trace carries it."""
-    from tokeneconomizer.mechanisms import codex_untool as cu
+    from tokeneconomizer.toolprune import codex as cu
     src = _rollout(str(tmp_path / "rollout-x.jsonl"))
     with open(src, "a") as fh:
         fh.write(json.dumps({"type": "response_item", "payload": {
@@ -205,18 +206,18 @@ def test_codex_capability_evidence_includes_the_models_own_exec_calls(tmp_path):
             "status": "completed",
             "input": "const r = await tools.view_image({path: 'a.png'});"}}) + "\n")
     out = str(tmp_path / "cap.jsonl")
-    assert transcripts.codex_capability_trace(src, out) == 3
+    assert trace.codex_capability_trace(src, out) == 3
     usage = cu.inspect_usage(out)
     assert usage["completed"]["image_media"] == 1 and usage["completed"]["collaboration"] == 0
     plain = str(tmp_path / "exec.jsonl")
-    transcripts.codex_rollout_to_exec(src, plain)
+    trace.codex_rollout_to_exec(src, plain)
     assert cu.inspect_usage(plain)["completed"]["image_media"] == 0
 
 
 def test_a_compressed_rollout_is_reported_unreadable(tmp_path):
     p = str(tmp_path / "rollout-x.jsonl.zst")
     open(p, "wb").write(b"\x28\xb5\x2f\xfd")
-    assert transcripts.codex_rollout_to_exec(p, str(tmp_path / "o.jsonl")) is None
+    assert trace.codex_rollout_to_exec(p, str(tmp_path / "o.jsonl")) is None
 
 
 # ---- hosts ---------------------------------------------------------------------------------
@@ -242,6 +243,28 @@ def test_the_te_command_defaults_to_the_agent_whose_shell_runs_it():
     assert hosts.default_host({"COPILOT_CLI": "1", "CLAUDECODE": "1"}) == "claude"
     assert hosts.default_host({"TE_HOST": "codex", "CLAUDECODE": "1"}) == "codex"
     assert hosts.default_host({"TE_HOST": "nonsense"}) == "claude"
+    assert hosts.default_host({}, recent="pi") == "pi"
+    assert hosts.default_host({"CLAUDECODE": "1"}, recent="pi") == "claude"
+
+
+def test_from_a_plain_terminal_te_is_about_the_agent_that_last_worked_here(tmp_path, monkeypatch,
+                                                                          capsys):
+    """Seen with every non-Claude tester: `te status` from a terminal showed the empty Claude
+    Code state of a repository only Codex (or Pi) had worked in."""
+    from tokeneconomizer.plugin import cli
+    from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
+    for k in ("TE_HOST", "CLAUDECODE", "COPILOT_CLI"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    work = tmp_path / "work"
+    work.mkdir()
+    assert cli._recent_host(str(work)) is None
+    d = repo_state_dir(repo_identity(str(work)), "codex")
+    os.makedirs(d)
+    open(os.path.join(d, "ledger.jsonl"), "w").close()
+    assert cli._recent_host(str(work)) == "codex"
+    assert cli.main(["--cwd", str(work), "status"]) == 0
+    assert "(codex)" in capsys.readouterr().out.splitlines()[0]
 
 
 # Payloads copilot 1.0.83 sent to a Claude-format plugin hook (PascalCase events), verbatim in
@@ -383,21 +406,41 @@ def _pi_session(path, cwd="/w/repo", sid="pi-1", abandoned=False):
 def test_a_pi_session_reads_through_the_trace_seam_on_its_active_branch(tmp_path):
     src = _pi_session(str(tmp_path / "s.jsonl"), abandoned=True)
     out = str(tmp_path / "trace.jsonl")
-    assert transcripts.pi_session_to_claude(src, out) == 3
+    assert trace.pi_session_to_claude(src, out) == 3
     traj = trace.load_trajectory(out)
     assert [(n, a.get("command") or a.get("path"), ok) for n, a, _, ok in traj] == [
         ("bash", "pytest -q", False), ("edit", "pkg/a.py", True), ("bash", "python -m pytest -q", True)]
     assert "rm -rf build" not in open(out).read()          # the abandoned branch is not read
 
 
+def test_a_pi_call_into_the_session_directory_is_the_plain_form(tmp_path):
+    """Pi starts every command afresh in the session's directory, so `cd <that dir> && tox`
+    is the same form as `tox`. Without a cwd per call it was learned as a second form, with the
+    absolute path in the claim, and the two split one fact's evidence."""
+    from tokeneconomizer.microskills.observe import PYTHON_GIT, observe_task
+    src = str(tmp_path / "s.jsonl")
+    _pi_session(src, cwd="/w/repo")
+    lines = [json.loads(l) for l in open(src)]
+    for e in lines:
+        for b in (e.get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("arguments", {}).get("command") == "pytest -q":
+                b["arguments"]["command"] = "cd /w/repo && pytest -q"
+    open(src, "w").write("\n".join(json.dumps(e) for e in lines) + "\n")
+    out = str(tmp_path / "trace.jsonl")
+    trace.pi_session_to_claude(src, out)
+    assert trace.call_cwds(out) == ["/w/repo"] * 3
+    forms = [o.form for o in observe_task(out, PYTHON_GIT)["obs"] if o.intent == "run_tests"]
+    assert forms == ["pytest", "python -m pytest"]
+
+
 def test_pi_usage_maps_directly_and_keeps_pis_own_cost(tmp_path):
-    u = transcripts.pi_session_usage(_pi_session(str(tmp_path / "s.jsonl"), abandoned=True))
+    u = trace.pi_session_usage(_pi_session(str(tmp_path / "s.jsonl"), abandoned=True))
     # three assistant messages on the active branch; output already includes reasoning
     assert u["requests"] == 3
     assert (u["input_tokens"], u["cache_read_input_tokens"], u["cache_creation_input_tokens"],
             u["output_tokens"]) == (30, 3000, 300, 150)
     assert u["cost_usd_vendor"] == pytest.approx(0.006) and u["model"] == "gpt-5.6-sol"
-    assert transcripts.pi_session_header(str(tmp_path / "s.jsonl"))["cwd"] == "/w/repo"
+    assert trace.pi_session_header(str(tmp_path / "s.jsonl"))["cwd"] == "/w/repo"
 
 
 def test_the_pi_host_reads_what_the_extension_sends():
@@ -412,7 +455,7 @@ def test_the_pi_host_reads_what_the_extension_sends():
 
 
 # ---- the guard sees edits made through the shell ---------------------------------------------
-from te_live import guard  # noqa: E402
+from tokeneconomizer import loopguard as guard  # noqa: E402
 
 
 @pytest.mark.parametrize("cmd,want", [
@@ -460,6 +503,26 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
     assert g.edits == 3 and g.last_verify > g.last_edit and not g.resolved_proxy()
 
 
+def test_reading_a_file_full_of_asserts_is_not_a_failure():
+    """Seen live on Pi: a passing 13-call turn that read its test file three times counted four
+    error outputs and two repeated identical failures, and opened the paid judge's gate."""
+    test_file = "def test_total():\n    assert total([1, 2]) == 3\n    raise ValueError('no')\n"
+    g = guard.TurnGuard(turn_key="t")
+    for _ in range(3):
+        g.fold("read", {"path": "tests/test_total.py"}, test_file)
+        g.fold("grep", {"pattern": "assert"}, "tests/test_total.py:2:    assert total")
+    g.fold("bash", {"command": "cat tests/test_total.py"}, test_file, 0)
+    assert (g.whole.error_outputs, g.whole.repeated_fail_sigs) == (0, 0)
+    assert not guard.gate_for_judge(g.whole, dict(guard.DEFAULT_THRESHOLDS, gate_min_turns=1))
+    # what did fail still counts: a non-zero exit, or a read the tool itself reports as failed
+    g.fold("bash", {"command": "pytest -q"}, "FAILED tests/test_total.py - AssertionError", 1)
+    g.fold("bash", {"command": "pytest -q"}, "FAILED tests/test_total.py - AssertionError", None)
+    assert (g.whole.error_outputs, g.whole.repeated_fail_sigs) == (2, 1)
+    s = guard.SpiralState()
+    s.update("Read", {"file_path": "x.py"}, "Error: File does not exist.", failed=True)
+    assert s.error_outputs == 1
+
+
 def test_the_judge_is_told_how_the_last_verification_went_not_that_tests_are_red():
     g = guard.TurnGuard(turn_key="t")
     vendored = "turns=3\nrepo_context: ... = 1.2x that typical length. Tests are still NOT green. A"
@@ -472,7 +535,7 @@ def test_the_judge_is_told_how_the_last_verification_went_not_that_tests_are_red
 
 
 class _BackgroundJudge:
-    """`te_live.judge.AsyncJudge`'s interface, with the verdict handed in by the test."""
+    """`plugin.judge.AsyncJudge`'s interface, with the verdict handed in by the test."""
 
     def __init__(self):
         self.started, self.verdict = [], None
@@ -562,41 +625,56 @@ def test_copilot_logs_read_through_the_existing_trace_seam(tmp_path):
     traj = trace.load_trajectory(p)
     assert [t[0] for t in traj] == ["bash", "view"] and traj[0][1]["command"] == "pytest -q"
     assert trace.tool_usage(p) == {"bash": 1, "view": 1}
-    (turn,) = transcripts.copilot_turns(p)
+    (turn,) = trace.copilot_turns(p)
     assert turn[0][0] == "bash" and turn[0][3] == 1 and turn[1][3] is None
-    assert transcripts.copilot_session_meta(p)["cwd"] == "/w/repo"
+    assert trace.copilot_session_meta(p)["cwd"] == "/w/repo"
+
+
+def test_a_copilot_call_into_the_session_directory_is_the_plain_form(tmp_path):
+    """Seen live: Copilot's models type `cd <repo> && ` before every command, so the repeated
+    `cd /w/repo && python -m unittest` and a one-off bare form were two forms, and the bare one
+    won as the form that leaves the shell where it is."""
+    from tokeneconomizer.microskills.observe import PYTHON_GIT, observe_task
+    p = copilot_events(str(tmp_path / "s" / "events.jsonl"), [
+        ("bash", {"command": "cd /w/repo && pytest -q"},
+         "bash: pytest: command not found\n<shellId: 0 completed with exit code 127>", False),
+        ("bash", {"command": "cd /w/repo && python -m unittest -q"},
+         "Ran 4 tests in 0.001s\nOK\n<shellId: 0 completed with exit code 0>", True)])
+    assert trace.call_cwds(p) == ["/w/repo", "/w/repo"]
+    assert [o.form for o in observe_task(p, PYTHON_GIT)["obs"] if o.intent == "run_tests"] == [
+        "pytest", "python -m unittest"]
 
 
 def test_copilot_usage_is_converted_from_its_grand_input_total(tmp_path):
     p = copilot_events(str(tmp_path / "s" / "events.jsonl"), [])
-    u = transcripts.copilot_session_usage(p)
+    u = trace.copilot_session_usage(p)
     # inputTokens counts cache reads and writes (verified against a scripted endpoint)
     assert u["input_tokens"] == 4000 - 2400 - 100
     assert u["cache_read_input_tokens"] == 2400 and u["cache_creation_input_tokens"] == 100
     assert u["output_tokens"] == 80 and u["requests"] == 4 and u["model"] == "gpt-5.4"
     assert u["tool_definitions_tokens"] == 13149
-    killed = transcripts.copilot_session_usage(
+    killed = trace.copilot_session_usage(
         copilot_events(str(tmp_path / "k" / "events.jsonl"), [], shutdown=False))
     assert killed["input_tokens"] is None and killed["model"] == "gpt-5.4"
 
 
 def test_copilot_tools_are_grouped_by_mcp_server(tmp_path):
     servers = {"github-mcp-server", "github", "acme-db"}
-    assert transcripts.mcp_server_of("github-mcp-server-list_issues", servers) == \
+    assert trace.mcp_server_of("github-mcp-server-list_issues", servers) == \
         "github-mcp-server"                                  # the longest prefix wins
-    assert transcripts.mcp_server_of("acme-db-query", servers) == "acme-db"
-    assert transcripts.mcp_server_of("bash", servers) is None
+    assert trace.mcp_server_of("acme-db-query", servers) == "acme-db"
+    assert trace.mcp_server_of("bash", servers) is None
     home = tmp_path / "cp"
     home.mkdir()
     (home / "mcp-config.json").write_text(json.dumps({"mcpServers": {"acme-db": {}}}))
-    assert transcripts.copilot_mcp_servers({"COPILOT_HOME": str(home)}) == {
+    assert trace.copilot_mcp_servers({"COPILOT_HOME": str(home)}) == {
         "github-mcp-server", "acme-db"}
 
 
 def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_path,
                                                                           monkeypatch):
     import subprocess
-    from te_live import sidecall
+    from tokeneconomizer.plugin import sidecall
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "cp"))
     copilot_events(str(tmp_path / "cp" / "session-state" / "side1" / "events.jsonl"), [])
     seen = {}
@@ -617,11 +695,108 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
     assert seen["env"]["TE_SIDECALL"] == "1"            # its own hooks must not recurse
     cfg = live_config.LiveConfig(paid=True)
     assert sidecall.runner_for("copilot", cfg).__code__.co_names.count("copilot_call") == 1
+    assert sidecall.runner_for("claude", cfg).__code__.co_names.count("claude_call") == 1
+    assert sidecall.runner_for("pi", cfg).__code__.co_names.count("pi_call") == 1
+
+
+def test_a_side_call_with_no_reply_is_noted_and_keeps_to_a_bare_completion(tmp_path,
+                                                                           monkeypatch):
+    """Seen live: under Copilot's BYOK the provider's variables do not reach the hooks, so the
+    side call ran signed out, answered nothing, and the plugin said nothing either."""
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
+    home = tmp_path / "cp"
+    home.mkdir()
+    (home / "mcp-config.json").write_text(json.dumps({"mcpServers": {"acme-db": {}}}))
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 1, stdout="",
+                                           stderr="Error: No authentication information found.")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    assert sidecall.copilot_call("propose facts") == ("", None)
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--disable-mcp-server") + 1] == "acme-db"
+    log = (tmp_path / "te" / "errors.log").read_text()
+    assert "sidecall copilot: no reply (exit 1)" in log and "No authentication" in log
+
+
+def test_claude_side_calls_stay_out_of_the_persons_history_where_the_cli_allows(monkeypatch):
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    helps = {"new": "  --no-session-persistence   Disable session persistence", "old": "  -p"}
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=helps[cmd[0]], stderr=""))
+    monkeypatch.setattr(sidecall, "_FLAGS", {})
+    assert sidecall.claude_flags("new") == ["--no-session-persistence"]
+    assert sidecall.claude_flags("old") == []
+
+
+# `pi --print --mode json` on Pi 1.2.0 through OpenRouter, trimmed: the header, the system and
+# user messages, the reply (a thinking block, then the text), and the run's end.
+PI_JSON_RUN = [
+    {"type": "session", "version": 3, "id": "01a13c79", "cwd": "/tmp/te-side-x"},
+    {"type": "message_end", "message": {"role": "system", "content": "",
+                                        "sections": {"preamble": "You are an expert..."}}},
+    {"type": "message_end", "message": {"role": "user", "content": [
+        {"type": "text", "text": "propose facts"}]}},
+    {"type": "message_update", "usage": {"input": 745, "output": 3}},
+    {"type": "message_end", "message": {
+        "role": "assistant", "provider": "openrouter", "model": "anthropic/claude-haiku-4.5",
+        "content": [{"type": "thinking", "thinking": "Two lines."},
+                    {"type": "text", "text": "- use python -m pytest"}],
+        "usage": {"input": 745, "output": 298, "cacheRead": 0, "cacheWrite": 0,
+                  "totalTokens": 1043, "cacheWrite1h": 0, "reasoning": 281,
+                  "cost": {"input": 0.000745, "output": 0.00149, "total": 0.002235}},
+        "stopReason": "stop"}},
+    {"type": "agent_settled", "aborted": False},
+]
+
+
+def test_a_pi_reply_is_read_from_its_json_run():
+    text, usage = trace.pi_json_reply("\n".join(json.dumps(e) for e in PI_JSON_RUN))
+    assert text == "- use python -m pytest"
+    assert usage == {"input_tokens": 745, "cache_read_input_tokens": 0,
+                     "cache_creation_input_tokens": 0, "output_tokens": 298,
+                     "cost_usd": 0.002235, "model": "anthropic/claude-haiku-4.5"}
+    assert trace.pi_json_reply("") == ("", None)
+
+
+def test_a_pi_side_call_is_a_bare_run_on_the_persons_own_pi(monkeypatch):
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        if "--no-mcp" in cmd:                       # Pi before 1.0 has no such flag
+            return subprocess.CompletedProcess(cmd, 1, stdout="",
+                                               stderr="Error: Unknown option: --no-mcp\n")
+        out = "\n".join(json.dumps(e) for e in PI_JSON_RUN)
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    text, eff = sidecall.pi_call("propose facts")
+    assert text == "- use python -m pytest" and eff and eff > 0
+    (first, kw), (second, _) = calls
+    assert first[:4] == ["pi", "--print", "--mode", "json"] and first[-2:] == ["--", "propose facts"]
+    for flag in ("--no-session", "--no-tools", "--no-extensions", "--no-context-files"):
+        assert flag in first
+    assert "--model" not in first                   # the person's own default model and login
+    assert "--no-mcp" in first and "--no-mcp" not in second
+    assert kw["env"]["TE_SIDECALL"] == "1" and kw["stdin"] is subprocess.DEVNULL
+    calls.clear()
+    sidecall.pi_call("propose facts", model="openrouter/anthropic/claude-haiku-4.5")
+    assert calls[-1][0][-4:-2] == ["--model", "openrouter/anthropic/claude-haiku-4.5"]
 
 
 def test_a_copilot_notice_is_a_progress_line_before_the_hook_output():
     import io
-    from te_live import hook
+    from tokeneconomizer.plugin import hook
     out = io.StringIO()
     hook.main([], io.StringIO("{}"), out, {"TE_DISABLE": "1"})
     assert out.getvalue() == "{}\n"
@@ -637,7 +812,7 @@ def test_a_copilot_notice_is_a_progress_line_before_the_hook_output():
 
 
 def test_copilot_side_calls_name_a_model_a_byok_provider_can_serve():
-    from te_live.sidecall import copilot_model
+    from tokeneconomizer.plugin.sidecall import copilot_model
     byok = {"COPILOT_PROVIDER_BASE_URL": "https://api.anthropic.com",
             "COPILOT_PROVIDER_TYPE": "anthropic"}
     # `auto` is the subscription's router; a BYOK provider has none, and the call answered nothing
@@ -654,7 +829,7 @@ def test_copilot_side_calls_name_a_model_a_byok_provider_can_serve():
 
 def test_the_probe_repository_carries_its_trap(tmp_path):
     import subprocess
-    from te_live import probe
+    from tokeneconomizer.plugin import probe
     repo, trap = probe.make_repo(str(tmp_path))
     bare = subprocess.run([os.path.join(trap, "pytest"), "-q"], cwd=repo, capture_output=True,
                           text=True)
@@ -672,7 +847,7 @@ def test_the_probe_repository_carries_its_trap(tmp_path):
 
 
 def test_the_probe_counts_pytest_attempts_not_exit_codes():
-    from te_live import probe
+    from tokeneconomizer.plugin import probe
     # commands two real Haiku sessions ran: the piped one exited 0 although pytest is missing
     runs, tried = probe.test_commands([
         'find . -name "pytest.ini" -o -name "go.mod" | head -20',
@@ -689,9 +864,8 @@ def test_a_small_envelopes_backstop_never_preempts_the_nudge():
     """Interactive repositories learn envelopes of ~4-10 calls, so the hard backstop
     (1.8-2.5x the envelope) lies inside the stuck rule's own floor: before this fix, the first
     stuck call tripped the backstop and the turn was stopped without ever being redirected."""
-    from te_live import guard
-    from tokeneconomizer.vendor import spiral
-    thr = spiral.scaled_thresholds("aggressive")
+    from tokeneconomizer import loopguard as guard
+    thr = guard.scaled_thresholds("aggressive")
     fail = ("FAIL: test_floats (tests.test_calc.TestAdd)\nTraceback (most recent call last):\n"
             "AssertionError: 0.30000000000000004 != 0.3\n\nFAILED (failures=1)\n")
     g = guard.TurnGuard(turn_key="t")
@@ -710,3 +884,24 @@ def test_a_small_envelopes_backstop_never_preempts_the_nudge():
             else:
                 break
     assert fired == [(14, "nudge"), (28, "abort")]
+
+
+@pytest.mark.parametrize("cmd", ["python tests/runtests.py model_inheritance -v 2",
+                                 "./runtests.py basic", ".venv/bin/pytest -q tests/test_a.py",
+                                 "cd web && ./node_modules/.bin/jest src", "/usr/bin/python3 -m pytest",
+                                 "/w/venv/bin/pytest -q", "~/.local/bin/pytest -q",
+                                 "python3 /w/repo/tests/runtests.py basic"])
+def test_a_runner_named_by_path_counts_as_a_verification(cmd):
+    """A failing run after the last edit means the turn did not end green, whatever path the
+    runner was called by -- otherwise long failing turns feed the envelope and the guard
+    stops seeing them as long."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("Edit", {"file_path": "/r/a.py", "old_string": "x", "new_string": "y"}, "ok")
+    g.fold("Bash", {"command": cmd}, "FAILED (failures=1)", 1)
+    assert g.verifications == 1 and not g.resolved_proxy()
+
+
+@pytest.mark.parametrize("cmd", ["cat /w/pytest.ini", "cat pytest.ini", "ls /w/tests",
+                                 "vim tests/runtests.py.bak"])
+def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
+    assert not guard.VERIFY_RE.search(cmd)

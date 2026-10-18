@@ -2,12 +2,19 @@
   "name": "tokeneconomizer",
   "version": "0.1.0",
   "private": true,
-  "description": "TokenEconomizer for Pi: learned per-repo facts injected at session start, and a guard that redirects a turn stuck in a failing loop.",
-  "keywords": ["pi-package", "cost", "tokens", "context"],
+  "description": "TokenEconomizer for Pi: micro-skills (short repository facts learned from earlier sessions) injected at session start, and a guard that redirects a turn stuck in a failing loop.",
+  "keywords": [
+    "pi-package",
+    "cost",
+    "tokens",
+    "context"
+  ],
   "license": "MIT",
   "repository": "https://github.com/microsoft/TokenEconomizer",
   "pi": {
-    "extensions": ["./pi/tokeneconomizer.ts"]
+    "extensions": [
+      "./pi/tokeneconomizer.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

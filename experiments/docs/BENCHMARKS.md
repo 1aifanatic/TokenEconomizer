@@ -40,13 +40,13 @@ the driver's task list and the adapter's instance source. For every other domain
 The commands below are the reference provisioning recipe; adapt paths to your infra.
 **All fetched data is git-ignored** — none of it is committed to this repo.
 
-### Which tasks to actually run — `tokeneconomizer.workloads`
+### Which tasks to actually run — `te_bench.workloads`
 
 The experiments do **not** run a whole benchmark. Each domain uses a fixed subset, and that subset is data in the core package — importable on a bare clone, with
 no results tree, no datasets, and no Docker:
 
 ```python
-from tokeneconomizer import workloads
+from te_bench import workloads
 
 workloads.task_counts("swebench")     # {'django/django': 40, ..., 'pydata/xarray': 39}
 workloads.total_tasks("swebench")     # 229 tasks per seed
@@ -136,7 +136,7 @@ mkdir -p "$DATA/swebench"
 python - <<'PY'
 import json, os
 from datasets import load_dataset          # pip install datasets  (provisioning only)
-from tokeneconomizer import workloads
+from te_bench import workloads
 
 wanted = {i for ids in workloads.runnable_instances("swebench").values() for i in ids}  # 277
 rows, seen = [], set()
@@ -167,7 +167,7 @@ Note the tag convention: the `__` in an instance id becomes `_1776_` in the imag
 
 ```bash
 python - > "$DATA/swebench/image_tags.txt" <<'PY'
-from tokeneconomizer import workloads
+from te_bench import workloads
 for ids in workloads.runnable_instances("swebench").values():
     for iid in ids:
         print(workloads.swebench_image_tag(iid))
@@ -292,7 +292,7 @@ python scripts/export_webbench_tasks.py --check    # verify only; exit 1 if stal
 ```
 
 > **Three registries have to agree, and only one of them is the authority.**
-> `tokeneconomizer/workloads.py` decides which projects and tasks are in the sweep; (A) the
+> `experiments/te_bench/workloads.py` decides which projects and tasks are in the sweep; (A) the
 > driver task list and (C) `workloads/webbench.json` are both projections of it, and (B) the
 > projects tree has to contain a `tasks.jsonl` for every project named. Changing the project
 > list is therefore three commands, in this order:
@@ -369,12 +369,12 @@ disposable copy of each repo directory.
 
 **Export the driver task list (A).** The audit prompt is fixed, so build one entry per repoid
 with that prompt as `problem_statement` (the exact prompt lives in
-`tokeneconomizer/adapters/creddata.py:CREDDATA_TASK_PROMPT`):
+`experiments/te_bench/adapters/creddata.py:CREDDATA_TASK_PROMPT`):
 ```bash
 python - <<'PY'
 import glob, json, os
-from tokeneconomizer.adapters.creddata import CREDDATA_TASK_PROMPT
-from tokeneconomizer import workloads
+from te_bench.adapters.creddata import CREDDATA_TASK_PROMPT
+from te_bench import workloads
 root = os.environ["TOKENECONOMIZER_CREDDATA_ROOT"]
 have = {os.path.basename(p)[:-4] for p in glob.glob(os.path.join(root, "meta", "*.csv"))}
 ids = [rid for rid in workloads.CREDDATA_INSTANCES if rid in have]   # 100 of the 333 repos
@@ -415,12 +415,12 @@ prepared instance each). Every instance gets the **same** vulnerability-audit pr
 is line-level **F1**. No Docker image.
 
 **Export the driver task list (A)** (prompt from
-`tokeneconomizer/adapters/reposvul.py:REPOSVUL_TASK_PROMPT`):
+`experiments/te_bench/adapters/reposvul.py:REPOSVUL_TASK_PROMPT`):
 ```bash
 python - <<'PY'
 import glob, json, os
-from tokeneconomizer.adapters.reposvul import REPOSVUL_TASK_PROMPT
-from tokeneconomizer import workloads
+from te_bench.adapters.reposvul import REPOSVUL_TASK_PROMPT
+from te_bench import workloads
 root = os.environ["TOKENECONOMIZER_REPOSVUL_ROOT"]
 have = {os.path.basename(p)[:-5] for p in glob.glob(os.path.join(root, "instances", "*.json"))}
 ids = [iid for iid in workloads.REPOSVUL_INSTANCES if iid in have]   # 100 Python-split CVEs
@@ -459,7 +459,7 @@ list (A) yourself and `--adapter cybergym`:
 
 ```bash
 # (A) a JSON list of {instance_id, problem_statement, repo}; problem_statement can be the
-#     fixed CYBERGYM_TASK_PROMPT (see tokeneconomizer/adapters/cybergym.py).
+#     fixed CYBERGYM_TASK_PROMPT (see experiments/te_bench/adapters/cybergym.py).
 python scripts/run_experiment.py \
   --arm trimech --agent claude --adapter cybergym \
   --tasks-file "$DATA/cybergym_tasks.json" --repo "$PROJECT" --seed 0 \

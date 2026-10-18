@@ -25,7 +25,7 @@ at all.)
 
     python -m te_harness.capture_catalog
 
-Env: ANTHROPIC_API_KEY; TE_CATALOG_OUT (default: the repo's vendor/claude_tool_catalog.json),
+Env: ANTHROPIC_API_KEY; TE_CATALOG_OUT (default: the repo's tokeneconomizer/trace/claude_tool_catalog.json),
 TE_CATALOG_PORT (default 8770), TE_CATALOG_DESC_CHARS (default 300 -- comfortably above
 reflect's max_desc=200 default, keeps the committed file small).
 """
@@ -35,13 +35,13 @@ import subprocess
 import sys
 import time
 
-from tokeneconomizer import vendor as _vendor
+from tokeneconomizer import trace as _trace
 from .swebench import (_ANTHROPIC_DIRECT, _LIVE_CONTAINERS, _log, _run, claude_bin,
                        image_for)
 
-# The vendored catalog the judge reads, inside the shared core:
-# <repo>/tokeneconomizer/vendor/claude_tool_catalog.json.
-DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(_vendor.__file__)),
+# The catalog snapshot the trace reader joins against, inside the core:
+# <repo>/tokeneconomizer/trace/claude_tool_catalog.json.
+DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(_trace.__file__)),
                            "claude_tool_catalog.json")
 CAPTURE_INSTANCE = os.environ.get("TE_CATALOG_INSTANCE", "pydata__xarray-6461")
 

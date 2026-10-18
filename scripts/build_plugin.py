@@ -8,17 +8,17 @@ added as a local-directory marketplace -- the plugin finds the core package one 
 checkout itself. A marketplace INSTALL is different: Claude Code copies only the plugin directory
 into its cache ("files outside the plugin directory aren't copied"), and Codex does the same, so
 an installed copy of `plugin/` alone has no `tokeneconomizer` to import. The bundle fixes that by
-vendoring the core and the live harness (`tokeneconomizer/`, `te_live/`) into `<plugin>/lib/`,
-which `scripts/te_bootstrap.py` looks in first.
+copying the package (`tokeneconomizer/`, the mechanisms and the plugin runtime) into
+`<plugin>/lib/`, which `scripts/te_bootstrap.py` looks in first.
 
-Both are stdlib-only, so vendoring them is the whole dependency story: the bundle runs on any
-Python >= 3.10 with nothing installed. `te_harness/`, `scripts/` and the docs are not included.
+The package is stdlib-only, so copying it is the whole dependency story: the bundle runs on any
+Python >= 3.10 with nothing installed. `experiments/`, `scripts/` and the docs are not included.
 
 Layout written to --out (a marketplace root you can `marketplace add`, publish as a branch or a
 repository of its own, or zip for `claude --plugin-url`):
 
     <out>/.claude-plugin/marketplace.json
-    <out>/tokeneconomizer/              the plugin, with lib/{tokeneconomizer,te_live} vendored
+    <out>/tokeneconomizer/              the plugin, with lib/tokeneconomizer copied in
 """
 import argparse
 import json
@@ -35,13 +35,12 @@ def build(out):
     plugin_out = os.path.join(out, "tokeneconomizer")
     if os.path.exists(plugin_out):
         shutil.rmtree(plugin_out)
-    # plugin/lib holds symlinks to the core for an install from a checkout (see te_bootstrap);
-    # the bundle replaces them with real copies.
+    # plugin/lib holds a symlink to the package for an install from a checkout (see
+    # te_bootstrap); the bundle replaces it with a real copy.
     shutil.copytree(os.path.join(REPO, "plugin"), plugin_out,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", "lib"))
-    for pkg in ("tokeneconomizer", "te_live"):
-        shutil.copytree(os.path.join(REPO, pkg), os.path.join(plugin_out, "lib", pkg),
-                        ignore=IGNORE)
+    shutil.copytree(os.path.join(REPO, "tokeneconomizer"),
+                    os.path.join(plugin_out, "lib", "tokeneconomizer"), ignore=IGNORE)
     with open(os.path.join(REPO, ".claude-plugin", "marketplace.json"), encoding="utf-8") as fh:
         market = json.load(fh)
     for entry in market.get("plugins", []):

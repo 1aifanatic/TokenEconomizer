@@ -26,7 +26,7 @@ import sys
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
 from tokeneconomizer import ledger                    # noqa: E402
-from tokeneconomizer.vendor import pricing            # noqa: E402
+from tokeneconomizer import pricing            # noqa: E402
 
 
 def load_cell(cell):
@@ -140,7 +140,7 @@ def main():
             print(f"  {life['state']:9s} fire={life['fire_num']}/{life['fire_den']} "
                   f"promoted@{life.get('promoted_at')} retired@{life.get('retired_at')}  {fid}")
         # the block that would be rendered next, from the saved state
-        from tokeneconomizer.mechanisms.envfacts import EnvFactsDistiller
+        from tokeneconomizer.microskills import EnvFactsDistiller
         dist = EnvFactsDistiller.load(d["repo"], args.arm)
         block = dist.render()
         print("  current block:" + ("\n    " + block.replace("\n", "\n    ") if block else " (none)"))

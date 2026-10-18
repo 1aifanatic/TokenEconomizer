@@ -152,5 +152,5 @@ def test_an_unregistered_label_is_refused_not_mapped(label, monkeypatch):
 
 def test_the_webbench_adapter_carries_a_node_vocabulary():
     """The core's Web-Bench adapter describes a Node project, whichever agent runs it."""
-    from tokeneconomizer.adapters.webbench import WebBenchAdapter
+    from te_bench.adapters.webbench import WebBenchAdapter
     assert WebBenchAdapter.env_vocabulary(None).name == "node-web"

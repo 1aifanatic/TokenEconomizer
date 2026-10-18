@@ -1,7 +1,7 @@
 # te_harness — Layer-2 task-execution harness for TokenEconomizer
 
 Everything that touches Docker, an agent CLI, or a credential lives **below**
-`tokeneconomizer.runner.AgentRunner`. [`te_harness/`](../te_harness) is this repo's
+`te_bench.runner.AgentRunner`. [`te_harness/`](../te_harness) is this repo's
 implementation of that seam. Supplying your own instead is a supported path, not a
 fallback: pass `--runner your_pkg.harness:make_runner` and nothing above the seam changes.
 
@@ -356,7 +356,7 @@ loaded. The Copilot CLI dumps tool schemas into its debug log; Claude Code does 
 transcript carries only the tool *names* — so the descriptions are captured off the wire:
 
 ```bash
-python -m te_harness.capture_catalog     # -> tokeneconomizer/vendor/claude_tool_catalog.json
+python -m te_harness.capture_catalog     # -> tokeneconomizer/trace/claude_tool_catalog.json
 ```
 
 It runs the agent exactly as a task run does (same image, container, flags, and turn cap —
@@ -392,7 +392,7 @@ json.dump({i: out[i] for i in ids if i in out}, open('swebench_grading.json','w'
 
 ## External tool scaffolds (the baseline arms)
 
-The baselines themselves live in the CORE package, at `tokeneconomizer/baselines/`, and
+The baselines themselves live in the CORE package, at `experiments/te_bench/baselines/`, and
 are stdlib-only: they reach a container only through the callables this harness hands them
 (`exec_`, `copy_in`, `read_bytes`, `host_run` on `ScaffoldContext`). What follows is what
 *this* harness has to get right to drive them. Any other harness that can implement those
@@ -406,7 +406,7 @@ carried by `AgentProfile.home` / `AgentProfile.bin_dir`, so a scaffold never bra
 the harness -- and one that hardcodes `/usr/local/bin` silently no-ops off-container
 (`chmod` fails, `&&` short-circuits, the row reads `rtk_installed: false`). They are **baselines, not
 mechanisms**: nothing in `tokeneconomizer/` imports the package on its own — not
-`__init__.py`, not anything under `mechanisms/` — so `import tokeneconomizer` stays
+`__init__.py`, not any mechanism package — so `import tokeneconomizer` stays
 dependency-free and no mechanism can see a baseline.
 
 | Scaffold | Arms | What it installs | Host requirement |
@@ -475,7 +475,7 @@ name.
 
 ### Adding one
 
-Subclass `Scaffold` (`tokeneconomizer/baselines/base.py`), implement `setup(ctx)` returning a
+Subclass `Scaffold` (`experiments/te_bench/baselines/base.py`), implement `setup(ctx)` returning a
 notes dict, declare `patch_excludes`, register it in `SCAFFOLDS`, and map its arm(s) in
 `ARM_SCAFFOLDS`. Per-agent differences (instructions path, native tool names, `$HOME`, how
 an MCP config is wired) come from `ctx.profile`, never from a hardcoded assumption — writing

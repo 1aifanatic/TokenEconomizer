@@ -11,7 +11,7 @@
 #    --spiral-nudge-llm --spiral-frozen-envelope 30; pass ARM=trimech-web for those.)
 #
 # The heavy task-execution harness (Docker + agent CLI + gold grading) lives below
-# tokeneconomizer.runner.AgentRunner, in the repo's te_harness package, so
+# te_bench.runner.AgentRunner, in the repo's te_harness package, so
 # RUNNER=te_harness.swebench:make_runner (or .webbench) needs no PYTHONPATH. Point RUNNER at
 # your own factory ("module:make_runner") to substitute another. With RUNNER=stub you get the offline
 # StubRunner (no Docker/LLM) used by smoke_test.sh -- synthetic, for wiring checks only.

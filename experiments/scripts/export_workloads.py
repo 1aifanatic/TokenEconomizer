@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export the canonical workloads to ``workloads/<domain>.json`` (committed, not ignored).
 
-``tokeneconomizer/workloads.py`` is the authority; these JSON files are the machine-readable
+``experiments/te_bench/workloads.py`` is the authority; these JSON files are the machine-readable
 copy the shell launchers and any non-Python harness can read without importing the package.
 They are tiny (ids only, no issue text) and therefore **committed** — unlike the results
 tree, which is regenerated per run and git-ignored.
@@ -19,7 +19,7 @@ import sys
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
 
-from tokeneconomizer import workloads  # noqa: E402
+from te_bench import workloads  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(REPO, "workloads")
@@ -54,7 +54,7 @@ def build(domain):
     doc = {
         "domain": domain,
         "description": _DOC[domain],
-        "source": "tokeneconomizer/workloads.py (regenerate: python scripts/export_workloads.py)",
+        "source": "experiments/te_bench/workloads.py (regenerate: python scripts/export_workloads.py)",
         "group_field": _GROUP_FIELD[domain],
         "seeds": _SEEDS[domain],
         "total_tasks": sum(len(v) for v in groups.values()),
@@ -72,7 +72,7 @@ def build(domain):
             "instances that exist only in the full princeton-nlp/SWE-bench test split. "
             "Docker image tag: swebench/sweb.eval.x86_64.<id with __ -> _1776_>:latest. "
             "'excluded' lists ids dropped from THIS run list with the reason; they are "
-            "still part of the recorded workload in tokeneconomizer/workloads.py "
+            "still part of the recorded workload in experiments/te_bench/workloads.py "
             "(SWEBENCH_INSTANCES) and were run by the published results, so a cell that "
             "skips them is not directly comparable to one that did not. "
             "'added' lists ids that EXTEND a stream beyond the published workload to "

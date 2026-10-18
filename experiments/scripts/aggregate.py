@@ -35,7 +35,7 @@ import sys
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
 from tokeneconomizer import ledger                     # noqa: E402
-from tokeneconomizer.vendor import pricing             # noqa: E402
+from tokeneconomizer import pricing             # noqa: E402
 
 FIELDS = [
     "arm", "repo", "seed", "instance", "repo_full", "mode",

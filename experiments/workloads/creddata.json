@@ -1,7 +1,7 @@
 {
   "domain": "creddata",
   "description": "CredData repositories audited for secrets, graded to line-level F1.",
-  "source": "tokeneconomizer/workloads.py (regenerate: python scripts/export_workloads.py)",
+  "source": "experiments/te_bench/workloads.py (regenerate: python scripts/export_workloads.py)",
   "group_field": "instance",
   "seeds": [
     0,

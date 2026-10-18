@@ -130,7 +130,7 @@ ValueError: pricing: no weight entry for billed model 'my-model' (agent='copilot
             Add it to pricing.MODEL_WEIGHTS
 ```
 
-Add the id to `tokeneconomizer/vendor/pricing.py` before pinning it. Ids containing
+Add the id to `tokeneconomizer/pricing.py` before pinning it. Ids containing
 `claude` fall back to the Claude curve automatically and need no entry. `auto` needs none
 either — it is a routing directive, not a billed id, so it is recorded as `null` and priced
 on the Claude curve, which is the historical behaviour for Copilot rows.
@@ -270,7 +270,7 @@ That distinction decides which mechanism to run:
 
 So on a current CLI prefer `--untool-evidence` alone, and treat a `trimech` run that
 includes `--untool-judge` as paying for a judge that cannot contribute. Restoring the judge
-means capturing a description snapshot the way `vendor/claude_tool_catalog.json` does for
+means capturing a description snapshot the way `tokeneconomizer/trace/claude_tool_catalog.json` does for
 Claude (see `te_harness/capture_catalog.py` for the pattern).
 
 ## Troubleshooting

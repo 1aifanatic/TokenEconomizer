@@ -1,7 +1,7 @@
 """Injection: the distiller lifecycle + the PrefixStage render/after_task cycle."""
 import os
 
-from tokeneconomizer.mechanisms.injection import Distiller, PrefixStage
+from tokeneconomizer.microskills import Distiller, PrefixStage
 from tokeneconomizer.config import InjectionConfig
 from fixtures import write_claude_transcript
 
@@ -41,7 +41,7 @@ def test_distiller_grounds_and_fires_a_fact(tmp_path):
     d = Distiller("acme/widget", runner=_facts_runner(payload))
     d.last_propose = -1
     # feed several tasks that each run pytest and pass, on disjoint edited files
-    import tokeneconomizer.mechanisms.injection as inj
+    import tokeneconomizer.microskills.distiller as inj
     inj.PROPOSE_EVERY = 1
     for i in range(8):
         tr = str(tmp_path / f"t{i}.jsonl")

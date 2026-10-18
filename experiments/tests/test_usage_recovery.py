@@ -126,7 +126,7 @@ def test_guard_accepts_probes_the_vendored_signature():
     """`never_abort` exists in some vendored versions of the guard and not in others.
     webbench.py passed it unconditionally, which killed every guarded Web-Bench run at
     task 0 before a row was written. Both runners now go through this one probe."""
-    from tokeneconomizer.vendor import spiral as spiral_vendor
+    from te_bench import nudge_guard as spiral_vendor
     from te_harness.swebench import guard_accepts
     assert guard_accepts("envelope") is True
     assert guard_accepts("no_such_parameter_exists") is False

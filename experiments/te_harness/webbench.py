@@ -79,12 +79,13 @@ import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from tokeneconomizer import baselines as scaffolds_pkg
-from tokeneconomizer.vendor import pricing, spiral as spiral_vendor
+from te_bench import baselines as scaffolds_pkg
+from tokeneconomizer import pricing
+from te_bench.nudge_guard import NudgeGuard
 
 from . import copilot
 from . import codex
-from tokeneconomizer.mechanisms import codex_spiral
+from te_bench import codex_spiral
 
 from .guards import net_guard
 from .swebench import (EFFORT_LEVELS, PROTECTED_TOOLS, _ANTHROPIC_DIRECT, _log,
@@ -101,7 +102,7 @@ from .swebench import (EFFORT_LEVELS, PROTECTED_TOOLS, _ANTHROPIC_DIRECT, _log,
 #   rtk     -- YES. A static binary plus a PreToolUse hook; it rewrites `ls`/`find`/`grep`
 #              and compresses their output before it reaches context, which needs neither a
 #              container nor a language. The agent does issue those commands here.
-#   repomap -- NO. Its generator walks `*.py` (baselines/_repomap_gen.py) and a Web-Bench
+#   repomap -- NO. Its generator walks `*.py` (tokeneconomizer/plugin/repomap_gen.py) and a Web-Bench
 #              project is TypeScript/JavaScript, so the map would come back empty.
 #   serena  -- NO. An MCP navigation server over a codebase; Web-Bench hands the agent a
 #              file set with no installed project, and the projects are 1-140 files.
@@ -1459,7 +1460,7 @@ class WebBenchRunner:
         # run on such a branch die with a TypeError at task 0.
         if guard_accepts("never_abort"):
             guard_kwargs["never_abort"] = bool(run_kwargs.get("spiral_never_abort"))
-        return spiral_vendor.NudgeGuard(**guard_kwargs)
+        return NudgeGuard(**guard_kwargs)
 
     def _write_run_config(self, run_dir_path, task, arm, injected, exclude_tools,
                           max_turns, run_kwargs, sess, project):

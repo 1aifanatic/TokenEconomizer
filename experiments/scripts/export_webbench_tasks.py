@@ -9,7 +9,7 @@ nor derivable at run time:
   B  projects tree      the Web-Bench checkout, $TOKENECONOMIZER_WEBBENCH_PROJECTS
   C  workload record    workloads/webbench.json, via scripts/export_workloads.py
 
-`tokeneconomizer/workloads.py` is the authority for WHICH projects and tasks are in the
+`experiments/te_bench/workloads.py` is the authority for WHICH projects and tasks are in the
 sweep; A and C are both projections of it. Changing the project list therefore means three
 commands, in this order:
 
@@ -32,7 +32,7 @@ import sys
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
 
-from tokeneconomizer import workloads  # noqa: E402
+from te_bench import workloads  # noqa: E402
 
 PROJECTS_ENV = "TOKENECONOMIZER_WEBBENCH_PROJECTS"
 TASKS_ENV = "TOKENECONOMIZER_WEBBENCH_TASKS"

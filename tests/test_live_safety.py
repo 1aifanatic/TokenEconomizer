@@ -14,9 +14,9 @@ import sys
 
 import pytest
 
-from te_live import untool
-from te_live.paths import ensure_launcher, secure_root
-from te_live.store import Store
+from tokeneconomizer.plugin import denylist, toolcheck
+from tokeneconomizer.plugin.paths import ensure_launcher, secure_root
+from tokeneconomizer.plugin.store import Store
 from tests.test_live_hooks import repo  # noqa: F401
 
 PLUGIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin")
@@ -34,7 +34,7 @@ def test_a_symlinked_settings_directory_is_refused(repo, tmp_path, host, rel):
     os.symlink(outside, os.path.join(repo, rel))
     item = {"claude": "Workflow", "copilot": "github-mcp-server", "codex": "goals"}[host]
     with pytest.raises(RuntimeError, match="symlink"):
-        untool.apply(repo, [item], Store(str(tmp_path / "st")), host=host)
+        denylist.apply(repo, [item], Store(str(tmp_path / "st")), host=host)
     assert list(outside.rglob("*")) == []
 
 
@@ -45,8 +45,8 @@ def test_a_symlinked_settings_file_is_refused_and_its_target_untouched(repo, tmp
     os.symlink(target, os.path.join(repo, ".claude", "settings.local.json"))
     st = Store(str(tmp_path / "st"))
     with pytest.raises(RuntimeError, match="symlink"):
-        untool.apply(repo, ["Workflow"], st)
-    assert untool.restore(repo, st, ["Workflow"]) == []      # nothing of its own to remove
+        denylist.apply(repo, ["Workflow"], st)
+    assert denylist.restore(repo, st, ["Workflow"]) == []      # nothing of its own to remove
     assert target.read_text() == '{"keep": true}\n'
 
 
@@ -56,10 +56,10 @@ def test_a_settings_file_that_does_not_parse_is_refused_not_overwritten(repo, tm
     broken = '{"permissions": {"allow": ["Bash(ls)"],}}\n'          # a trailing comma
     open(path, "w").write(broken)
     with pytest.raises(RuntimeError, match="not valid JSON"):
-        untool.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
+        denylist.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
     assert open(path).read() == broken
     open(path, "w").write("")                                     # empty is the same as none
-    assert untool.apply(repo, ["Workflow"], Store(str(tmp_path / "st2"))) == ["Workflow"]
+    assert denylist.apply(repo, ["Workflow"], Store(str(tmp_path / "st2"))) == ["Workflow"]
     assert json.load(open(path)) == {"permissions": {"deny": ["Workflow"]}}
 
 
@@ -69,7 +69,7 @@ def test_a_git_file_pointing_out_of_the_repository_gets_no_exclude_line(repo, tm
     elsewhere = tmp_path / "not-a-git-dir"
     elsewhere.mkdir()
     open(os.path.join(repo, ".git"), "w").write(f"gitdir: {elsewhere}\n")
-    untool.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
+    denylist.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
     assert list(elsewhere.rglob("*")) == []
 
 
@@ -77,7 +77,7 @@ def test_a_symlinked_exclude_file_is_not_written_through(repo, tmp_path):
     victim = tmp_path / "victim"
     victim.write_text("keep\n")
     os.symlink(victim, os.path.join(repo, ".git", "info", "exclude"))
-    untool.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
+    denylist.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
     assert victim.read_text() == "keep\n"
 
 

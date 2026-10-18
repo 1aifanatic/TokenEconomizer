@@ -13,7 +13,7 @@ Guarded specifically:
     level is invisible in an EconomizerConfig and a mislabelled cell would be undetectable
     after the fact;
   * every arm the sweep plan names is registered, and the scaffold arms agree with
-    tokeneconomizer/baselines' own arm->scaffold map -- an arm that named a scaffold the harness
+    experiments/te_bench/baselines' own arm->scaffold map -- an arm that named a scaffold the harness
     does not have, or carried none where the harness expects one, would run NATIVE and file
     the rows under the scaffold's name.
 """
@@ -170,14 +170,14 @@ def test_webbench_scaffold_arms_agree_with_the_harness():
 
 
 def test_scaffold_arms_agree_with_the_harness_map():
-    """The arm registry and tokeneconomizer/baselines must name the same pairs. Two places
+    """The arm registry and experiments/te_bench/baselines must name the same pairs. Two places
     map an arm to a scaffold, and a disagreement runs native under a scaffold's name."""
-    from tokeneconomizer import baselines as scaffolds
+    from te_bench import baselines as scaffolds
     assert RX.SCAFFOLD_ARMS == scaffolds.ARM_SCAFFOLDS
 
 
 def test_every_scaffold_arm_names_a_real_scaffold():
-    from tokeneconomizer import baselines as scaffolds
+    from te_bench import baselines as scaffolds
     for arm, name in RX.SCAFFOLD_ARMS.items():
         assert name in scaffolds.SCAFFOLDS, f"{arm} -> {name}"
         assert scaffolds.for_arm(arm).name == name
@@ -270,7 +270,7 @@ def test_group_sizes_exclude_what_a_new_run_must_skip():
     """The exclusion and extension tables are both forward-looking: an excluded id must not
     be counted, an added one must be, and task_counts() must still report the historical
     size either way."""
-    from tokeneconomizer import workloads
+    from te_bench import workloads
     sizes = SP.group_sizes("swebench")
     for iid in workloads.SWEBENCH_EXCLUDED:
         group = next(g for g, ids in workloads.SWEBENCH_INSTANCES.items() if iid in ids)
@@ -372,7 +372,7 @@ def test_the_codex_spiral_arms_have_the_shape_the_injection_arms_have():
     # the generic guard stays off on all of them: the Codex controller is what runs
     for n in ("codex-spiral", "codex-spiral-postgreen", "codex-spiral-defensive"):
         assert S(n).codex_spiral and not S(n).guard and not S(n).nudge
-    from tokeneconomizer.mechanisms import codex_spiral as cs
+    from te_bench import codex_spiral as cs
     assert cs.CODEX_DEFAULT_PROFILE == "defensive"
     assert cs.CODEX_SHIPPED_PROFILE == "post-green"
 
@@ -403,7 +403,7 @@ def test_the_codex_family_relates_to_codex_trimech_as_the_generic_one_does_to_tr
         for name in (tri, inj, unt, spi):
             assert not RX.ARMS[name].scaffold and not (RX.ARMS[name].env or {}), name
         # 4. the three appear before trimech in the canonical order
-        from tokeneconomizer.arms import ARM_ORDER
+        from te_bench.arms import ARM_ORDER
         assert max(ARM_ORDER.index(n) for n in (inj, unt, spi)) < ARM_ORDER.index(tri)
 
 
@@ -550,7 +550,7 @@ def test_the_harness_scaffold_table_names_every_arm_that_carries_each_scaffold()
     reads as needing nothing. It went stale twice in one day, both times when a Codex
     sibling arm was added, so pin it against the registry rather than against a copy."""
     import re
-    from tokeneconomizer import baselines
+    from te_bench import baselines
     text = _doc("HARNESS.md")
     table = text[text.index("| Scaffold | Arms |"):]
     table = table[:table.index("\n\n")]
@@ -577,7 +577,7 @@ def test_the_published_spiral_arm_is_the_defensive_profile():
     ruled out on 2026-09-12. The superseded post-green rule keeps a registry name but is not
     what the plain one runs.
     """
-    from tokeneconomizer.mechanisms import codex_spiral as cs
+    from te_bench import codex_spiral as cs
     sp = RX.ARMS["codex-spiral"].cfg().spiral
     assert sp.codex_spiral_profile == "defensive" == cs.CODEX_DEFAULT_PROFILE
     assert cs.profile_version("defensive") == "codex-native-spiral-defensive-v1"
@@ -590,7 +590,7 @@ def test_the_published_spiral_arm_is_the_defensive_profile():
 def test_the_codex_lane_uses_the_whole_evaluated_workload_not_one_repo():
     """`codex_ab.sh` defaults to one repository, so the run book must name them all or a
     6-repo sweep quietly becomes a 1-repo one."""
-    from tokeneconomizer import workloads
+    from te_bench import workloads
     codex = _section(_doc("RUNNING.md"), *_CODEX)
     for group in workloads.task_counts("swebench"):
         assert group in codex, f"{group} is in the evaluated workload but not in the run book"
@@ -605,7 +605,7 @@ def test_codex_trimech_rtk_is_codex_trimech_with_the_scaffold_and_nothing_else()
     a, b = RX.ARMS["codex-trimech-rtk"], RX.ARMS["codex-trimech"]
     assert a.cfg() == b.cfg() and a.mode == b.mode == "manual4"
     assert a.scaffold == "rtk" and b.scaffold is None
-    from tokeneconomizer import baselines
+    from te_bench import baselines
     assert baselines.ARM_SCAFFOLDS["codex-trimech-rtk"] == "rtk"
     assert RX.SCAFFOLD_ARMS["codex-trimech-rtk"] == "rtk"
     # and the plain scaffold arm is agent-agnostic: no mechanism, just the scaffold
@@ -619,7 +619,7 @@ def test_codex_trimech_repomap_is_codex_trimech_with_the_scaffold_and_nothing_el
     a, b = RX.ARMS["codex-trimech-repomap"], RX.ARMS["codex-trimech"]
     assert a.cfg() == b.cfg() and a.mode == b.mode == "manual4"
     assert a.scaffold == "repomap" and b.scaffold is None
-    from tokeneconomizer import baselines
+    from te_bench import baselines
     assert baselines.ARM_SCAFFOLDS["codex-trimech-repomap"] == "repomap"
     assert RX.SCAFFOLD_ARMS["codex-trimech-repomap"] == "repomap"
     r = RX.ARMS["repomap"]
@@ -632,10 +632,24 @@ def test_every_generic_trimech_scaffold_arm_has_exactly_one_codex_sibling():
     generic lane refuses `trimech-serena`, so a `codex-trimech-serena` would be a Codex-only
     combination with no generic twin to compare against. `-web` is Web-Bench's spiral
     tuning of the same scaffold arm, not a scaffold of its own."""
-    from tokeneconomizer import baselines
+    from te_bench import baselines
     generic = {a[len("trimech-"):]: s for a, s in baselines.ARM_SCAFFOLDS.items()
                if a.startswith("trimech-") and not a.endswith("-web")}
     codex = {a[len("codex-trimech-"):]: s for a, s in baselines.ARM_SCAFFOLDS.items()
              if a.startswith("codex-trimech-")}
     assert generic == codex == {"rtk": "rtk", "repomap": "repomap"}
 
+
+def test_the_llm_free_arm_is_registered_and_makes_no_paid_call():
+    """`codex-inject-envfacts` is the LLM-free ablation: the layer `codex_injection` implements,
+    with no proposer. (The DEFAULT Codex injection arm has carried the paid proposer on top
+    since 2026-09-12 -- see test_envfacts_profiles.py.)"""
+    from te_bench.arms import ARMS
+    from tokeneconomizer.config import EconomizerConfig, InjectionConfig, needs_optimizer
+    cfg = ARMS["codex-inject-envfacts"].cfg()
+    assert cfg.injection.enabled and cfg.injection.profile == "envfacts"
+    assert cfg.injection.paid is False
+    assert needs_optimizer(cfg) is False
+    assert ARMS["codex-inject-envfacts"].mode == "manual4"
+    assert ARMS["codex-inject-untool"].cfg().tooling.codex_untool is True
+    assert needs_optimizer(EconomizerConfig(injection=InjectionConfig(enabled=True))) is True

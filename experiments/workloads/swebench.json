@@ -1,7 +1,7 @@
 {
   "domain": "swebench",
   "description": "SWE-bench task streams for the Claude/Copilot trimech A/B and the Codex arms.",
-  "source": "tokeneconomizer/workloads.py (regenerate: python scripts/export_workloads.py)",
+  "source": "experiments/te_bench/workloads.py (regenerate: python scripts/export_workloads.py)",
   "group_field": "repo",
   "seeds": [
     0,
@@ -398,5 +398,5 @@
     "pydata__xarray-7400",
     "pydata__xarray-7444"
   ],
-  "notes": "These ids are NOT all in SWE-bench_Verified: 'full_split_only' lists the instances that exist only in the full princeton-nlp/SWE-bench test split. Docker image tag: swebench/sweb.eval.x86_64.<id with __ -> _1776_>:latest. 'excluded' lists ids dropped from THIS run list with the reason; they are still part of the recorded workload in tokeneconomizer/workloads.py (SWEBENCH_INSTANCES) and were run by the published results, so a cell that skips them is not directly comparable to one that did not. 'added' lists ids that EXTEND a stream beyond the published workload to de-saturate it (scikit-learn and sympy, to 60 runnable tasks each); they are all outside SWE-bench_Verified, so provision them from the full test split, and results on an extended stream are not comparable to the published ones for that repo."
+  "notes": "These ids are NOT all in SWE-bench_Verified: 'full_split_only' lists the instances that exist only in the full princeton-nlp/SWE-bench test split. Docker image tag: swebench/sweb.eval.x86_64.<id with __ -> _1776_>:latest. 'excluded' lists ids dropped from THIS run list with the reason; they are still part of the recorded workload in experiments/te_bench/workloads.py (SWEBENCH_INSTANCES) and were run by the published results, so a cell that skips them is not directly comparable to one that did not. 'added' lists ids that EXTEND a stream beyond the published workload to de-saturate it (scikit-learn and sympy, to 60 runnable tasks each); they are all outside SWE-bench_Verified, so provision them from the full test split, and results on an extended stream are not comparable to the published ones for that repo."
 }

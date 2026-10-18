@@ -1,6 +1,6 @@
 """Spiral: generic envelope guard + Codex-native post-green policy."""
-from tokeneconomizer.mechanisms.spiral import SpiralStage
-from tokeneconomizer.mechanisms import codex_spiral as cs
+from te_bench.spiral_stage import SpiralStage
+from te_bench import codex_spiral as cs
 from tokeneconomizer.config import SpiralConfig
 
 
@@ -62,7 +62,7 @@ def test_codex_spiral_after_task_telemetry(tmp_path):
 # fires.
 # ---------------------------------------------------------------------------------------
 import json as _json
-from tokeneconomizer.mechanisms import codex_spiral as _cs
+from te_bench import codex_spiral as _cs
 
 _PATCH_CMD = ("/bin/bash -lc \"apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: "
               "django/core/validators.py\n@@\n-old\n+new\n*** End Patch\nPATCH\n\n"
@@ -109,7 +109,7 @@ def test_shipped_policy_can_fire_on_a_shell_patched_trajectory():
 
 def test_trajectory_seam_surfaces_shell_patches_as_apply_patch_calls(tmp_path):
     from tokeneconomizer import trace
-    from tokeneconomizer.mechanisms.injection import edited_pyfiles
+    from tokeneconomizer.microskills.lifecycle import edited_pyfiles
     p = tmp_path / "t.jsonl"
     p.write_text("\n".join([
         _line({"type": "command_execution", "command": _PATCH_CMD, "aggregated_output": "Success. Updated", "exit_code": 0}),
@@ -182,7 +182,7 @@ def test_defensive_guard_spends_its_budget_on_distinct_reasons_only():
 
 
 def test_defensive_profile_is_selectable_and_unpaid(tmp_path):
-    from tokeneconomizer.arms import ARMS, ARM_ORDER
+    from te_bench.arms import ARMS, ARM_ORDER
     from tokeneconomizer.config import needs_optimizer, SpiralConfig
     c = ARMS["codex-spiral-defensive"].cfg()
     assert c.spiral.codex_spiral and c.spiral.codex_spiral_profile == "defensive"
@@ -194,7 +194,7 @@ def test_defensive_profile_is_selectable_and_unpaid(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         SpiralConfig(codex_spiral=True, codex_spiral_profile="bogus")
-    from tokeneconomizer.mechanisms.spiral import SpiralStage
+    from te_bench.spiral_stage import SpiralStage
     stage = SpiralStage(c.spiral, max_turns=80, agent="codex")
     pol = stage.run_kwargs({"instance_id": "x"})["codex_spiral_policy"]
     assert pol.reverify_loop_enabled and pol.runaway_enabled and pol.nudge_budget == 2
@@ -213,7 +213,7 @@ def test_both_guards_expose_everything_the_shared_task_loop_reads():
     """
     import inspect, re
     from te_harness import swebench as sw
-    from tokeneconomizer.vendor import spiral as generic
+    from te_bench import nudge_guard as generic
 
     src = inspect.getsource(sw.ClaudeSwebenchRunner.run_task)
     names = set(re.findall(r"(?<![\w.])guard\.([a-z_][a-z0-9_]*)", src))
@@ -243,7 +243,7 @@ def test_the_codex_envelope_is_advanced_in_the_unit_its_trigger_compares(tmp_pat
     could not fire.
     """
     from tokeneconomizer.config import SpiralConfig
-    from tokeneconomizer.mechanisms.spiral import SpiralStage
+    from te_bench.spiral_stage import SpiralStage
     cfg = SpiralConfig(codex_spiral=True, codex_spiral_profile="defensive")
     stage = SpiralStage(cfg, max_turns=80, agent="codex")
     srow = {}
@@ -282,3 +282,16 @@ def test_the_resume_invocation_is_one_the_installed_cli_accepts():
     assert "[SESSION_ID]" in text                      # the positional this argv relies on
     for flag in [a for a in argv if a.startswith("--")]:
         assert flag in text, f"`codex exec resume` does not accept {flag}"
+
+
+def test_the_codex_verification_detector_sees_through_rtks_command_prefix():
+    """`codex-trimech-rtk` runs the spiral on an agent told to type `rtk pytest`: the
+    verification detector must read the prefixed command as it reads the bare one."""
+    for bare in ("python -m pytest tests/ -q", "pytest -q", "bin/test sympy/x.py",
+                 "K=1 pytest -q", "pip install foo", "git status"):
+        for pre in ("rtk ", "rtk proxy ", "rtk K=2 "):
+            assert cs.is_verification_command(pre + bare) == cs.is_verification_command(bare)
+    # a compound command keeps its second segment visible too
+    assert cs.is_verification_command("cd x && rtk pytest -q")
+    assert cs.is_verification_command("rtk pytest -q")
+    assert not cs.is_verification_command("rtk git status")

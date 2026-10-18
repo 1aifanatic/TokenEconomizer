@@ -32,18 +32,18 @@ original launches used:
 
 The single-mechanism arms use the SAME parameters trimech co-activates, so each is a true
 ablation of it rather than a separately tuned arm. The external tool scaffolds are
-implemented in `tokeneconomizer/baselines/` and install into the task container; a
+implemented in `experiments/te_bench/baselines/` and install into the task container; a
 misconfigured one fails at runner construction rather than producing rows that merely look
 like a scaffold result (docs/HARNESS.md, External tool scaffolds).
 
-The arm tables live next to the code they configure -- `tokeneconomizer/mechanisms/arms.py`
+The arm tables live next to the code they configure -- `experiments/te_bench/mechanism_arms.py`
 for everything the economizer drives (including the two `trimech-*` integrations, which sit
-beside `trimech`) and `tokeneconomizer/baselines/arms.py` for the pure-baseline arms. They
-are assembled in `tokeneconomizer/arms.py` and re-exported here, so this module stays the
+beside `trimech`) and `experiments/te_bench/baselines/arms.py` for the pure-baseline arms. They
+are assembled in `experiments/te_bench/arms.py` and re-exported here, so this module stays the
 entry point the docs point at.
 
 The heavy task-execution harness (Docker + agent CLI + official gold grading) lives BELOW
-the ``tokeneconomizer.runner.AgentRunner`` seam, in the repo's ``te_harness`` package -- the
+the ``te_bench.runner.AgentRunner`` seam, in the repo's ``te_harness`` package -- the
 one the published rows came from, so ``--runner te_harness.swebench:make_runner`` reproduces
 them as committed (docs/HARNESS.md). Any other harness works the same way: pass
 ``--runner module:factory`` (a zero-arg callable returning an AgentRunner). ``--runner stub``
@@ -75,7 +75,8 @@ sys.path[:0] = [os.path.dirname(os.path.abspath(__file__)),  # _env, sweep_plan
                 _EXPERIMENTS,                               # te_harness
                 os.path.dirname(_EXPERIMENTS)]              # the core, at the repository root
 from _env import load_env                                           # noqa: E402
-from tokeneconomizer import Economizer, EconomizerConfig            # noqa: E402
+from te_bench.facade import Economizer                              # noqa: E402
+from tokeneconomizer import EconomizerConfig                        # noqa: E402
 from tokeneconomizer import ledger                                  # noqa: E402
 from tokeneconomizer.config import needs_optimizer               # noqa: E402
 
@@ -84,16 +85,16 @@ from tokeneconomizer.config import needs_optimizer               # noqa: E402
 # Re-exported so this module stays the entry point the docs and every existing import point
 # at. The definitions moved next to the code they configure:
 #
-#   tokeneconomizer/mechanisms/arms.py  naive, effort variants, single-mechanism ablations,
+#   experiments/te_bench/mechanism_arms.py  naive, effort variants, single-mechanism ablations,
 #                                       trimech, trimech-web, the two trimech-<scaffold>
 #                                       integrations (siblings of trimech), codex-*
-#   tokeneconomizer/baselines/arms.py   rtk / serena / repomap -- external tool only
-#   tokeneconomizer/arms.py             assembles both in canonical order
+#   experiments/te_bench/baselines/arms.py   rtk / serena / repomap -- external tool only
+#   experiments/te_bench/arms.py             assembles both in canonical order
 #
-# `Arm`, `cfg` and `arm` come from tokeneconomizer._armspec; `_cfg`/`_arm` remain as aliases
+# `Arm`, `cfg` and `arm` come from te_bench._armspec; `_cfg`/`_arm` remain as aliases
 # because tests and older callers refer to them by those names.
-from tokeneconomizer.arms import ARMS, SCAFFOLD_ARMS                # noqa: E402,F401
-from tokeneconomizer._armspec import Arm, arm as _arm, cfg as _cfg  # noqa: E402,F401
+from te_bench.arms import ARMS, SCAFFOLD_ARMS                # noqa: E402,F401
+from te_bench._armspec import Arm, arm as _arm, cfg as _cfg  # noqa: E402,F401
 
 
 # ---- built-in offline StubRunner (smoke test only) ---------------------------------------
@@ -209,13 +210,13 @@ def load_runner(spec, agent, model=None, scaffold=None):
                 f"runner {spec!r} does not accept a scaffold, but this arm needs "
                 f"{scaffold!r}. A harness that ignored it would run NATIVE and file the "
                 f"rows under the scaffold's name. Add a `scaffold=` parameter (see "
-                f"tokeneconomizer/baselines/) or pick an arm without one.")
+                f"experiments/te_bench/baselines/) or pick an arm without one.")
         os.environ.setdefault("TE_SCAFFOLD", scaffold)
     return factory(**kw) if kw else factory()
 
 
 def load_adapter(name, tasks_file, repo=""):
-    from tokeneconomizer.adapters import (
+    from te_bench.adapters import (
         SwebenchAdapter, WebBenchAdapter, CredDataAdapter, ReposVulAdapter,
         CyberGymAdapter)
     if name == "swebench":
@@ -327,7 +328,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arm", required=True, choices=sorted(ARMS),
                     help="arm to run; %s additionally install an external tool scaffold "
-                         "(tokeneconomizer/baselines/)"
+                         "(experiments/te_bench/baselines/)"
                          % ", ".join(sorted(SCAFFOLD_ARMS)))
     ap.add_argument("--agent", default="claude", choices=["claude", "copilot", "codex"],
                     help="the sealed agent (selects transcript schema + generic-vs-codex "

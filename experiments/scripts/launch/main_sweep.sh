@@ -21,7 +21,7 @@
 #   trimech-rtk        all three + rtk                       (SWE-bench only)
 #   trimech-repomap    all three + the repo map              (SWE-bench only)
 #
-# The last five install an EXTERNAL TOOL (tokeneconomizer/baselines/) into the agent's
+# The last five install an EXTERNAL TOOL (experiments/te_bench/baselines/) into the agent's
 # container -- baselines, not mechanisms. They are SWE-bench only: Web-Bench reaches its
 # agent through the evaluator's HTTP seam with no per-task repo container. Asking for one
 # on DOMAIN=webbench fails in the plan rather than enumerating cells that cannot run.

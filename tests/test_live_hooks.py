@@ -9,16 +9,17 @@ here can break the agent's session.
 
 Folds run inline (`TE_FOLD_SYNC=1`); in the plugin they are detached processes.
 """
+import glob
 import io
 import json
 import os
 
 import pytest
 
-from te_live import hook, untool
-from te_live.controller import LiveController
-from te_live.paths import repo_identity, repo_state_dir
-from te_live.store import Store
+from tokeneconomizer.plugin import denylist, hook, toolcheck
+from tokeneconomizer.plugin.controller import LiveController
+from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
+from tokeneconomizer.plugin.store import Store
 
 
 @pytest.fixture
@@ -94,6 +95,34 @@ def run_session(env, repo, sid, transcript, host=None, source="startup"):
 
 
 # ---- injection ---------------------------------------------------------------------------
+def prevented_session(path, repo, i):
+    """The agent was told: it runs the working form at once and never meets the trap."""
+    return write_session(path, [(f"fix bug {i}", [
+        ("Edit", {"file_path": f"{repo}/pkg/mod{i}.py", "old_string": "a", "new_string": "b"},
+         "ok", False),
+        ("Bash", {"command": "python -m pytest -q tests/test_a.py"}, "1 passed in 0.1s", False),
+    ])])
+
+
+def test_an_injected_fact_that_prevents_its_failure_stays_injected(env, repo, tmp_path):
+    """The session-start hook injects; a fold in another process learns afterwards. Without
+    telling the fold which facts the session was given, a fact that prevented its failure
+    counted as not having fired, and decayed out of the block -- seen live on Codex, where
+    three injected sessions left a fact at 5/8 and later under its gate."""
+    for i in range(5):
+        run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
+    starts = [run_session(env, repo, f"p{i}", prevented_session(str(tmp_path / f"p{i}.jsonl"),
+                                                                repo, i + 5))
+              for i in range(8)]
+    claim = "`pytest …` fails here with command not found; `python -m pytest …` works."
+    assert all(claim in s["hookSpecificOutput"]["additionalContext"] for s in starts)
+    (path,) = glob.glob(store_for(env, repo).path("mechanisms", "envfacts_state", "*.json"))
+    life = json.load(open(path))["facts"]["form_repair:run_tests:pytest"]["life"]
+    assert life["fire_num"] == life["fire_den"]          # every session it was given counted
+    assert store_for(env, repo).read("sessions/p7.json")["injected_ids"] == [
+        "form_repair:run_tests:pytest"]
+
+
 def test_a_learned_fact_reaches_the_next_session_and_is_announced_once(env, repo, tmp_path):
     starts = [run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
               for i in range(6)]
@@ -190,7 +219,7 @@ def test_a_headless_guard_stops_the_turn_on_claude_but_not_on_codex(env, repo):
 
 
 def _fake_judges(monkeypatch, seen):
-    from tokeneconomizer.vendor import reflect
+    from tokeneconomizer.loopguard import judge as reflect
 
     def judge(digest, runner, model="agent"):
         seen.append(digest)
@@ -205,7 +234,7 @@ def _fake_judges(monkeypatch, seen):
 def test_the_paid_judge_answers_from_a_job_and_its_spend_is_charged_as_it_happens(
         env, repo, monkeypatch):
     """The job runs inline here (TE_JUDGE_SYNC=1); in the plugin it is a detached process."""
-    from te_live import accounting
+    from tokeneconomizer.plugin import accounting
     seen = []
     _fake_judges(monkeypatch, seen)
     paid = dict(env, TE_PAID="1", TE_JUDGE_SYNC="1")
@@ -229,7 +258,7 @@ def test_the_paid_judge_answers_from_a_job_and_its_spend_is_charged_as_it_happen
 
 
 def test_a_hook_only_starts_the_paid_judge_and_never_waits_for_it(env, repo, monkeypatch):
-    from te_live import judge as live_judge
+    from tokeneconomizer.plugin import judge as live_judge
     seen, spawned = [], []
     _fake_judges(monkeypatch, seen)
     monkeypatch.setattr(live_judge, "spawn_job", lambda ctx, sid, job: spawned.append(job))
@@ -277,12 +306,12 @@ def test_unused_tools_are_proposed_but_nothing_changes_until_applied(env, repo, 
     prop = st.read("untool.json")["proposal"]
     # protected tools (incl. a person's AskUserQuestion, and the web) are never proposed
     assert sorted(prop) == ["CronCreate", "ShareOnboardingGuide", "Workflow"]
-    assert not os.path.exists(untool.settings_path(repo))      # proposing writes nothing
+    assert not os.path.exists(denylist.settings_path(repo))      # proposing writes nothing
     t = str(tmp_path / "next.jsonl")
     open(t, "w").close()
     notice = call(env, {"hook_event_name": "SessionStart", "session_id": "n", "source": "startup",
                         "transcript_path": t, "cwd": repo})["systemMessage"]
-    assert "3 tool(s) went unused" in notice and "/tokeneconomizer:untool" in notice
+    assert "3 tool(s) went unused" in notice and "/tokeneconomizer:toolprune" in notice
 
 
 def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(
@@ -290,29 +319,29 @@ def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(
     _catalog(env, ["Bash", "Read", "CronCreate", "WebFetch", "WebSearch"])
     st = store_for(env, repo)
     # A deny list accepted under an earlier version, which still proposed the web.
-    untool.apply(repo, ["CronCreate", "WebFetch", "WebSearch"], st)
+    denylist.apply(repo, ["CronCreate", "WebFetch", "WebSearch"], st)
     for i in range(20):                       # far past the old 3x evidence bar
         t = write_session(str(tmp_path / f"w{i}.jsonl"), [("look", [
             ("Bash", {"command": "ls"}, "a.py", False)])])
         run_session(env, repo, f"w{i}", t)
-    assert untool.applied(st) == ["CronCreate"]
-    deny = json.load(open(untool.settings_path(repo)))["permissions"]["deny"]
+    assert denylist.applied(st) == ["CronCreate"]
+    deny = json.load(open(denylist.settings_path(repo)))["permissions"]["deny"]
     assert deny == ["CronCreate"]
     assert not {"WebFetch", "WebSearch"} & set(st.read("untool.json")["proposal"])
 
 
 def test_apply_and_restore_touch_only_the_plugins_own_rules(repo, tmp_path):
     st = Store(str(tmp_path / "st"))
-    path = untool.settings_path(repo)
+    path = denylist.settings_path(repo)
     os.makedirs(os.path.dirname(path))
     json.dump({"permissions": {"deny": ["Bash(rm -rf:*)"], "allow": ["Read"]}, "model": "opus"},
               open(path, "w"))
-    assert untool.apply(repo, ["Workflow", "CronCreate"], st) == ["Workflow", "CronCreate"]
+    assert denylist.apply(repo, ["Workflow", "CronCreate"], st) == ["Workflow", "CronCreate"]
     data = json.load(open(path))
     assert data["permissions"]["deny"] == ["Bash(rm -rf:*)", "Workflow", "CronCreate"]
     assert data["model"] == "opus" and data["permissions"]["allow"] == ["Read"]
-    assert untool.restore(repo, st, ["CronCreate"]) == ["CronCreate"]
-    assert untool.restore(repo, st) == ["Workflow"]
+    assert denylist.restore(repo, st, ["CronCreate"]) == ["CronCreate"]
+    assert denylist.restore(repo, st) == ["Workflow"]
     assert json.load(open(path))["permissions"]["deny"] == ["Bash(rm -rf:*)"]
     # the user wrote that file, so it was not added to the local git excludes
     exclude = os.path.join(repo, ".git", "info", "exclude")
@@ -321,10 +350,10 @@ def test_apply_and_restore_touch_only_the_plugins_own_rules(repo, tmp_path):
 
 def test_a_settings_file_the_plugin_creates_is_kept_out_of_git(repo, tmp_path):
     st = Store(str(tmp_path / "st"))
-    untool.apply(repo, ["Workflow"], st)
+    denylist.apply(repo, ["Workflow"], st)
     assert "/.claude/settings.local.json" in open(
         os.path.join(repo, ".git", "info", "exclude")).read().split()
-    untool.apply(repo, ["CronCreate"], st)                      # idempotent exclude entry
+    denylist.apply(repo, ["CronCreate"], st)                      # idempotent exclude entry
     assert open(os.path.join(repo, ".git", "info", "exclude")).read().count(
         "/.claude/settings.local.json") == 1
 
@@ -349,8 +378,8 @@ def test_a_fold_that_cannot_take_the_lock_skips_and_the_session_is_still_folded_
     """The double fold seen live: a paid fold holds the lock through its side call, a second
     fold of the same session gave up waiting after 10 s and folded it again, unlocked."""
     import fcntl
-    from te_live import fold, hosts
-    from te_live.context import LiveContext
+    from tokeneconomizer.plugin import fold, hosts
+    from tokeneconomizer.plugin.context import LiveContext
     t = trap_session(str(tmp_path / "s.jsonl"), repo, 0)
     base = {"session_id": "s", "transcript_path": t, "cwd": repo}
     call(env, dict(base, hook_event_name="SessionStart", source="startup"))
@@ -451,7 +480,7 @@ def test_pi_learns_from_its_own_session_files_and_injects_at_the_next_start(env,
     assert all(s == {} for s in starts[:4])
     ctx = starts[4]["hookSpecificOutput"]["additionalContext"]
     assert "`python -m pytest …` works." in ctx
-    assert "/te facts" in starts[4]["systemMessage"]        # Pi's own command name
+    assert "/te microskills" in starts[4]["systemMessage"]  # Pi's own command name
     rec = store_for(env, repo, "pi").read_lines("ledger.jsonl")[0]
     assert rec["requests"] == 3 and rec["priced_by"] == "model"
 
@@ -517,7 +546,7 @@ def test_copilot_learns_from_its_own_logs_and_injects_at_top_level(env, repo, tm
     # Copilot never shows systemMessage; its TUI shows a progress line printed first
     assert "systemMessage" not in starts[4]
     (notice,) = starts[4]["progress"]
-    assert "learned fact" in notice and "/tokeneconomizer:facts" in notice
+    assert "learned fact" in notice and "/tokeneconomizer:microskills" in notice
     st = store_for(env, repo, "copilot")
     rec = st.read_lines("ledger.jsonl")[0]
     assert rec["host"] == "copilot" and rec["requests"] == 4 and rec["priced_by"] == "model"
@@ -553,9 +582,9 @@ def test_copilot_proposes_only_whole_unused_mcp_servers(env, repo, tmp_path, mon
     assert unt["proposal"] == ["github-mcp-server"]
     assert unt["servers"]["github-mcp-server"] == {"tools": 3, "used": False,
                                                    "unused_sessions": 5}
-    assert not os.path.exists(untool.settings_path(repo, "copilot"))
+    assert not os.path.exists(denylist.settings_path(repo, "copilot"))
     (notice,) = copilot_session(env, repo, tmp_path, "n", [], monkeypatch)["progress"]
-    assert "1 MCP server(s) went unused" in notice and "/tokeneconomizer:untool" in notice
+    assert "1 MCP server(s) went unused" in notice and "/tokeneconomizer:toolprune" in notice
 
 
 def test_a_server_whose_tool_was_used_once_is_never_proposed(env, repo, tmp_path, monkeypatch):
@@ -571,17 +600,17 @@ def test_a_server_whose_tool_was_used_once_is_never_proposed(env, repo, tmp_path
 
 def test_copilot_apply_and_restore_touch_only_the_plugins_own_servers(repo, tmp_path):
     st = Store(str(tmp_path / "st"))
-    path = untool.settings_path(repo, "copilot")
+    path = denylist.settings_path(repo, "copilot")
     assert path.endswith(os.path.join(".github", "copilot", "settings.local.json"))
     os.makedirs(os.path.dirname(path))
     json.dump({"disabledMcpServers": ["mine"], "model": "gpt-5.4"}, open(path, "w"))
-    assert untool.apply(repo, ["github-mcp-server"], st, host="copilot") == ["github-mcp-server"]
+    assert denylist.apply(repo, ["github-mcp-server"], st, host="copilot") == ["github-mcp-server"]
     assert json.load(open(path)) == {"disabledMcpServers": ["mine", "github-mcp-server"],
                                      "model": "gpt-5.4"}
-    assert untool.restore(repo, st, host="copilot") == ["github-mcp-server"]
+    assert denylist.restore(repo, st, host="copilot") == ["github-mcp-server"]
     assert json.load(open(path)) == {"disabledMcpServers": ["mine"], "model": "gpt-5.4"}
     os.remove(path)
-    untool.apply(repo, ["github-mcp-server"], st, host="copilot")      # created: kept out of git
+    denylist.apply(repo, ["github-mcp-server"], st, host="copilot")      # created: kept out of git
     assert "/.github/copilot/settings.local.json" in open(
         os.path.join(repo, ".git", "info", "exclude")).read().split()
 
@@ -619,7 +648,7 @@ def test_codex_proposes_capabilities_it_never_saw_used(env, repo, tmp_path):
     assert unt["capabilities"]["image_media"]["used"] is True
     assert unt["capabilities"]["goals"] == {"loaded_sessions": 5, "unused_sessions": 5,
                                             "used": False}
-    assert not os.path.exists(untool.settings_path(repo, "codex"))      # nothing written yet
+    assert not os.path.exists(denylist.settings_path(repo, "codex"))      # nothing written yet
 
 
 def test_codex_needs_the_full_evidence_before_proposing(env, repo, tmp_path):
@@ -636,7 +665,7 @@ def codex_accepts(monkeypatch):
     """Codex's own check of the edited config (`codex features list`), as a stub: the tests
     must not depend on a local Codex install or its user config."""
     verdicts = []
-    monkeypatch.setattr(untool, "codex_config_error", lambda root, **kw: (
+    monkeypatch.setattr(denylist, "codex_config_error", lambda root, **kw: (
         verdicts.pop(0) if verdicts else None))
     return verdicts
 
@@ -644,12 +673,12 @@ def codex_accepts(monkeypatch):
 def test_codex_apply_writes_marked_lines_and_restore_leaves_the_users_config(repo, tmp_path,
                                                                            codex_accepts):
     st = Store(str(tmp_path / "st"))
-    path = untool.settings_path(repo, "codex")
+    path = denylist.settings_path(repo, "codex")
     os.makedirs(os.path.dirname(path))
     user = ('model_reasoning_effort = "high"\n\n[features]\nhooks = true\n\n'
             '[[skills.config]]\npath = "/x/SKILL.md"\nenabled = false\n')
     open(path, "w").write(user)
-    assert untool.apply(repo, ["collaboration", "goals", "image_media"], st, host="codex") == [
+    assert denylist.apply(repo, ["collaboration", "goals", "image_media"], st, host="codex") == [
         "collaboration", "goals", "image_media"]
     text = open(path).read()
     lines = text.splitlines()
@@ -662,25 +691,25 @@ def test_codex_apply_writes_marked_lines_and_restore_leaves_the_users_config(rep
     assert "view_image = false  # tokeneconomizer:image_media" in feats
     assert lines[-2:] == ["[agents]  # tokeneconomizer:collaboration",
                           "enabled = false  # tokeneconomizer:collaboration"]
-    assert untool.restore(repo, st, ["goals"], host="codex") == ["goals"]
+    assert denylist.restore(repo, st, ["goals"], host="codex") == ["goals"]
     assert "goals = false" not in open(path).read()
-    assert untool.restore(repo, st, host="codex") == ["collaboration", "image_media"]
+    assert denylist.restore(repo, st, host="codex") == ["collaboration", "image_media"]
     assert open(path).read() == user.rstrip("\n") + "\n"
 
 
 def test_a_config_codex_rejects_is_put_back(repo, tmp_path, codex_accepts):
     st = Store(str(tmp_path / "st"))
-    path = untool.settings_path(repo, "codex")
+    path = denylist.settings_path(repo, "codex")
     os.makedirs(os.path.dirname(path))
     open(path, "w").write('model = "gpt-5.6-sol"\n')
     codex_accepts.append("Error loading config.toml: duplicate key")
     with pytest.raises(RuntimeError, match="put back"):
-        untool.apply(repo, ["goals"], st, host="codex")
-    assert open(path).read() == 'model = "gpt-5.6-sol"\n' and untool.applied(st) == []
+        denylist.apply(repo, ["goals"], st, host="codex")
+    assert open(path).read() == 'model = "gpt-5.6-sol"\n' and denylist.applied(st) == []
     os.remove(path)
     codex_accepts.append("bad")
     with pytest.raises(RuntimeError):
-        untool.apply(repo, ["goals"], st, host="codex")
+        denylist.apply(repo, ["goals"], st, host="codex")
     assert not os.path.exists(path)                # a file it created is removed again
 
 
@@ -694,26 +723,26 @@ def test_a_committed_codex_config_is_never_edited(tmp_path, codex_accepts):
     subprocess.run(git + ["-C", str(r), "add", ".codex/config.toml"], check=True)
     subprocess.run(git + ["-C", str(r), "commit", "-qm", "team config"], check=True)
     with pytest.raises(RuntimeError, match="committed"):
-        untool.apply(str(r), ["goals"], Store(str(tmp_path / "st")), host="codex")
+        denylist.apply(str(r), ["goals"], Store(str(tmp_path / "st")), host="codex")
     assert (r / ".codex" / "config.toml").read_text() == 'model = "gpt-5.6-sol"\n'
 
 
 def test_codex_never_overrides_a_key_the_user_set(tmp_path):
-    text, did = untool._toml_insert('[features]\ngoals = true\n', "features", "goals", "false",
+    text, did = denylist._toml_insert('[features]\ngoals = true\n', "features", "goals", "false",
                                     "# t")
     assert not did and text == '[features]\ngoals = true\n'
-    text, did = untool._toml_insert('features.goals = true\n', "features", "goals", "false", "# t")
+    text, did = denylist._toml_insert('features.goals = true\n', "features", "goals", "false", "# t")
     assert not did
     # dotted top-level keys and no [features] table: stay dotted, never add a clashing table
-    text, did = untool._toml_insert('features.hooks = true\n', "features", "view_image", "false",
+    text, did = denylist._toml_insert('features.hooks = true\n', "features", "view_image", "false",
                                     "# t")
     assert did and "[features]" not in text and "features.view_image = false  # t" in text
     # an inline table cannot be extended, and a [features] table beside it would be invalid
-    text, did = untool._toml_insert('features = { hooks = true }\n', "features", "goals",
+    text, did = denylist._toml_insert('features = { hooks = true }\n', "features", "goals",
                                     "false", "# t")
     assert not did and text == 'features = { hooks = true }\n'
     # a header the plugin added, under which the user has since put a key, is kept
-    kept = untool._toml_remove('[agents]  # t\nenabled = false  # t\nmax_threads = 4\n', ["# t"])
+    kept = denylist._toml_remove('[agents]  # t\nenabled = false  # t\nmax_threads = 4\n', ["# t"])
     assert kept == "[agents]  # t\nmax_threads = 4\n"
 
 
@@ -721,23 +750,91 @@ def test_codex_trust_is_read_from_the_users_config(tmp_path, repo):
     home = tmp_path / "codex-home"
     home.mkdir()
     env = {"CODEX_HOME": str(home)}
-    assert untool.codex_project_trusted(repo, env) is None
+    assert denylist.codex_project_trusted(repo, env) is None
     (home / "config.toml").write_text(f'[projects."{repo}"]\ntrust_level = "trusted"\n')
-    assert untool.codex_project_trusted(repo, env) is True
+    assert denylist.codex_project_trusted(repo, env) is True
     (home / "config.toml").write_text(f'[projects."{repo}/sub"]\ntrust_level = "trusted"\n'
                                       f'[projects."{repo}"]\ntrust_level = "untrusted"\n')
-    assert untool.codex_project_trusted(repo, env) is False
+    assert denylist.codex_project_trusted(repo, env) is False
 
 
 def test_copilot_trust_is_read_from_its_config(tmp_path, repo):
     home = tmp_path / "copilot-home"
     home.mkdir()
     env = {"COPILOT_HOME": str(home)}
-    assert untool.copilot_folder_trusted(repo, env) is None
+    assert denylist.copilot_folder_trusted(repo, env) is None
     # Copilot's config.json opens with `//` comment lines; trust covers subfolders
     (home / "config.json").write_text(
         "// User settings belong in settings.json.\n// This file is managed automatically.\n"
         + json.dumps({"trustedFolders": [os.path.dirname(repo)]}))
-    assert untool.copilot_folder_trusted(repo, env) is True
+    assert denylist.copilot_folder_trusted(repo, env) is True
     (home / "config.json").write_text(json.dumps({"trustedFolders": [repo + "-other"]}))
-    assert untool.copilot_folder_trusted(repo, env) is False
+    assert denylist.copilot_folder_trusted(repo, env) is False
+
+
+# ---- a failed call reaches the guard on Claude Code -------------------------------------------
+# Claude Code 2.1.299 reports a failed call -- a non-zero exit, a refused command -- only as
+# PostToolUseFailure, with an `error` string and no `tool_response` (payload as captured). Before
+# the plugin's Claude hook file registered that event, the guard never saw a failing call: live
+# sessions counted 39 of 47 calls, and a failing test run after the last edit could not make a
+# turn end red.
+CLAUDE_FAILURE = {"hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+                  "tool_input": {"command": "ls /nonexistent_dir_xyz"},
+                  "tool_use_id": "toolu_01", "is_interrupt": False, "duration_ms": 25,
+                  "error": "Exit code 2\nls: cannot access '/nonexistent_dir_xyz': No such file "
+                           "or directory"}
+
+
+def test_claude_code_failure_payloads_parse_with_their_exit_code():
+    from tokeneconomizer.plugin.hosts import HOSTS
+    name, args, text, code = HOSTS["claude"]().tool_call(CLAUDE_FAILURE)
+    assert (name, args["command"], code) == ("Bash", "ls /nonexistent_dir_xyz", 2)
+    assert "cannot access" in text
+    _, _, _, code = HOSTS["claude"]().tool_call(dict(CLAUDE_FAILURE, tool_name="Read",
+                                                     error="File does not exist."))
+    assert code is None
+
+
+def test_the_claude_hook_file_registers_failed_calls():
+    hooks = json.load(open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "plugin", "hooks", "hooks.json")))["hooks"]
+    assert hooks["PostToolUseFailure"] == hooks["PostToolUse"]
+
+
+def _claude_turn(env, repo, sid, key, calls):
+    """A Claude Code prompt-turn as it is delivered: a failed call arrives as PostToolUseFailure."""
+    base = {"session_id": sid, "transcript_path": "", "cwd": repo, "prompt_id": key}
+    call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="go"))
+    outs = []
+    for name, args, result, failed in calls:
+        ev = (dict(base, hook_event_name="PostToolUseFailure", tool_name=name, tool_input=args,
+                   error=result) if failed else
+              dict(base, hook_event_name="PostToolUse", tool_name=name, tool_input=args,
+                   tool_response=result))
+        outs.append(call(env, ev))
+    call(env, dict(base, hook_event_name="Stop", stop_hook_active=False))
+    return outs
+
+
+def test_failed_calls_count_and_a_failing_check_after_the_last_edit_ends_the_turn_red(env, repo):
+    edit = ("Edit", {"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"}, "ok", False)
+    run = ("Bash", {"command": "python tests/runtests.py app"},
+           "Exit code 1\nFAILED (failures=1)", True)
+    _claude_turn(env, repo, "s", "p0", [edit, run, ("Read", {"file_path": "/r/b.py"},
+                                                    "File does not exist.", True)])
+    (turn,) = [e for e in store_for(env, repo).read_lines("events.jsonl") if e["kind"] == "turn"]
+    assert turn["tool_calls"] == 3
+    assert turn["resolved_proxy"] is False
+
+
+def test_a_loop_the_agent_reports_only_as_failures_is_nudged(env, repo):
+    for k in range(5):
+        _turn(env, repo, "s", f"g{k}", GREEN)
+    calls = []
+    for k in range(40):
+        calls.append(("Edit", {"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"},
+                      "ok", False) if k % 2 == 0 else
+                     ("Bash", {"command": "pytest -q"}, "Exit code 1\nFAILED tests/test_a.py::"
+                      "test_x - AssertionError: assert 1 == 2", True))
+    outs = _claude_turn(env, repo, "s", "stuck", calls)
+    assert any("hookSpecificOutput" in o for o in outs)

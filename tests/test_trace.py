@@ -15,6 +15,29 @@ def test_load_trajectory_claude(tmp_path):
     assert "bash" in names and "edit" in names
 
 
+def test_a_claude_request_blob_repeating_the_conversation_adds_no_call(tmp_path):
+    """Claude Code 2.1.300 writes `api-request-blob` entries that repeat a request's messages,
+    earlier tool calls and results included. Read as calls, each one counted twice."""
+    import json
+    use = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "pytest -q"}}
+    res = {"type": "tool_result", "tool_use_id": "toolu_1",
+           "content": "/bin/bash: line 1: pytest: command not found", "is_error": True}
+    lines = [{"type": "assistant", "cwd": "/w/repo", "message": {"role": "assistant",
+                                                                "content": [use]}},
+             {"type": "user", "message": {"role": "user", "content": [res]}},
+             {"type": "api-request-blob", "message": {"role": "assistant", "content": [use]}},
+             {"type": "api-request-blob", "message": {"role": "user", "content": [res]}},
+             {"type": "assistant", "message": {"role": "assistant", "content": [use]}}]
+    p = tmp_path / "s.jsonl"
+    p.write_text("\n".join(json.dumps(l) for l in lines))
+    calls = trace.load_trajectory(str(p))
+    assert [(c[0], c[1]["command"], c[3]) for c in calls] == [("Bash", "pytest -q", False)]
+    assert trace.call_cwds(str(p)) == ["/w/repo"]
+    assert trace.tool_usage(str(p)) == {"Bash": 1}
+    from tokeneconomizer.microskills import distiller
+    assert len(distiller.load_calls(str(p))) == 1
+
+
 def test_tool_usage_counts(tmp_path):
     p = str(tmp_path / "t.jsonl")
     write_claude_transcript(p, [
@@ -45,7 +68,7 @@ def test_parse_catalog_missing_returns_empty(tmp_path):
 import json as _json
 
 from tokeneconomizer import trace as _trace
-from tokeneconomizer.vendor import reflect as _reflect
+from tokeneconomizer.trace import catalog as _catalog
 
 _SCHEMA_LOG = (
     '{"body":"{\\"tools\\":[{\\"name\\":\\"bash\\",\\"title\\":null,'
@@ -65,10 +88,10 @@ def _checkpoint_transcript(*names):
 
 def test_flat_catalog_parses_name_fingerprint_form():
     """CLI >= 1.0.82 publishes `"tools": ["bash:66921ccc", ...]` and no schemas."""
-    cat = _reflect.parse_tool_catalog_flat(_FLAT_LOG)
+    cat = _catalog.parse_tool_catalog_flat(_FLAT_LOG)
     assert set(cat) == {"bash", "view", "edit"}
     assert all(v == "" for v in cat.values())      # names only, no descriptions
-    assert _reflect.parse_tool_catalog(_FLAT_LOG) == {}   # schema reader stays schema-only
+    assert _catalog.parse_tool_catalog(_FLAT_LOG) == {}   # schema reader stays schema-only
 
 
 def test_schema_catalog_still_wins_and_keeps_descriptions(tmp_path):

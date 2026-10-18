@@ -82,10 +82,12 @@ async function hook(payload: Record<string, unknown>, mode: string): Promise<any
   }
 }
 
+/** A notice in the UI; on stderr in print and JSON modes, which have no UI and keep stdout for
+ * the reply and the event stream -- so a headless stop, too, says why it happened. */
 function notify(ctx: ExtensionContext, text: unknown) {
   if (typeof text !== "string" || !text) return;
   if (ctx.hasUI) ctx.ui.notify(text, "info");
-  else if (truthy(process.env.TE_VERBOSE)) console.error(text);
+  else console.error(text);
 }
 
 const SOURCE: Record<string, string> = {
@@ -122,10 +124,17 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     prompts += 1;
     turn = `${ctx.sessionManager.getSessionId()}:${prompts}`;
-    await hook(
+    const out = await hook(
       { ...base(ctx), hook_event_name: "UserPromptSubmit", prompt_id: turn, prompt: event.prompt },
       ctx.mode,
     );
+    // The repository map arrives on a session's first prompt; it joins the manual for the rest
+    // of the session, since the section is set again on every prompt.
+    const extra = out?.hookSpecificOutput?.additionalContext;
+    if (extra) {
+      manual = manual ? `${manual}\n\n${extra}` : extra;
+    }
+    notify(ctx, out?.systemMessage);
     if (manual) {
       event.systemPromptOptions.sections = { ...(event.systemPromptOptions.sections ?? {}), [SECTION]: manual };
     }
@@ -169,7 +178,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("te", {
-    description: "TokenEconomizer: status | facts | replay | config (what it learned here, what it did)",
+    description: "TokenEconomizer: status | microskills | config (what it learned here, what it did)",
     handler: async (args, ctx) => {
       const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
       const out = await run("te", ["--host", "pi", "--cwd", ctx.cwd, ...argv], "", ctx.mode);

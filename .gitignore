@@ -27,6 +27,9 @@ experiments/figures/
 *.png
 *.pdf
 *.svg
+# ...except the figures the README and docs show.
+!docs/assets/*.png
+!docs/assets/*.svg
 
 # Aggregated tables derived from results/.
 *.csv
@@ -37,3 +40,6 @@ experiments/figures/
 .env.*
 !.env.example
 *.key
+
+# Pi installs this repository as a package and runs `npm install` in its checkout.
+/package-lock.json

@@ -1,14 +1,15 @@
-"""EconomizerConfig: three independent on/off switches, one per mechanism.
+"""The mechanisms' own configuration, one dataclass each (the plugin's settings are
+`plugin.config`):
 
-The three mechanisms act at three different lifecycle points and never contend for the
-same lever, so the config is just their union. `from_args` maps CLI-style flags onto the
-config; unknown attributes default off (via getattr), so a partial args object is fine.
+  * `InjectionConfig` -- micro-skills: which distiller renders the block (`envfacts`, the paid
+                         `distiller`, or both), its caps, and the proposer's cadence;
+  * `ToolingConfig`   -- tool pruning: the evidence threshold, the optional per-task judge, and
+                         Codex's capability controller;
+  * `SpiralConfig`    -- the loop guard as a benchmark harness runs it (the plugin's guard takes
+                         its settings from `plugin.config`).
 
-  * injection  -- inject a firing-gated per-repo operating manual before the task.
-  * tooling    -- drop inapplicable tool schemas (generic evidence untooling for
-                  Claude/Copilot; Codex-native capability untooling for Codex).
-  * spiral     -- kill/nudge a stuck rollout in flight (generic guard for Claude/Copilot;
-                  Codex-native post-green finalize for Codex).
+`EconomizerConfig` is their union, and `from_args` maps a harness's command-line flags onto it;
+unknown attributes default off, so a partial args object is fine.
 """
 from dataclasses import dataclass, field
 
@@ -50,14 +51,14 @@ class InjectionConfig:
 
 @dataclass
 class ToolingConfig:
-    """Untooling stage.
+    """Tool pruning.
 
-    Generic evidence untooling (Claude / Copilot):
+    Evidence pruning (Claude Code / Copilot):
       * evidence          -- drop a tool loaded-but-unused for >= this many tasks (>0 on).
       * evidence_reaudit  -- periodically reload the full catalog every this many tasks.
       * judge             -- add a per-task instruction-aware LLM tool judge.
 
-    Codex-native capability untooling:
+    Codex capability pruning:
       * codex_untool      -- enable the evidence-gated, resolve-safe capability controller.
     """
     evidence: int = 0
@@ -72,8 +73,9 @@ class ToolingConfig:
 
 @dataclass
 class SpiralConfig:
-    """Spiral guard stage (generic for Claude/Copilot; Codex-native for Codex)."""
-    guard: bool = False            # generic spiral guard (Claude / Copilot)
+    """The loop guard in a benchmark harness (generic for Claude/Copilot; Codex-native for
+    Codex)."""
+    guard: bool = False            # generic loop guard (Claude / Copilot)
     judge: bool = False            # sampled LLM trace-judge for the abort decision
     nudge: bool = False            # rung-1 same-container nudge before abort
     nudge_llm: bool = False        # LLM-written nudge redirect (vs the count template)
@@ -101,17 +103,17 @@ class SpiralConfig:
 def needs_optimizer(config):
     """Whether ANY enabled mechanism will make a paid between-task LLM call.
 
-    The three clauses mirror `facade.Economizer.__init__` exactly -- it resolves an
+    The three clauses mirror `te_bench.facade.Economizer.__init__` exactly -- it resolves an
     optimizer runner for injection when `injection.paid` (enabled AND a profile that
-    carries the paid `distiller`; the LLM-free `envfacts` profile never calls), for untooling when
+    carries the paid `distiller`; the LLM-free `envfacts` profile never calls), for pruning when
     `tooling.judge`, and for spiral when the guard is on AND it has a judge or an LLM
     nudge writer. Kept as one predicate because callers OUTSIDE the facade need the
     aggregate answer: a harness whose mechanism transport must be preflighted should not
     pay for (or depend on) that probe when the arm will never call it. Arm `mode` is NOT
     the test -- `spiral-only` and `untool-only` are `standalone` and do make paid calls.
 
-    tests/test_optimizer_basis.py asserts this agrees with the facade for every arm in the
-    registry, so the two cannot drift.
+    experiments/tests/test_optimizer_basis.py asserts this agrees with the facade for every
+    arm in the registry, so the two cannot drift.
     """
     return bool(
         config.injection.paid

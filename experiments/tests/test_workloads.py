@@ -8,7 +8,7 @@ import importlib.util
 import json
 import os
 
-from tokeneconomizer import workloads
+from te_bench import workloads
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _EXPORTER = os.path.join(_REPO, "scripts", "export_workloads.py")

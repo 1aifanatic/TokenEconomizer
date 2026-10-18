@@ -1,130 +1,168 @@
-# TokenEconomizer
+# TokenEconomizer: Experience-Driven Black-Box Cost Control for Coding Agents
 
-Runtime cost control for coding agents, from outside the agent. TokenEconomizer is a plugin
-for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**. It watches your sessions
-in each repository and, from one session to the next, targets three kinds of token waste:
+<p align="center">
+  Aaron J. Li<sup>1</sup>,
+  Weijia Xu<sup>2</sup>,
+  Chandan Singh<sup>2</sup>,
+  Zixiao Chen<sup>3</sup>,
+  Jeevana Priya Inala<sup>2</sup>,
+  Charlotte Siska<sup>3</sup>,
+  <br>
+  Acar Tamersoy<sup>3</sup>,
+  Bin Yu<sup>1</sup>,
+  Ion Stoica<sup>1</sup>,
+  Michel Galley<sup>2</sup>,
+  Jianfeng Gao<sup>2</sup>
+</p>
+<p align="center">
+  <sup>1</sup>UC Berkeley &nbsp; <sup>2</sup>Microsoft Research &nbsp; <sup>3</sup>Microsoft Security
+</p>
 
-| Mechanism | What it does | Setting |
-|---|---|---|
-| **Learned facts** | Environment facts your sessions keep rediscovering the hard way (for example, that `tox` is missing here and `python -m pytest` works) are added to the next session's context. | `inject` |
-| **Unused-tool deny list** | Tools that stay loaded but go unused for several sessions are proposed as a deny list. Nothing changes until you apply it. | `untool` |
-| **Stuck-turn guard** | A turn that keeps repeating the same failing edit-and-test cycle, well past how long this repository's turns usually take, gets one mid-turn redirect. | `spiral` |
+<p align="center">
+  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img src="https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg" alt="arXiv"></a>
+  <a href="https://tokeneconomizer.github.io"><img src="https://img.shields.io/badge/project-page-2f6fb0.svg" alt="Project page"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776ab.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+</p>
 
-Each mechanism can be turned off or tuned on its own ([Settings](#settings)). Every action is
-announced in one line, every hook fails open, and by default the plugin makes no model calls of
-its own. What it learns stays on your machine, under `~/.tokeneconomizer`.
+<p align="center"><img src="docs/assets/framework_overview.png" width="100%" alt="TokenEconomizer: the plugin keeps what it knows about a repository and applies micro-skills, tool pruning and failure-loop intervention to your unchanged coding agent; each finished session's log updates all three"></p>
 
-## Install
+TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and
+**Pi**. It leaves the agent as it is, reads each finished session in a repository, and changes
+what the next sessions in that repository pay for:
 
-You need Python 3.10 or newer on `PATH`. Clone the repository:
+- **Micro-skills.** Environment facts your sessions keep rediscovering by failing at them --
+  that `pytest` is missing here and `python -m pytest` works, that the test runner wants labels
+  without a `tests.` prefix -- are learned from recurring evidence and stated at the start of
+  the next session. Learning them makes no model call.
+- **Tool pruning.** Tools that stay loaded but go unused, session after session, are proposed
+  as a deny list. Nothing changes until you approve it, and it applies from the next session.
+- **Failure-loop intervention.** A turn that keeps repeating the same failing edit-and-test
+  cycle, well past how long this repository's turns usually take, gets one redirect, then a
+  stop (headless) or a notice.
 
-```bash
-git clone https://github.com/microsoft/TokenEconomizer.git
-```
+Each mechanism can be switched off or tuned on its own. The plugin's actions are announced in
+one line, every hook fails open, and by default it makes no model calls of its own. What it learns
+stays on your machine, under `~/.tokeneconomizer`.
 
-Then install it into your agent (use the path of your clone):
+## Supported agents
 
 | Agent | Install |
 |---|---|
 | Claude Code | `claude plugin marketplace add /path/to/TokenEconomizer`<br>`claude plugin install tokeneconomizer@tokeneconomizer` |
+| Codex | `codex plugin marketplace add /path/to/TokenEconomizer`<br>`codex plugin add tokeneconomizer@tokeneconomizer`, then trust its hooks when Codex asks |
 | Copilot CLI | `copilot plugin marketplace add /path/to/TokenEconomizer`<br>`copilot plugin install tokeneconomizer@tokeneconomizer` |
-| Codex | `python /path/to/TokenEconomizer/scripts/build_plugin.py --out ~/te-marketplace`<br>`codex plugin marketplace add ~/te-marketplace`<br>`codex plugin add tokeneconomizer@tokeneconomizer`<br>then approve its hooks once in `/hooks` inside Codex |
-| Pi | `pi install /path/to/TokenEconomizer/plugin` |
+| Pi | `pi install git:github.com/microsoft/TokenEconomizer` |
 
-Plugins load when a session starts, so start a new one. On Claude Code and the Copilot CLI, run
-`/tokeneconomizer:untool refresh-catalog` once in each repository (Copilot from a terminal:
-`~/.tokeneconomizer/bin/te --host copilot untool refresh-catalog`); without it the deny list
-cannot see the tools every session loads.
+**Any plan or login works.** The plugin runs inside your agent's own sessions and never handles
+credentials, so it works with whatever your agent is signed in with: a Claude subscription or an
+Anthropic API key for Claude Code, a ChatGPT plan or an OpenAI API key for Codex, a Copilot
+subscription or a bring-your-own-key provider for the Copilot CLI, and any provider Pi is set up
+with. It needs no API key of its own.
 
-**[`plugin/README.md`](plugin/README.md)** walks through the first run on each agent, updating
-and uninstalling, using Copilot with your own model key, and troubleshooting.
+Claude Code, Codex and the Copilot CLI install from a clone of this repository, through their
+own plugin commands; Pi installs the package straight from GitHub, as any Pi package does. You
+need Python 3.10 or newer on `PATH`, and nothing else. Plugins load when a session starts, so
+start a new one. **[`plugin/README.md`](plugin/README.md)** walks through each agent: the first
+run, its commands, updating, uninstalling, Copilot with your own model key, and troubleshooting.
 
-## Use
+## Quick start
 
-Work as usual; the plugin needs nothing from you. To see what it is doing, in Claude Code or
-the Copilot CLI's interactive mode:
+```bash
+git clone https://github.com/microsoft/TokenEconomizer.git
+claude plugin marketplace add ./TokenEconomizer
+claude plugin install tokeneconomizer@tokeneconomizer
+```
+
+Then, in a new Claude Code session inside one of your repositories:
+
+```text
+/tokeneconomizer:toolprune refresh-catalog    # once on this machine: record the tools a session loads
+```
+
+Work as usual; the plugin needs nothing from you. To see what it is doing:
 
 | Command | What it shows or does |
 |---|---|
 | `/tokeneconomizer:status` | what it learned in this repository, what it did, and what your sessions cost |
-| `/tokeneconomizer:facts` | the facts it injects at session start, and those still forming |
-| `/tokeneconomizer:untool` | the proposed deny list and its evidence; `… apply` accepts it, `… restore` undoes it |
+| `/tokeneconomizer:microskills` | the facts it injects at session start, and those still forming |
+| `/tokeneconomizer:toolprune` | the proposed deny list and its evidence; `… apply` accepts it, `… restore` undoes it |
 | `/tokeneconomizer:config` | the settings: what is on, and every value in effect |
 
-On Codex, run the same commands from a terminal inside the repository, as
-`~/.tokeneconomizer/bin/te --host codex <command>` (for example `… untool apply`). On Pi they
-are `/te <command>`.
+On Codex, ask for them or name the skill (`$tokeneconomizer-status`, `-microskills`,
+`-toolprune`, `-config`); on Pi they are `/te <command>`. On any agent they are also free from a
+terminal inside the repository, as `~/.tokeneconomizer/bin/te <command>`.
 
 ## Settings
 
-Turn a mechanism on or off, in this repository or, with `--global`, in all of them:
-
 ```text
-/tokeneconomizer:config set spiral=off
-/tokeneconomizer:config set untool=off inject=on
+/tokeneconomizer:config set loopguard=off                 # one mechanism off, in this repository
+/tokeneconomizer:config set toolprune=off --global        # ... or in every repository
+/tokeneconomizer:config set microskills_max_facts=2       # inject at most two facts
+/tokeneconomizer:config set toolprune_evidence=10         # wait ten unused sessions before proposing
+/tokeneconomizer:config set loopguard_nudges=2            # allow two redirects per turn
+/tokeneconomizer:config set loopguard.min_turns=30        # 30 tool calls before a turn can count as stuck
+/tokeneconomizer:config unset loopguard.min_turns         # back to the default
 ```
 
-Tune one by hand:
-
-```text
-/tokeneconomizer:config set inject_max_facts=2           # inject at most two facts
-/tokeneconomizer:config set untool_evidence=10           # wait ten unused sessions before proposing
-/tokeneconomizer:config set spiral_nudges=2              # allow two redirects per turn
-/tokeneconomizer:config set spiral.min_turns=30          # let a turn run 30 tool calls before it can count as stuck
-/tokeneconomizer:config unset spiral.min_turns           # back to the default
-```
-
-`/tokeneconomizer:config` shows every value in effect. Every setting, its default, and how to
-set one for a single session: [Settings in `plugin/README.md`](plugin/README.md#settings).
+The paid extras are off unless you set `paid=true`: an LLM proposer that authors repository
+facts beyond the free ones (`microskills=envfacts+distiller`) and a stuck judge for the loop
+guard, both run through your own agent's CLI, on the same plan or login as your sessions, and
+recorded in the session's ledger. Every
+setting, its default and its environment variable: [Settings](plugin/README.md#settings).
+Settings written under the earlier names (`inject`, `untool`, `spiral`, ...) are still read.
 
 ## What it does on each agent
 
-| | Learned facts | Unused-tool deny list | Stuck-turn guard |
+| | Micro-skills | Tool pruning | Loop guard |
 |---|---|---|---|
 | Claude Code | at session start | tools, in `.claude/settings.local.json` | redirect; can stop a headless turn |
 | Codex | at session start | capability packages, in the project's `.codex/config.toml` | redirect, then a notice |
 | Copilot CLI | at session start | whole MCP servers, in `.github/copilot/settings.local.json` | redirect, then a notice |
 | Pi | at session start | — (Pi loads four tools) | redirect; can stop a headless turn |
 
-Nothing is written to your settings until you approve it, and `untool restore` removes only
-what the plugin added. The design, and how each agent's hooks and settings were verified to
-behave, are in **[`docs/PLUGIN.md`](docs/PLUGIN.md)**.
+Nothing is written to your settings until you approve it, and `toolprune restore` removes only
+what the plugin added. How each agent's hooks and settings were verified to behave is in
+**[`docs/PLUGIN.md`](docs/PLUGIN.md)**; the method itself is in **[`docs/METHOD.md`](docs/METHOD.md)**.
 
-## Repository layout
+## Repository
 
+| | |
+|---|---|
+| [`tokeneconomizer/microskills`](tokeneconomizer/microskills/) | Micro-skill synthesis and injection: facts learned from finished sessions |
+| [`tokeneconomizer/toolprune`](tokeneconomizer/toolprune/) | Tool pruning: unused tools and Codex capability packages |
+| [`tokeneconomizer/loopguard`](tokeneconomizer/loopguard/) | Failure-loop intervention: the per-call guard and its per-repository envelope |
+| [`tokeneconomizer/trace`](tokeneconomizer/trace/) | Each agent's session log, read into one shape |
+| [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
+| [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension |
+| [`experiments`](experiments/) | The benchmark harness, arms, workloads and run book behind the paper |
+| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior) and `METHOD.md` (the method) |
+| [`tests`](tests/) | Offline tests for the package and the plugin |
+
+The package is standard-library only. Run the tests with `python -m pytest tests` (add
+`experiments/tests` for the benchmark side), and build a self-contained plugin bundle with
+`python3 scripts/build_plugin.py --out dist/marketplace`.
+
+## Reproducing the experiments
+
+The benchmark experiments -- the Docker harness that runs sealed agents on SWE-bench and
+Web-Bench, the arms, the sweep and aggregation pipeline, and the evaluated task sets -- live in
+**[`experiments/`](experiments/README.md)**. They are not packaged with the plugin and share
+only `tokeneconomizer/`.
+
+## Citation
+
+```bibtex
+@article{li2026tokeneconomizer,
+  title   = {{TokenEconomizer}: Experience-Driven Black-Box Cost Control for Coding Agents},
+  author  = {Li, Aaron J. and Xu, Weijia and Singh, Chandan and Chen, Zixiao and
+             Inala, Jeevana Priya and Siska, Charlotte and Tamersoy, Acar and Yu, Bin and
+             Stoica, Ion and Galley, Michel and Gao, Jianfeng},
+  journal = {arXiv preprint arXiv:XXXX.XXXXX},
+  year    = {2026}
+}
 ```
-plugin/              the installable plugin: manifests and hook files per agent, the Pi
-                     extension, launchers, slash commands
-te_live/             the live harness the plugin runs: hook dispatch, per-repository state,
-                     host adapters, the `te` command line
-tokeneconomizer/     the shared core: the three mechanisms, the trace reader, the cost ledger
-                     (stdlib-only, no dependencies)
-tests/               offline tests for the plugin and the core
-docs/                PLUGIN.md (design and verified agent behaviour), METHOD.md (the method
-                     and the core's seams)
-scripts/             build_plugin.py: a self-contained bundle for marketplace installs
-experiments/         the paper's reproduction code (see below)
-```
 
-## Development
+## License
 
-Python ≥ 3.10, no runtime dependencies. Run the plugin and core tests with
-`python -m pytest tests`, or `python -m pytest` to include the experiments' suite. Build an
-installable bundle with `python scripts/build_plugin.py --out dist/marketplace`.
-
-## Reproducing the paper
-
-The benchmark experiments behind the research — the Docker harness that runs sealed agents on
-SWE-bench and Web-Bench, the sweep and aggregation pipeline, the evaluated task sets, and the
-run book — live in **[`experiments/`](experiments/README.md)**. They are separate
-from the plugin and not packaged with it; they share only the core in `tokeneconomizer/`.
-
-The same research code in its original layout, without the plugin, is on the
-[`paper`](https://github.com/microsoft/TokenEconomizer/tree/paper) branch.
-
-## Limitations
-TokenEconomizer was developed for research and experimental purposes. Further testing and validation are needed before considering its application in commercial or real-world scenarios.
-
-There has not been a systematic effort to ensure that systems using TokenEconomizer are protected from security vulnerabilities such as indirect prompt injection attacks. Content in a repository, issue text, or tool output could influence a synthesized micro-skill that persists across later tasks. Any systems using it should take proactive measures to harden their systems as appropriate.
-
-Downstream developers remain responsible for ensuring that the underlying coding agent, its tool permissions, execution sandbox, generated code, and deployment environment are appropriate to their use case.
+MIT; see [`LICENSE`](LICENSE).

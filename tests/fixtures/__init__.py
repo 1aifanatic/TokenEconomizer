@@ -5,12 +5,14 @@ import os
 
 def write_claude_transcript(path, calls):
     """Write a minimal Claude-schema transcript.jsonl.
-    `calls` is a list of (tool_name, input_dict, result_text)."""
+    `calls` is a list of (tool_name, input_dict, result_text[, cwd]); a cwd is recorded on the
+    call's entry, as Claude Code records the directory its shell is in."""
     lines = []
-    for i, (name, inp, res) in enumerate(calls):
+    for i, (name, inp, res, *cwd) in enumerate(calls):
         tid = f"t{i}"
-        lines.append({"message": {"content": [
-            {"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+        lines.append(dict({"message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": inp}]}},
+            **({"cwd": cwd[0]} if cwd else {})))
         lines.append({"message": {"content": [
             {"type": "tool_result", "tool_use_id": tid, "content": res}]}})
     with open(path, "w", encoding="utf-8") as fh:

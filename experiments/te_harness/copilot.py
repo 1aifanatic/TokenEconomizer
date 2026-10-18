@@ -37,7 +37,7 @@ import shutil
 import subprocess
 import tempfile
 
-from tokeneconomizer.vendor import pricing
+from tokeneconomizer import pricing
 
 # What `copilot --effort` accepts. Validated by the runners at construction so a typo fails
 # before the run rather than silently falling back to the CLI default (effort is part of

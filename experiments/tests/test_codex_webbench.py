@@ -205,7 +205,7 @@ def test_a_killed_segment_is_flagged_not_counted_as_free(tmp_path):
 def test_the_codex_controller_is_selected_not_the_generic_guard(tmp_path):
     """The generic NudgeGuard parses a Claude stream and reprompts; feeding it a
     `codex exec --json` stream would arm a guard that can never fire."""
-    from tokeneconomizer.mechanisms import codex_spiral
+    from te_bench import codex_spiral
     r = _stub(tmp_path)
     assert r._make_guard({}) is None
     assert r._make_guard({"spiral_guard": True}) is None      # generic flags do not arm it
@@ -223,7 +223,7 @@ def test_only_rtk_is_hostable_and_it_is_the_instruction_mode(tmp_path, monkeypat
             wb.CodexWebBenchRunner(agent="codex", scaffold=other)
     # every Codex ARM that carries an unhostable scaffold is refused the same way -- today
     # exactly one, the repomap variant of codex-trimech (its generator walks `*.py`)
-    from tokeneconomizer import baselines
+    from te_bench import baselines
     unhostable = sorted(a for a, s in baselines.ARM_SCAFFOLDS.items()
                         if a.startswith("codex-") and s not in wb.WEBBENCH_SCAFFOLDS)
     assert unhostable == ["codex-trimech-repomap"], unhostable

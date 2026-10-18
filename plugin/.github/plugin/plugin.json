@@ -1,7 +1,7 @@
 {
   "name": "tokeneconomizer",
   "version": "0.1.0",
-  "description": "Cuts a coding agent's token bill from outside the agent: learned per-repo facts injected at session start, an unused-MCP-server deny list you approve, and a guard that redirects a turn stuck in a failing loop.",
+  "description": "Experience-driven black-box cost control for coding agents: micro-skills (short repository facts learned from earlier sessions) injected at session start, tool pruning through a deny list of unused MCP servers you approve, and a guard that redirects a turn stuck in a failing loop.",
   "author": {
     "name": "TokenEconomizer authors"
   },
@@ -12,8 +12,9 @@
     "tokens",
     "context",
     "hooks",
-    "untooling",
-    "spiral"
+    "micro-skills",
+    "tool-pruning",
+    "failure-loops"
   ],
   "hooks": "hooks/copilot-hooks.json"
 }

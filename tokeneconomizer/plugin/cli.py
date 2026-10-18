@@ -1,0 +1,516 @@
+"""`te` -- inspect and steer what TokenEconomizer does in your sessions.
+
+    te status                         what it has learned for this repository, and what it did
+    te microskills                    the facts it injects, and the ones still forming
+    te toolprune show                 the proposed deny list, and the evidence behind it
+    te toolprune apply [ITEM ...]     write the proposal (or the named items) to the repository's
+                                      settings: tools (Claude Code), capabilities (Codex) or
+                                      MCP servers (Copilot)
+    te toolprune restore [ITEM ...]   remove entries this plugin added
+    te toolprune refresh-catalog      record the tool list a fresh session loads (Claude, Copilot)
+    te toolprune measure              measure the request with and without the proposal
+    te config show                    each mechanism on or off, its settings, the guard's thresholds
+    te config set KEY=VALUE ...       e.g. `loopguard=off`, `microskills=on`,
+                                      `loopguard.min_turns=12` (this repository; `--global` for
+                                      every repository)
+    te config unset KEY ...           back to the next source down (the global file, then default)
+    te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
+                                      make it now
+    te doctor                         check the installation
+    te --host copilot probe           real Copilot sessions in a throwaway repository: does a
+                                      learned fact change what the model does, and what does the
+                                      deny list save (makes model calls; see plugin/probe.py)
+
+`te facts` and `te untool` are the earlier names of `microskills` and `toolprune`, and still work.
+`--cwd` picks the repository (default: the current directory) and `--host` the agent
+(claude | codex | copilot | pi; default: `TE_HOST`, else the agent whose shell runs `te`, else
+claude).
+"""
+import argparse
+import glob
+import json
+import os
+import sys
+
+from .. import loopguard
+from . import accounting, denylist, fold, hosts, repomap, toolcheck
+from .config import unset_config, write_config
+from .context import LiveContext
+from .paths import state_root
+
+
+def _ctx(args, env=None):
+    host = hosts.HOSTS[args.host]()
+    return LiveContext.build(host, args.cwd, env)
+
+
+# ---- status / microskills ------------------------------------------------------------------
+def cmd_status(args):
+    ctx = _ctx(args)
+    cfg = ctx.config
+    out = {"repo": ctx.repo.label, "repo_root": ctx.repo.root, "host": ctx.host.name,
+           "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings}
+    inj = ctx.store.read("injection.json") or {}
+    unt = ctx.store.read("untool.json") or {}
+    env_tracker = loopguard.load_envelope(ctx.store, cfg.loopguard_aggr,
+                                          cfg.loopguard_thresholds)
+    ledger = accounting.summarize(ctx.store.read_lines("ledger.jsonl"))
+    out.update({
+        "microskills": {"profile": cfg.microskills_effective,
+                        "injected_lines": sum(1 for ln in (inj.get("rendered") or "").splitlines()
+                                              if ln.startswith("- ")),
+                        "sessions_folded": inj.get("sessions", 0)},
+        "toolprune": {"mode": cfg.toolprune, "sessions": unt.get("sessions", 0),
+                      "catalog_source": unt.get("catalog_source"),
+                      "proposal": unt.get("proposal", []),
+                      "applied": denylist.applied(ctx.store)},
+        "loopguard": {"mode": cfg.loopguard, "envelope": env_tracker.envelope,
+                      "ended_green_turns": len(env_tracker.resolved_turns)},
+        "ledger": ledger})
+    if args.json:
+        print(json.dumps(out, indent=2, default=str))
+        return 0
+    print(f"TokenEconomizer -- {out['repo']} ({ctx.host.name})")
+    print(f"  state        {out['state']}")
+    print(f"  config       microskills={cfg.microskills_effective} toolprune={cfg.toolprune} "
+          f"loopguard={cfg.loopguard} repomap={cfg.repomap} mode={cfg.mode} paid={cfg.paid} "
+          f"shadow={cfg.shadow}")
+    if cfg.repomap != "off":
+        rm = repomap.read_state(ctx)
+        why = rm.get("error") or "made after the first session"
+        print("  repomap      " + (f"{rm.get('chars', 0) // 4} tokens cached for "
+                                    f"{(rm.get('commit') or '?')[:10]}" if rm.get("map") else
+                                    f"none yet ({why})"))
+    for w in cfg.warnings:
+        print(f"  warning      {w}")
+    print(f"  sessions     {ledger['sessions']} folded, "
+          f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
+          f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
+          f"({ledger['overhead_frac']:.1%})")
+    i = out["microskills"]
+    print(f"  microskills  {i['injected_lines']} fact(s) injected at session start "
+          f"({i['sessions_folded']} sessions learned from)")
+    u = out["toolprune"]
+    if not denylist.supports(ctx.host.name):
+        print("  toolprune    not available on this host")
+    else:
+        src = u["catalog_source"] or "none yet"
+        print(f"  toolprune    {u['sessions']} sessions observed, catalog: {src}; "
+              f"proposed {denylist.unit(ctx.host.name, plural=True)}: "
+              f"{', '.join(u['proposal']) or '-'}; applied: {', '.join(u['applied']) or '-'}")
+    sp = out["loopguard"]
+    env_s = f"{sp['envelope']:.0f} tool calls" if sp["envelope"] else "not learned yet"
+    print(f"  loopguard    envelope {env_s} ({sp['ended_green_turns']} ended-green turns); "
+          f"{ledger['nudges']} nudge(s), {ledger['aborts']} stop(s) over {ledger['turns']} turns")
+    return 0
+
+
+def cmd_microskills(args):
+    ctx = _ctx(args)
+    inj = ctx.store.read("injection.json") or {}
+    text = inj.get("rendered") or ""
+    print(text.rstrip() or "(nothing injected yet: no fact has cleared its firing gate)")
+    facts = inj.get("facts") or {}
+    rows = [(k, v) for k, v in facts.items() if isinstance(v, dict) and "state" in v]
+    if rows:
+        print("\nfacts tracked:")
+        for k, v in sorted(rows):
+            print(f"  {v.get('state', '?'):9s} fire={v.get('fire', '?'):>5s} "
+                  f"{'INJECTED' if v.get('inject') else '        '} {k}")
+    return 0
+
+
+# ---- toolprune -----------------------------------------------------------------------------
+def _toolprune_show(ctx, unt):
+    host = ctx.host.name
+    print(f"sessions observed: {unt.get('sessions', 0)}  catalog: "
+          f"{unt.get('catalog_source') or 'none yet'}")
+    print(f"applied ({denylist.unit(host, plural=True)} this plugin added to "
+          f"{denylist.settings_path(ctx.repo.root, host)}): "
+          f"{', '.join(denylist.applied(ctx.store)) or '-'}")
+    print(f"proposed: {', '.join(unt.get('proposal', [])) or '-'}")
+    if host == "codex":
+        caps = unt.get("capabilities") or {}
+        if caps:
+            print("capabilities (removable from a project's .codex/config.toml):")
+            for c, e in sorted(caps.items()):
+                print(f"  {c:14s} loaded in {e['loaded_sessions']:3d} sessions, unused in "
+                      f"{e['unused_sessions']:3d}{'  USED (kept)' if e['used'] else ''}")
+        trusted = denylist.codex_project_trusted(ctx.repo.root)
+        if trusted is False:
+            print("note: Codex reads a project's .codex/config.toml only in a TRUSTED project; "
+                  "trust this one in Codex first, or an applied proposal does nothing.")
+        return 0
+    if host == "copilot":
+        servers = unt.get("servers") or {}
+        if servers:
+            print("MCP servers (Copilot can only remove a whole server):")
+            for name, e in sorted(servers.items()):
+                state = "USED (kept)" if e["used"] else f"unused in {e['unused_sessions']} sessions"
+                print(f"  {name:24s} {e['tools']:3d} tools, {state}")
+    streaks = unt.get("streaks") or {}
+    if streaks and host == "claude":
+        print("unused-session streaks (tools never used are candidates once over "
+              f"{ctx.config.toolprune_evidence}):")
+        for t, n in sorted(streaks.items(), key=lambda kv: -kv[1])[:30]:
+            used = "used" if t in set(unt.get("used_tools", [])) else ""
+            print(f"  {n:4d}  {t} {used}")
+    if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
+        print(f"note: without `te --host {host} toolprune refresh-catalog` only "
+              + ("deferred and observed" if host == "claude" else "observed")
+              + " tools are known, which leaves the always-loaded tools out of the evidence.")
+    return 0
+
+
+def cmd_toolprune(args):
+    ctx = _ctx(args)
+    host = ctx.host.name
+    if not denylist.supports(host):
+        print(f"tool pruning is not available on {host} (it declares only a handful of tools)")
+        return 1
+    unt = ctx.store.read("untool.json") or {}
+    action = args.action
+    if action == "show":
+        return _toolprune_show(ctx, unt)
+    if action == "apply":
+        tools = args.tools or unt.get("proposal", [])
+        if not tools:
+            print("nothing to apply")
+            return 0
+        if host == "codex":
+            bad = [t for t in tools if t not in denylist.CODEX_TOGGLES]
+            if bad:
+                print(f"not a removable Codex capability: {', '.join(bad)} (choose from "
+                      f"{', '.join(denylist.CODEX_LIVE_CAPABILITIES)})")
+                return 2
+        try:
+            added = denylist.apply(ctx.repo.root, tools, ctx.store, host=host)
+        except RuntimeError as e:
+            print(f"not applied: {e}")
+            return 1
+        print(f"added: {', '.join(added) or '(already present)'}\n"
+              f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the next "
+              f"session.")
+        if host == "copilot" and added:
+            if denylist.copilot_folder_trusted(ctx.repo.root) is False:
+                print("warning: Copilot reads a repository's .github/copilot settings only in a "
+                      "trusted folder, and this one is not. Trust it (Copilot asks when you "
+                      "start it here), or the change does nothing.")
+            left = toolcheck.verify_copilot(ctx.repo.root, denylist.applied(ctx.store))
+            if left is not None:
+                print("checked with a local capture: " + ", ".join(
+                    f"{k} {'removed' if not v else f'still loaded ({v} tools)'}"
+                    for k, v in sorted(left.items())))
+        if host == "codex" and added:
+            if denylist.codex_project_trusted(ctx.repo.root) is False:
+                print("warning: this project is not trusted in Codex, which ignores a "
+                      "project's .codex/config.toml until it is. Trust it (Codex asks when "
+                      "you start it here), or the change does nothing.")
+            state = toolcheck.verify_codex(ctx.repo.root, denylist.applied(ctx.store))
+            if state:
+                print("codex features list: " + ", ".join(
+                    f"{k}={'on' if v else 'off'}" for k, v in sorted(state.items())))
+        return 0
+    if action == "restore":
+        try:
+            removed = denylist.restore(ctx.repo.root, ctx.store, args.tools or None, host=host)
+        except RuntimeError as e:
+            print(f"not restored: {e}")
+            return 1
+        print(f"removed: {', '.join(removed) or '-'} (from the next session)")
+        return 0
+    if action == "refresh-catalog":
+        if host == "codex":
+            print("Codex needs no catalog: its removable capabilities are a fixed set "
+                  f"({', '.join(denylist.CODEX_LIVE_CAPABILITIES)}), read from each session.")
+            return 0
+        path, tools = toolcheck.refresh_catalog(state_root(), host=host)
+        print(f"{len(tools)} tools recorded in {path}:\n  " + ", ".join(tools))
+        return 0
+    if action == "measure":
+        tools = args.tools or unt.get("proposal", []) or denylist.applied(ctx.store)
+        if not tools:
+            print("no proposal to measure")
+            return 1
+        res = toolcheck.measure(tools, host=host)
+        print(json.dumps(res, indent=2))
+        return 0
+    return 2
+
+
+# ---- repomap ------------------------------------------------------------------------------
+def cmd_repomap(args):
+    ctx = _ctx(args)
+    if args.action == "refresh":
+        st = repomap.refresh(ctx)
+    else:
+        st = repomap.read_state(ctx)
+    if not st.get("map"):
+        print(f"no map cached for {ctx.repo.label}" + (f": {st['error']}" if st.get("error")
+                                                      else ""))
+        if ctx.config.repomap == "off":
+            print("the map is off; turn it on with `te config set repomap=on`")
+        return 1 if args.action == "refresh" else 0
+    current = st.get("commit") == repomap.head_commit(ctx.repo.root)
+    print(f"{ctx.repo.label}: ~{st['chars'] // 4} tokens (budget {st.get('tokens_budget')}), "
+          f"commit {(st.get('commit') or '?')[:10]}{'' if current else ' (an older commit)'}, "
+          f"made in {st.get('secs')}s with {st.get('python')}")
+    if st.get("error"):
+        print(f"last refresh failed: {st['error']}")
+    print(repomap.HEADER + st["map"][:2000] + ("\n..." if len(st["map"]) > 2000 else ""))
+    return 0
+
+
+def _rtk_hook():
+    """Where rtk's PreToolUse hook is registered for Claude Code or Copilot, if anywhere."""
+    found = []
+    for path in (os.path.expanduser("~/.claude/settings.json"),
+                 *glob.glob(os.path.expanduser("~/.copilot/hooks/*.json"))):
+        try:
+            if "rtk" in open(path, encoding="utf-8").read():
+                found.append(path)
+        except OSError:
+            pass
+    return found
+
+
+# ---- config / doctor / fold ----------------------------------------------------------------
+def _config_view(cfg):
+    """The settings as a person reads them: each mechanism on or off, its settings, and the
+    guard's thresholds with the numbers a `loopguard.<name>` setting would replace."""
+    d = cfg.as_dict()
+    pinned = d.pop("loopguard_thresholds")
+    return {
+        "enabled": d.pop("enabled"),
+        "microskills": {"state": "off" if cfg.microskills == "off" else "on",
+                        "microskills": d.pop("microskills"),
+                        "microskills_max_facts": d.pop("microskills_max_facts"),
+                        "microskills_max_tokens": d.pop("microskills_max_tokens"),
+                        "microskills_propose_every": d.pop("microskills_propose_every")},
+        "toolprune": {"state": "off" if cfg.toolprune == "off" else "on",
+                      "toolprune": d.pop("toolprune"),
+                      "toolprune_evidence": d.pop("toolprune_evidence")},
+        "loopguard": {
+            "state": "off" if cfg.loopguard == "off" else "on",
+            "loopguard": d.pop("loopguard"), "loopguard_aggr": d.pop("loopguard_aggr"),
+            "loopguard_nudges": d.pop("loopguard_nudges"),
+            "thresholds": loopguard.base_thresholds(cfg.loopguard_aggr, pinned),
+            "pinned": sorted(pinned)},
+        "other": d,
+        "warnings": cfg.warnings,
+    }
+
+
+def cmd_config(args):
+    ctx = _ctx(args)
+    if args.action == "show":
+        print(json.dumps(_config_view(ctx.config), indent=2))
+        return 0
+    path = (os.path.join(ctx.root, "config.json") if args.globally
+            else os.path.join(os.path.dirname(ctx.store.base), "config.json"))
+    if args.action == "unset":
+        try:
+            cur = unset_config(path, [k.strip() for k in args.pairs])
+        except ValueError as e:
+            print(f"rejected: {e}")
+            return 2
+        print(f"{path}: {json.dumps(cur, sort_keys=True)}")
+        return 0
+    updates = {}
+    for kv in args.pairs:
+        if "=" not in kv:
+            print(f"expected KEY=VALUE, got {kv!r}")
+            return 2
+        k, v = kv.split("=", 1)
+        updates[k.strip()] = v.strip()
+    if not updates:
+        print("nothing to set: give KEY=VALUE (see `te config show` for the keys)")
+        return 2
+    try:
+        cur = write_config(path, updates)
+    except ValueError as e:
+        print(f"rejected: {e}")
+        return 2
+    print(f"{path}: {json.dumps(cur, sort_keys=True)}")
+    print("applies from the next hook call; a new fact-size cap applies once the next session "
+          "has been folded")
+    host = hosts.HOSTS[args.host]
+    if cur.get("loopguard") == "stop" and not host.can_stop_mid_turn:
+        print(f"note: {host.name} cannot stop a turn from a hook, so `stop` gives the redirect "
+              f"and then a notice there, as `nudge` does")
+    return 0
+
+
+def cmd_fold(args):
+    ctx = _ctx(args)
+    sids = args.session or fold.pending_sessions(ctx)
+    for sid in sids:
+        rec = fold.fold_session(ctx, sid)
+        if rec is not None and args.verbose:
+            print(json.dumps(rec, default=str))
+    return 0
+
+
+def cmd_judge(args):
+    """The detached half of the paid stuck judge (see plugin/judge.py); not for people."""
+    from . import judge
+    judge.run_job(_ctx(args), args.session, args.job)
+    return 0
+
+
+def cmd_probe(args):
+    if args.host != "copilot":
+        print("the probe runs on Copilot only so far: `te --host copilot probe`")
+        return 2
+    from . import probe
+    return probe.run(sessions=args.sessions, model=args.model, keep=args.keep)
+
+
+def cmd_doctor(args):
+    ok = sys.version_info >= (3, 10)
+    print(f"python      {sys.version.split()[0]} {'ok' if ok else '(needs >= 3.10)'}")
+    root = state_root()
+    try:
+        os.makedirs(root, exist_ok=True)
+        probe = os.path.join(root, ".write-test")
+        open(probe, "w").close()
+        os.remove(probe)
+        print(f"state root  {root} (writable)")
+    except OSError as e:
+        print(f"state root  {root} NOT writable: {e}")
+        ok = False
+    import shutil as _sh
+    # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
+    agents = [h for h in ("claude", "codex", "copilot", "pi") if _sh.which(h)]
+    print(f"agents      {', '.join(agents) or 'none of claude, codex, copilot, pi on PATH'}")
+    if "claude" in agents:
+        cat = os.path.join(root, "hosts", "claude", "catalog.json")
+        print(f"claude      catalog {'present' if os.path.exists(cat) else 'not probed'}")
+    if "codex" in agents:
+        trusted = denylist.codex_project_trusted(args.cwd)
+        if trusted is not None:
+            print(f"codex       this project is {'trusted' if trusted else 'NOT trusted'} "
+                  f"(an untrusted project's .codex/config.toml is ignored)")
+    if "copilot" in agents:
+        from urllib.parse import urlparse
+        from .sidecall import copilot_model
+        cat = os.path.join(root, "hosts", "copilot", "catalog.json")
+        print(f"copilot     catalog {'present' if os.path.exists(cat) else 'not probed'}")
+        base = os.environ.get("COPILOT_PROVIDER_BASE_URL")
+        route = (f"BYOK {os.environ.get('COPILOT_PROVIDER_TYPE') or 'openai'} at "
+                 f"{urlparse(base).netloc or base}" if base else "Copilot subscription")
+        print(f"copilot     {route}; side calls and `probe` use model "
+              f"{copilot_model() or '(Copilot default)'}")
+        if base:
+            print("copilot     note: Copilot does not pass COPILOT_PROVIDER_* to the plugin's "
+                  "hooks, so with paid=true its side calls cannot use this provider")
+        ctrust = denylist.copilot_folder_trusted(args.cwd)
+        if ctrust is not None:
+            print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "
+                  f"untrusted folder's .github/copilot settings are ignored)")
+    if "pi" in agents:
+        settings = os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or os.path.join(
+            os.path.expanduser("~"), ".pi", "agent"), "settings.json")
+        try:
+            pkgs = json.load(open(settings, encoding="utf-8")).get("packages") or []
+        except (OSError, ValueError, AttributeError):
+            pkgs = []
+        mine = [p for p in pkgs if "tokeneconomizer" in json.dumps(p).lower()]
+        print(f"pi          package {'installed: ' + str(mine[0]) if mine else 'not in ' + settings}")
+    ctx = _ctx(args)
+    py = repomap.find_python(ctx)
+    print(f"repomap     {ctx.config.repomap}; " + (f"aider found ({py})" if py else
+          "no Python with aider found (pip install aider-chat, or set repomap_python)"))
+    rtk, hooks = _sh.which("rtk"), _rtk_hook()
+    if rtk or hooks:
+        print(f"rtk         {rtk or 'not on PATH'}; hook in "
+              f"{', '.join(hooks) or 'no settings file'}. Compatible. Note: `rtk pytest` prints "
+              f"nothing when pytest is missing, so the plugin cannot learn that fact from it")
+    log = os.path.join(root, "errors.log")
+    if os.path.exists(log):
+        tail = open(log, encoding="utf-8", errors="replace").read().splitlines()[-6:]
+        print("errors.log (tail):\n  " + "\n  ".join(tail))
+    else:
+        print("errors.log  none")
+    return 0 if ok else 1
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="te", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cwd", default=os.getcwd())
+    ap.add_argument("--host", default=None, choices=sorted(hosts.HOSTS))
+    # The same two options are accepted after the subcommand too (`te fold --host codex ...`).
+    # SUPPRESS keeps a subcommand that omits them from overwriting the top-level values.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--cwd", default=argparse.SUPPRESS)
+    common.add_argument("--host", default=argparse.SUPPRESS, choices=sorted(hosts.HOSTS))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def add(name, *aliases):
+        return sub.add_parser(name, aliases=list(aliases), parents=[common])
+
+    p = add("status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_status)
+    add("microskills", "facts").set_defaults(fn=cmd_microskills)
+    p = add("toolprune", "untool")
+    p.add_argument("action", nargs="?", default="show",
+                   choices=("show", "apply", "restore", "refresh-catalog", "measure"))
+    p.add_argument("tools", nargs="*")
+    p.set_defaults(fn=cmd_toolprune)
+    p = add("config")
+    p.add_argument("action", nargs="?", default="show", choices=("show", "set", "unset"))
+    p.add_argument("pairs", nargs="*")
+    p.add_argument("--global", dest="globally", action="store_true")
+    p.set_defaults(fn=cmd_config)
+    p = add("fold")
+    p.add_argument("--session", action="append")
+    p.add_argument("--verbose", action="store_true")
+    p.set_defaults(fn=cmd_fold)
+    p = add("judge")
+    p.add_argument("--session", required=True)
+    p.add_argument("--job", required=True)
+    p.set_defaults(fn=cmd_judge)
+    add("doctor").set_defaults(fn=cmd_doctor)
+    p = add("repomap")
+    p.add_argument("action", nargs="?", default="show", choices=("show", "refresh"))
+    p.set_defaults(fn=cmd_repomap)
+    p = add("probe")
+    p.add_argument("--sessions", type=int, default=6)
+    p.add_argument("--model", default=None)
+    p.add_argument("--keep", action="store_true")
+    p.set_defaults(fn=cmd_probe)
+    return ap
+
+
+def _recent_host(cwd):
+    """The agent whose state for this repository changed last, or None: from a plain terminal,
+    a Codex or Pi user means their own agent's state without typing `--host`."""
+    from .paths import repo_identity, repo_state_dir
+    try:
+        repo = repo_identity(cwd)
+    except OSError:
+        return None
+    seen = {}
+    for name in hosts.HOSTS:
+        d = repo_state_dir(repo, name)
+        if os.path.isdir(d):
+            seen[name] = max([os.path.getmtime(d)] + [os.path.getmtime(os.path.join(d, f))
+                                                      for f in os.listdir(d)])
+    return max(seen, key=seen.get) if seen else None
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.host is None:
+        args.host = hosts.default_host(recent=_recent_host(args.cwd))
+    try:
+        return args.fn(args) or 0
+    finally:
+        from .paths import secure_root
+        secure_root()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

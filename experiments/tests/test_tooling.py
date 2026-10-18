@@ -1,10 +1,10 @@
 """Tooling: generic evidence untooling + Codex-native capability untooling."""
 import os
 
-from tokeneconomizer.mechanisms.tooling import ToolingStage
-from tokeneconomizer.mechanisms import codex_untool as cu
+from tokeneconomizer.toolprune import ToolingStage
+from tokeneconomizer.toolprune import codex as cu
 from tokeneconomizer.config import ToolingConfig
-from tokeneconomizer.adapters import SwebenchAdapter
+from te_bench.adapters import SwebenchAdapter
 from fixtures import write_codex_transcript
 
 
@@ -36,7 +36,7 @@ def test_codex_profile_demotes_unused_web(tmp_path):
     p.observe({"attempted": {}, "completed": {}, "failed": {}}, resolved=True)
     sel2 = p.begin_task("x-2")
     # web needs only 1 unused exposure; it should now be in the pruned relay mask.
-    assert "sealed_web" in sel2["relay_capabilities"]
+    assert "web" in sel2["relay_capabilities"]
 
 
 def test_codex_profile_completed_use_protects(tmp_path):
@@ -47,7 +47,7 @@ def test_codex_profile_completed_use_protects(tmp_path):
               resolved=True)
     assert "web" in p.state["ever_completed"]
     sel2 = p.begin_task("x-2")
-    assert "sealed_web" not in sel2["relay_capabilities"]
+    assert "web" not in sel2["relay_capabilities"]
 
 
 def test_inspect_usage_counts_web(tmp_path):
@@ -109,7 +109,7 @@ def test_evidence_untool_drops_after_streak(tmp_path):
 
 # ---- the mask must be EARNED, never a prior ---------------------------------
 # The stored Web-Bench arms were produced by an older `--untool` flag that applied
-# `reflect.untool_exclusions()` -- the static INAPPLICABLE_TOOLS set -- from the FIRST
+# `untool_exclusions()` -- the static INAPPLICABLE_TOOLS set -- from the FIRST
 # rollout of the stream. Measured consequences: the mask was live at the `init` task before
 # any task had completed, it cost zero LLM tokens so the honest ledger charged nothing for
 # it, and the keep-set was byte-identical across all 15 cells (5 projects x 3 seeds). The
@@ -120,8 +120,8 @@ def test_evidence_untool_drops_after_streak(tmp_path):
 # no longer reachable from the stage. These tests pin that shut, in BOTH domains, so it
 # cannot regress silently -- the failure mode is invisible in aggregate numbers and only
 # shows up as a suspiciously large cost win.
-from tokeneconomizer.adapters import WebBenchAdapter                    # noqa: E402
-from tokeneconomizer.vendor import reflect                              # noqa: E402
+from te_bench.adapters import WebBenchAdapter                    # noqa: E402
+from tokeneconomizer.toolprune import tools as reflect                  # noqa: E402
 from fixtures import write_claude_transcript_with_catalog               # noqa: E402
 
 _CATALOG = ["Bash", "Edit", "Read", "Write", "WebFetch", "WebSearch", "Workflow",
@@ -221,7 +221,7 @@ def test_network_block_is_liftable_but_only_explicitly(monkeypatch):
 
 def test_network_tools_are_not_protected():
     """PROTECTED_TOOLS survive every mask, so a network tool must never be listed there."""
-    from tokeneconomizer.vendor import reflect
+    from tokeneconomizer.toolprune import tools as reflect
     assert not ({"WebSearch", "WebFetch"} & set(reflect.PROTECTED_TOOLS))
 
 

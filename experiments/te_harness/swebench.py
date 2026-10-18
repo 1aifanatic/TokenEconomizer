@@ -64,12 +64,13 @@ import urllib.request
 # The economizer package supplies the vendored spiral controller + pricing weights. It is
 # stdlib-only, so importing it here pulls in nothing heavy.
 from tokeneconomizer import trace
-from tokeneconomizer.vendor import pricing, spiral as spiral_vendor
+from tokeneconomizer import pricing
+from te_bench.nudge_guard import NudgeGuard
 
-from tokeneconomizer import baselines as scaffolds_pkg
+from te_bench import baselines as scaffolds_pkg
 # The Codex-native spiral controller. Layer 1 and stdlib-only, like everything else this
 # harness imports from the core -- it reads a transcript line and answers "resume or not".
-from tokeneconomizer.mechanisms import codex_spiral
+from te_bench import codex_spiral
 
 from . import codex, copilot
 from .guards import net_guard
@@ -168,11 +169,10 @@ EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def guard_accepts(param):
-    """True if the VENDORED `spiral.NudgeGuard` takes `param` on this checkout.
+    """True if `te_bench.nudge_guard.NudgeGuard` takes `param` on this checkout.
 
-    `spiral.NudgeGuard` is vendored into the core package, so its signature moves
-    independently of this file: `never_abort` exists in some vendored versions and
-    not in others. Passing a parameter it does not accept raises TypeError
+    The guard's signature moves independently of this file: `never_abort` exists in
+    some versions and not in others. Passing a parameter it does not accept raises TypeError
     inside `_make_guard`/`run_task` -- i.e. at task 0, before a single row is written --
     so every optional guard parameter must be probed rather than assumed. Both domain
     runners go through this one helper so the two cannot drift apart again; webbench.py
@@ -180,7 +180,7 @@ def guard_accepts(param):
     """
     try:
         return param in inspect.signature(
-            spiral_vendor.NudgeGuard.__init__).parameters
+            NudgeGuard.__init__).parameters
     except (TypeError, ValueError):          # not introspectable: assume it does not
         return False
 
@@ -1249,7 +1249,7 @@ class ClaudeSwebenchRunner:
         # branches without trimech-safe -- see guard_accepts() for why it is probed.
         if guard_accepts("never_abort"):
             guard_kwargs["never_abort"] = bool(run_kwargs.get("spiral_never_abort"))
-        return spiral_vendor.NudgeGuard(**guard_kwargs)
+        return NudgeGuard(**guard_kwargs)
 
     def _guard_continuation(self, guard, prompt):
         """The next segment's input after a guard stop, or falsey to stop."""

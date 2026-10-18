@@ -1,23 +1,18 @@
-"""One honest cost definition for the economizer.
+"""One cost definition for every mechanism.
 
-The amortized cost of a task is the agent's EXECUTION cost plus every mechanism's LLM
-OVERHEAD, on the same cache-aware effective basis (pricing.effective_tokens):
+The cost of a task (a session, in the plugin) is the agent's EXECUTION cost plus every
+mechanism's LLM OVERHEAD, both on the cache-aware effective basis of `pricing.effective_tokens`:
 
     task_cost(t) = effective_exec(t) + overhead(t)
     amortized(T) = (1/T) * sum_{t<=T} task_cost(t)
 
-`overhead()` sums the per-mechanism token fields each mechanism emits into the stream row.
-Every field here is real mechanism-internal LLM cost that must be amortized into the
-honest task cost -- so a method that mainly prunes cheap cached re-reads cannot look
-better than its real-dollar effect, and one that adds paid proposer/judge/nudge calls
-pays for them in the same ledger.
-
-This is the SINGLE definition of "cost" for the whole package: the mechanisms write these
-raw fields at emit time and the aggregation scripts (experiments/scripts/summarize_stream.py,
-experiments/scripts/aggregate.py) read the total back through this module, so the emitted ledger and
-the reported ledger can never drift.
+`overhead()` sums the per-mechanism token fields a mechanism records. Every field is real LLM
+spend made on the agent's behalf, so a mechanism that adds paid proposer, judge or redirect calls
+pays for them in the same account as the work they are meant to save. The plugin's session
+ledger (`plugin.accounting`) and the experiments' aggregation scripts both read this one
+definition, so the recorded and the reported cost cannot drift apart.
 """
-from .vendor import pricing
+from . import pricing
 
 # Per-task mechanism-overhead token fields, by owning mechanism. All are real
 # mechanism-internal LLM cost that must be amortized into the honest task cost.

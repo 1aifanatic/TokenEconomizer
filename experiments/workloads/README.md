@@ -43,7 +43,7 @@ SWE-bench_Verified and must come from the full `princeton-nlp/SWE-bench` test sp
 
 ## Regenerating
 
-`tokeneconomizer/workloads.py` is the authority; these files are generated from it:
+`experiments/te_bench/workloads.py` is the authority; these files are generated from it:
 
 ```bash
 python scripts/export_workloads.py           # rewrite

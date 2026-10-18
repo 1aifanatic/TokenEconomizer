@@ -23,7 +23,7 @@
 #                   (SWE-bench only). Rows carry map_ok / map_chars: map_ok false means
 #                   the task ran as plain codex-trimech.
 #
-# The heavy harness lives below tokeneconomizer.runner.AgentRunner, in the repo's te_harness
+# The heavy harness lives below te_bench.runner.AgentRunner, in the repo's te_harness
 # package (RUNNER=te_harness.swebench:make_runner, no PYTHONPATH needed). Point RUNNER at
 # another factory ("module:make_runner") to substitute one; RUNNER=stub uses the offline
 # StubRunner (synthetic).

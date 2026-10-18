@@ -1,5 +1,5 @@
 #!/bin/sh
-# TokenEconomizer command line (`te status`, `te untool show`, `te replay`, ...).
+# TokenEconomizer command line (`te status`, `te toolprune show`, `te config`, ...).
 dir=$(CDPATH= cd -- "${0%/*}" && pwd)
 for py in "${TE_PYTHON:-}" python3 python; do
   if [ -n "$py" ] && command -v "$py" >/dev/null 2>&1; then

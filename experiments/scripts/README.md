@@ -42,7 +42,7 @@ only.
 
 Task execution — launching a sealed agent (Claude Code / Copilot CLI / Codex) inside its
 Docker image, applying the economizer's per-task decisions, and grading against the gold
-patch — lives **below the `tokeneconomizer.runner.AgentRunner` interface**, in
+patch — lives **below the `te_bench.runner.AgentRunner` interface**, in
 [`te_harness/`](../te_harness) (details: [`../docs/HARNESS.md`](../docs/HARNESS.md)). It is a
 sibling package, never imported from the core and not shipped in the wheel, so the core stays
 free of Docker and CLI dependencies.
@@ -50,7 +50,7 @@ free of Docker and CLI dependencies.
 Bringing your own is a supported path, not a fallback: pass `--runner module:factory` for a
 zero-arg factory returning an `AgentRunner` that:
 
-- builds an `Economizer` per repo stream (`tokeneconomizer.facade.Economizer`);
+- builds an `Economizer` per repo stream (`te_bench.facade.Economizer`);
 - per task calls `injection_prefix` → `build_tools` → `run_kwargs`, runs the agent with
   those decisions, then `after_task`;
 - writes one `row.json` per task-run under `<RESULTS>/<arm>/<repo>_s<seed>/<run>/` and a

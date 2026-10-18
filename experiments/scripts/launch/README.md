@@ -11,7 +11,7 @@ command per lane, is [`../../docs/RUNNING.md`](../../docs/RUNNING.md).
 
 Task execution — launching a sealed agent (Claude Code / Copilot CLI / Codex) inside its
 Docker image, applying the economizer's per-task decisions, and grading against the gold
-patch — lives **below `tokeneconomizer.runner.AgentRunner`**, in
+patch — lives **below `te_bench.runner.AgentRunner`**, in
 [`../../te_harness`](../../te_harness) (details: [`../../docs/HARNESS.md`](../../docs/HARNESS.md)).
 Select it per launch; no `PYTHONPATH` is needed, since the driver puts `experiments/` and
 the repository root (the shared core) on `sys.path` itself:
@@ -151,7 +151,7 @@ tasks (`init`, `task-1` … `task-20`). Two Web-Bench-specific notes:
 
 * Web-Bench's evaluator owns the task loop, so a Web-Bench runner is started once per stream
   through the optional `begin_stream(tasks, ...)` / `end_stream()` hooks on `AgentRunner`
-  (see `tokeneconomizer/runner.py`). Runners that do not define them are called as usual.
+  (see `experiments/te_bench/runner.py`). Runners that do not define them are called as usual.
 * Because the tasks are sequentially dependent and graded cumulatively, the evaluator stops
   the project at the first task that fails every attempt. The driver still asks for the rest;
   a runner should return those as unreached (`stream_broken` / `unreached`, zero tokens) so

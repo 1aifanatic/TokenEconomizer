@@ -18,7 +18,7 @@ plausible rows instead of an error.
      fresh input actually fresh; skipping that step prices ~90% cached re-reads at 1.0x and
      every cost number downstream is wrong rather than missing. See `row_usage`.
   4. **A capability mask, not a tool mask.** Codex has no `--disallowed-tools`. The
-     Codex-native untooling mechanism (`tokeneconomizer.mechanisms.codex_untool`) emits
+     Codex-native untooling mechanism (`tokeneconomizer.toolprune.codex`) emits
      logical CAPABILITY packages and leaves the mapping onto concrete Codex config toggles
      to the runner, because the runner is what owns the request contract. `config_toggles`
      is that mapping.
@@ -54,7 +54,7 @@ import time
 import urllib.error
 import urllib.request
 
-from tokeneconomizer.vendor import pricing
+from tokeneconomizer import pricing
 
 # What `model_reasoning_effort` accepts. Validated by the runner at construction so a typo
 # fails before the run rather than silently falling back to the CLI default -- effort is

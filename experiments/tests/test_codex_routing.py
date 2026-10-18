@@ -22,7 +22,8 @@ import pytest
 
 from te_harness import codex
 from te_harness.guards import net_guard
-from tokeneconomizer.mechanisms import codex_untool, spiral as spiral_mech, tooling
+from te_bench import spiral_stage as spiral_mech
+from tokeneconomizer.toolprune import codex as codex_untool, stage as tooling
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -494,7 +495,7 @@ def test_codex_trimech_names_no_endpoint():
     channels (prompt prefix, config.toml, live stream) and each one could have grown an
     endpoint assumption; the endpoint is the runner's to resolve.
     """
-    from tokeneconomizer.arms import ARMS
+    from te_bench.arms import ARMS
     import dataclasses
     cfg = ARMS["codex-trimech"].cfg()
     flat = repr(dataclasses.asdict(cfg)) if dataclasses.is_dataclass(cfg) else repr(cfg)

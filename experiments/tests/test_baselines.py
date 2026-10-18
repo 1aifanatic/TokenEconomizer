@@ -4,7 +4,7 @@ Offline — no Docker, no network, no agent. Every container interaction goes th
 callables on `ScaffoldContext`, so a fake context is enough to assert what a scaffold
 *does*, which is the only way to test this without a task container.
 
-`tokeneconomizer.baselines` lives in the CORE package, so the first group of tests guards
+`te_bench.baselines` lives in the CORE package, so the first group of tests guards
 the two invariants that buys: nothing in it imports Docker or `te_harness` (a baseline can
 only reach a container through the context it is handed), and nothing in the core package
 imports it on its own (so `import tokeneconomizer` stays stdlib-only and the economizer
@@ -33,9 +33,9 @@ import pytest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-from tokeneconomizer import baselines as scaffolds
-from tokeneconomizer.baselines import repomap as repomap_mod
-from tokeneconomizer.baselines import rtk as rtk_mod
+from te_bench import baselines as scaffolds
+from te_bench.baselines import repomap as repomap_mod
+from te_bench.baselines import rtk as rtk_mod
 
 
 CLAUDE = scaffolds.AgentProfile(
@@ -98,9 +98,10 @@ class FakeCtx(scaffolds.ScaffoldContext):
 
 # ---- the package boundary ---------------------------------------------------------------
 _PKG_DIR = os.path.dirname(scaffolds.__file__)
-# Non-stdlib at import time is a bug in every module here EXCEPT the repo-map generator,
-# which is a subprocess entry point (never imported) and deliberately does need aider.
-_SUBPROCESS_ENTRY_POINTS = {"_repomap_gen.py"}
+# Non-stdlib at import time is a bug in every module here. The repo-map generator, which
+# deliberately does need aider, is a subprocess entry point that lives in the core package
+# (tokeneconomizer/repomap_gen.py) and is never imported.
+_SUBPROCESS_ENTRY_POINTS = set()
 
 
 def _module_sources():
@@ -151,7 +152,7 @@ def test_baseline_modules_are_stdlib_only_at_import_time():
 
 def test_the_one_host_dependency_is_deferred_not_top_level():
     """aider must be imported inside preflight, never at module scope -- otherwise
-    `import tokeneconomizer.baselines` would require it on every machine."""
+    `import te_bench.baselines` would require it on every machine."""
     import ast
     src = open(os.path.join(_PKG_DIR, "repomap.py"), encoding="utf-8").read()
     top = {a.name for n in ast.parse(src).body if isinstance(n, ast.Import)
@@ -166,7 +167,7 @@ def test_the_core_package_does_not_import_baselines_by_itself():
     import subprocess
     import sys
     probe = ("import sys, tokeneconomizer; "
-             "print(any(m.startswith('tokeneconomizer.baselines') for m in sys.modules))")
+             "print(any(m.startswith('te_bench.baselines') for m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
                          cwd=os.path.dirname(_REPO))     # the repository root holds the core
     assert out.stdout.strip() == "False", out.stdout + out.stderr
@@ -175,11 +176,14 @@ def test_the_core_package_does_not_import_baselines_by_itself():
 def test_no_mechanism_imports_a_baseline():
     """A mechanism that reached for a baseline would make the comparison circular."""
     import ast
-    mech_dir = os.path.join(os.path.dirname(_REPO), "tokeneconomizer", "mechanisms")
-    for name in sorted(os.listdir(mech_dir)):
-        if not name.endswith(".py"):
-            continue
-        with open(os.path.join(mech_dir, name), encoding="utf-8") as fh:
+    pkg = os.path.join(os.path.dirname(_REPO), "tokeneconomizer")
+    paths = [os.path.join(pkg, sub, name)
+             for sub in ("microskills", "toolprune", "loopguard")
+             for name in sorted(os.listdir(os.path.join(pkg, sub))) if name.endswith(".py")]
+    assert paths
+    for path in paths:
+        name = os.path.relpath(path, pkg)
+        with open(path, encoding="utf-8") as fh:
             src = fh.read()
         for node in ast.walk(ast.parse(src)):
             if isinstance(node, ast.ImportFrom):

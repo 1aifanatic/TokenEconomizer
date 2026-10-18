@@ -204,7 +204,7 @@ def test_needs_optimizer_agrees_with_the_facade_for_every_arm():
     The facade's three conditions are the definition; this asserts the aggregate matches
     them arm by arm, so adding an arm cannot silently skip a preflight it needs.
     """
-    from tokeneconomizer.arms import ARMS
+    from te_bench.arms import ARMS
     from tokeneconomizer.config import needs_optimizer
     for name, arm in sorted(ARMS.items()):
         cfg = arm.cfg()
@@ -219,7 +219,7 @@ def test_arm_mode_is_not_the_test():
     """Guards the trap that made this non-obvious: `spiral-only` and `untool-only` carry
     mode `standalone` and DO make paid calls, so gating on mode would skip their
     preflight and hand back exactly the silent-fallback rows it exists to prevent."""
-    from tokeneconomizer.arms import ARMS
+    from te_bench.arms import ARMS
     from tokeneconomizer.config import needs_optimizer
     for name in ("spiral-only", "untool-only"):
         assert ARMS[name].mode == "standalone", name

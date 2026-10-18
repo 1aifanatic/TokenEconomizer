@@ -1,7 +1,7 @@
 {
   "domain": "webbench",
   "description": "Web-Bench streams; task order is load-bearing (each task builds on the last).",
-  "source": "tokeneconomizer/workloads.py (regenerate: python scripts/export_workloads.py)",
+  "source": "experiments/te_bench/workloads.py (regenerate: python scripts/export_workloads.py)",
   "group_field": "project",
   "seeds": [
     "A",

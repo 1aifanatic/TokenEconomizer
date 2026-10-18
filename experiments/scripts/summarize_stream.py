@@ -33,7 +33,7 @@ import argparse, glob, json, os, sys
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
 from tokeneconomizer import ledger
-from tokeneconomizer.vendor import pricing
+from tokeneconomizer import pricing
 
 
 def _num(x):

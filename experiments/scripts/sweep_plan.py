@@ -34,7 +34,7 @@ import sys
 
 _EXPERIMENTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [_EXPERIMENTS, os.path.dirname(_EXPERIMENTS)]  # te_harness; the core at the root
-from tokeneconomizer import workloads                                   # noqa: E402
+from te_bench import workloads                                   # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_experiment import ARMS, SCAFFOLD_ARMS                          # noqa: E402
@@ -91,7 +91,7 @@ SWEEP_ARMS_WEBBENCH_OUT_OF_SCOPE = ("inject-only", "untool-only", "spiral-only-w
 # commands. te_harness.webbench.WEBBENCH_SCAFFOLDS is the runner-side twin of this set.
 #
 # The other two do not:
-#   repomap -- its generator walks `*.py` (baselines/_repomap_gen.py) and a Web-Bench
+#   repomap -- its generator walks `*.py` (tokeneconomizer/plugin/repomap_gen.py) and a Web-Bench
 #              project is TypeScript/JavaScript, so the map would come back empty. Needs a
 #              language change, not a wiring change.
 #   serena  -- an MCP navigation server for a codebase. Web-Bench hands the agent a file
@@ -110,7 +110,7 @@ SWEEP_ARMS_WEBBENCH_SUPERSEDED = {"trimech": "trimech-web",
 # Every arm that carries an external tool baseline, from the baselines registry itself so
 # this module cannot drift from it. Used only for reporting.
 try:
-    from tokeneconomizer.baselines import ARM_SCAFFOLDS as _ARM_SCAFFOLDS
+    from te_bench.baselines import ARM_SCAFFOLDS as _ARM_SCAFFOLDS
     SCAFFOLD_ARM_NAMES = frozenset(_ARM_SCAFFOLDS)
 except ImportError:                                   # pragma: no cover - core is stdlib
     SCAFFOLD_ARM_NAMES = frozenset()

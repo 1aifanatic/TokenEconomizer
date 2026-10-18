@@ -1,6 +1,6 @@
 """te_harness — the Layer-2 task-execution harness for TokenEconomizer.
 
-This is the reference implementation of `tokeneconomizer.runner.AgentRunner`: the Docker- /
+This is the reference implementation of `te_bench.runner.AgentRunner`: the Docker- /
 CLI- / credential-heavy machinery that sits BELOW that seam, and the one that produced every
 published row. It is the harness the results are reproducible with, not a requirement of the
 method -- the economizer above the seam never learns which harness it is talking to.

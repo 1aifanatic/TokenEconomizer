@@ -3,7 +3,7 @@
 
 Some Web-Bench projects ship only `tasks.yml`. Two readers on our side take `tasks.jsonl`
 and nothing else -- `te_harness.webbench.WebBenchStream._tasks` and
-`tokeneconomizer.adapters.webbench.WebBenchAdapter.tasks_path` -- so those projects need a
+`te_bench.adapters.webbench.WebBenchAdapter.tasks_path` -- so those projects need a
 derived jsonl before they can be run or judged.
 
 The yml is left in place ON PURPOSE. Web-Bench's own evaluator prefers it when both exist
@@ -80,7 +80,7 @@ def swept_yml_projects(root):
     Deliberately not "every project with a tasks.yml": the checkout has ~18 of those, most of
     them outside the sweep, and one (`prisma`) ships both files. Writing to those would mutate
     a checkout the sweep never reads."""
-    from tokeneconomizer import workloads
+    from te_bench import workloads
     for name in workloads.WEBBENCH_TASKS:
         if os.path.isfile(os.path.join(root, name, "tasks.yml")):
             yield name

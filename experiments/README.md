@@ -12,7 +12,7 @@ themselves (an editable install, `pip install -e ..`, works too). Run commands f
 directory (`cd experiments`), or by path from anywhere; the scripts locate their own root. The `.env` the scripts read is
 `experiments/.env`, else the repository root's.
 
-### Proactive runtime cost control for sealed coding agents
+### Experience-driven black-box cost control for coding agents
 
 **Externally-delivered, agent-agnostic middleware that aims to cut a sealed coding agent's
 amortized token cost without hurting task success.**
@@ -69,9 +69,9 @@ combined stack rather than as a separate system.
 
 | Mechanism | Module | What it does |
 |---|---|---|
-| **injection** | `mechanisms/injection.py` | A paid proposer learns a firing-gated per-repo operating manual (the canonical test command, "a repro script is redundant here", a required env var) over the task stream, and injects it before each task. A formation / decay / firing-gate lifecycle keeps only facts that actually fire. |
-| **tooling** | `mechanisms/tooling.py`, `mechanisms/codex_untool.py` | Drops inapplicable tool schemas: evidence untooling (loaded-but-unused for *N* consecutive tasks) plus an optional instruction-aware judge. Never drops a protected tool — without an edit path and a shell there is no task. |
-| **spiral** | `mechanisms/spiral.py`, `mechanisms/codex_spiral.py` | Kills or nudges a stuck rollout against a learned per-repo resolved-turn envelope: cheap gate → sampled LLM judge → nudge, then abort. |
+| **injection** (micro-skills) | `tokeneconomizer/microskills/` | A paid proposer learns a firing-gated per-repo operating manual (the canonical test command, "a repro script is redundant here", a required env var) over the task stream, and injects it before each task. A formation / decay / firing-gate lifecycle keeps only facts that actually fire. |
+| **tooling** (tool pruning) | `tokeneconomizer/toolprune/` | Drops inapplicable tool schemas: evidence untooling (loaded-but-unused for *N* consecutive tasks) plus an optional instruction-aware judge. Never drops a protected tool — without an edit path and a shell there is no task. |
+| **spiral** (loop guard) | `tokeneconomizer/loopguard/`; the benchmark controllers `te_bench/spiral_stage.py`, `te_bench/nudge_guard.py`, `te_bench/codex_spiral.py` | Kills or nudges a stuck rollout against a learned per-repo resolved-turn envelope: cheap gate → sampled LLM judge → nudge, then abort. |
 
 ## What is actually measured
 
@@ -118,12 +118,11 @@ distributed wheel — which is precisely what keeps Layer 1's guarantee structur
 your own harness is a supported path, not a fallback: nothing above the seam changes, because
 the controller never learns which harness it is talking to.
 
-`te_live/` (at the repository root) is the second harness, and the proof of that claim: the
-**live harness** runs the same mechanism classes inside a user's own Claude Code, Codex, Copilot
-CLI or Pi sessions, through the hooks the agent exposes, and `plugin/` packages it for
-installation. It is a sibling of the core for the same reason `te_harness` is — it reaches an
-agent CLI — but it ships in the wheel, because it is what `te` runs. See
-[`../docs/PLUGIN.md`](../docs/PLUGIN.md).
+`tokeneconomizer/plugin/` is the second harness, and the proof of that claim: the plugin
+runtime runs the same mechanism classes inside a user's own Claude Code, Codex, Copilot CLI or
+Pi sessions, through the hooks the agent exposes, and `plugin/` (at the repository root)
+packages it for installation. The mechanisms never import it (a test pins that); it ships in
+the wheel, because it is what `te` runs. See [`../docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 **Layer 3 — `scripts/`, the reproduction pipeline.** Planning a sweep, driving one arm,
 aggregating row trees into CSVs, and comparing arms. Nothing here is imported by Layers 1
@@ -137,8 +136,8 @@ harness, or benchmark is an addition rather than an edit:
 | Seam | Module | Separates |
 |---|---|---|
 | `AgentRunner` | `runner.py` | the controller from task execution and paid LLM calls |
-| `DomainAdapter` | `adapters/` | the controller from what a "task" is |
-| trace | `trace.py` | every mechanism from the shape of a rollout's event stream |
+| `DomainAdapter` | `domain.py` | the controller from what a "task" is |
+| trace | `trace/` | every mechanism from the shape of a rollout's event stream |
 | ledger | `ledger.py` | every mechanism from the definition of cost |
 
 The mechanisms read rollouts through the one trace seam and charge cost through the one
@@ -149,6 +148,19 @@ its own accounting.
 
 ```
 experiments/              the paper's reproduction code (this directory)
+  te_bench/                 Layer 1b — the benchmark side of the controller; the plugin never
+                            ships or imports it
+    facade.py                 Economizer, the orchestration entry point
+    spiral_stage.py  nudge_guard.py  codex_spiral.py
+                              the loop guard as the benchmark runs it: the stage, the streamed
+                              kill-and-resume guard, the Codex finalize policy
+    arms.py  mechanism_arms.py  _armspec.py
+                              named arm → exact configuration (the experiment's vocabulary)
+    runner.py                 AgentRunner interface — the harness seam
+    workloads.py              the evaluated task set, as data (which instances, per domain)
+    adapters/                 swebench · webbench · creddata · reposvul · cybergym · webarena
+    baselines/                third-party tool scaffolds (rtk · serena · aider repo-map) —
+                              comparison points, not mechanisms
   te_harness/               Layer 2 — reference AgentRunner: Docker + agent CLIs + official graders
     swebench.py               agent in the instance's pinned image, graded by get_eval_report
     webbench.py               agent at the Node evaluator's HTTP seam, graded by its own suites
@@ -164,20 +176,18 @@ experiments/              the paper's reproduction code (this directory)
   docs/                     setup, provisioning, the harness, the run book (see below)
   tests/                    offline suite for the harness and pipeline — no Docker, no datasets
 
-../tokeneconomizer/       Layer 1 — the controller (stdlib-only, zero deps), shared with the plugin
-  facade.py                 Economizer, the orchestration entry point
-  config.py                 three independent on/off switches, one per mechanism
-  arms.py  _armspec.py      named arm → exact configuration (the experiment's vocabulary)
-  ledger.py  trace.py       the one cost definition + the one trace seam
-  runner.py                 AgentRunner interface — the harness seam
-  workloads.py              the evaluated task set, as data (which instances, per domain)
-  mechanisms/               injection · tooling · spiral (+ the Codex-native variants)
-  baselines/                third-party tool scaffolds (rtk · serena · aider repo-map) —
-                            comparison points, not mechanisms
-  adapters/                 DomainAdapter + swebench · webbench · creddata · reposvul ·
-                            cybergym · webarena
-  vendor/                   pricing · reflect · spiral, vendored verbatim, stdlib-only
-../te_live/  ../plugin/   the plugin (see ../README.md)
+../tokeneconomizer/       Layer 1 — the controller (stdlib-only, zero deps): what the plugin ships
+  microskills/  toolprune/  loopguard/
+                            the three mechanisms (injection · tooling · spiral in the arms)
+  trace/                    the one trace seam: each agent's session-log format
+  config.py  ledger.py  pricing.py
+                            the mechanisms' switches, the one cost definition, the price table
+  domain.py  stage.py       the DomainAdapter interface (benchmark adapters are in te_bench/)
+                            and the Stage hooks
+  plugin/                   the plugin runtime; repomap_gen.py there is aider's repo-map
+                            generator, run as a subprocess by the plugin's opt-in map and by
+                            the repomap baseline
+../plugin/                the installable plugin directory (see ../README.md)
 
 ── and deliberately NOT in the repository ───────────────────────────────────────
 te_data/                  the data root, beside the repository: benchmark checkouts, task
