@@ -169,7 +169,7 @@ Copilot gate is in [`COPILOT.md`](COPILOT.md) Step 1.
 
 The heavy machinery — launching a sealed agent, applying the economizer's per-task
 decisions, grading against gold — sits **below `AgentRunner`**
-([`../tokeneconomizer/runner.py`](../../tokeneconomizer/runner.py), which is the authoritative
+([`te_bench/runner.py`](../te_bench/runner.py), which is the authoritative
 contract). The repo ships a reference implementation, [`te_harness/`](../te_harness) — see
 [`HARNESS.md`](HARNESS.md) — so this step is a check
 rather than something to write. Every launch selects a runner with `RUNNER=module:factory`

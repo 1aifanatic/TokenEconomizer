@@ -1,7 +1,7 @@
 # Running the GitHub Copilot CLI as the sealed agent
 
 TokenEconomizer's mechanisms are agent-agnostic, but each sealed agent needs its own runner
-below the [`AgentRunner`](../../tokeneconomizer/runner.py) seam. This page is the Copilot path,
+below the [`AgentRunner`](../te_bench/runner.py) seam. This page is the Copilot path,
 end to end, for **both** SWE-bench and Web-Bench. It assumes you have already done
 [`SETUP.md`](SETUP.md) steps 1–3 (venv, the two outside-the-repo directories, datasets);
 everything Copilot-specific is here.
