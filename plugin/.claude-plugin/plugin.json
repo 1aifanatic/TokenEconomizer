@@ -7,7 +7,7 @@
     "name": "TokenEconomizer authors"
   },
   "repository": "https://github.com/microsoft/TokenEconomizer",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "cost",
     "tokens",

@@ -9,7 +9,7 @@
     "tokens",
     "context"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": "https://github.com/microsoft/TokenEconomizer",
   "pi": {
     "extensions": [

@@ -22,7 +22,7 @@
   <a href="https://arxiv.org/abs/XXXX.XXXXX"><img src="https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg" alt="arXiv"></a>
   <a href="https://tokeneconomizer.github.io"><img src="https://img.shields.io/badge/project-page-2f6fb0.svg" alt="Project page"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776ab.svg" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0 license">
 </p>
 
 <p align="center"><img src="docs/assets/framework_overview.png" width="100%" alt="TokenEconomizer: the plugin keeps what it knows about a repository and applies micro-skills, tool pruning and failure-loop intervention to your unchanged coding agent; each finished session's log updates all three"></p>
@@ -165,4 +165,4 @@ only `tokeneconomizer/`.
 
 ## License
 
-MIT; see [`LICENSE`](LICENSE).
+Apache 2.0; see [`LICENSE`](LICENSE).
