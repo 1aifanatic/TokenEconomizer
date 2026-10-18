@@ -16,5 +16,6 @@
     "tool-pruning",
     "failure-loops"
   ],
+  "commands": "./slash-commands/",
   "hooks": "hooks/copilot-hooks.json"
 }

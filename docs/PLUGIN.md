@@ -334,7 +334,10 @@ or `--zip` it for `claude --plugin-url`).
 **Codex** — the plugin carries `.codex-plugin/plugin.json`, `hooks/codex-hooks.json` and, as
 Codex has no plugin slash commands, its commands as Codex skills (`codex-skills/`:
 `tokeneconomizer-status`, `-microskills`, `-toolprune`, `-config`, each running the matching
-`te --host codex` command). Codex copies an installed plugin; the copy finds the package in the
+`te --host codex` command). Codex 0.153.1 also turns a plugin's `commands/` folder into skills
+(`source-command-status`, …), which listed every command twice in its skill picker; the slash
+commands therefore live in `slash-commands/`, which the Claude Code and Copilot manifests name and
+Codex does not read. Codex copies an installed plugin; the copy finds the package in the
 checkout it was added from (or carries it, from the bundle):
 
 ```bash

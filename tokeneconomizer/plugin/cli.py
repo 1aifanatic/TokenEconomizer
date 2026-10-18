@@ -156,9 +156,14 @@ def _toolprune_show(ctx, unt):
             used = "used" if t in set(unt.get("used_tools", [])) else ""
             print(f"  {n:4d}  {t} {used}")
     if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
-        print(f"note: without `te --host {host} toolprune refresh-catalog` only "
-              + ("deferred and observed" if host == "claude" else "observed")
-              + " tools are known, which leaves the always-loaded tools out of the evidence.")
+        if os.path.exists(os.path.join(ctx.root, "hosts", host, "catalog.json")):
+            # Recorded, but a repository reads the catalog when its next session is folded.
+            print("note: the catalog `toolprune refresh-catalog` recorded joins this repository's "
+                  "evidence from its next session.")
+        else:
+            print(f"note: without `te --host {host} toolprune refresh-catalog` only "
+                  + ("deferred and observed" if host == "claude" else "observed")
+                  + " tools are known, which leaves the always-loaded tools out of the evidence.")
     return 0
 
 

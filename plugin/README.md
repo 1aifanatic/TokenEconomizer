@@ -164,8 +164,8 @@ copilot plugin list       # tokeneconomizer@tokeneconomizer ... (enabled)
 Copilot loads the plugin from the clone directly, without copying it.
 
 **2. Check it.** In Copilot's interactive mode, type `/tokeneconomizer:status`. Each slash command
-is a model turn and asks permission the first time; allow it always. Slash commands work only
-in interactive mode; the plugin's notices also appear under `copilot -p`.
+is a model turn, and Copilot asks before running the plugin's script; choose **Yes**. Slash
+commands work only in interactive mode; the plugin's notices also appear under `copilot -p`.
 
 **3. Record the tool list, once.**
 

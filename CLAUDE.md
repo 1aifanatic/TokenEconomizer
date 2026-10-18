@@ -14,8 +14,10 @@ behavior, and `docs/METHOD.md` for the method.
   - `plugin/` — the runtime: hook dispatch, per-repository state, settings, the `te` CLI
   - `config.py`, `ledger.py`, `pricing.py`, `domain.py`, `stage.py` — shared by all three
 - `plugin/` — the installable plugin directory: manifests per agent, hook files, launchers
-  (`scripts/te`, `scripts/te-hook`), slash commands, Codex skills (`codex-skills/`, Codex having
-  no plugin slash commands), the Pi extension; `lib/` links the package
+  (`scripts/te`, `scripts/te-hook`), slash commands (`slash-commands/`, named in the Claude Code
+  and Copilot manifests, since Codex would turn a `commands/` folder into duplicate skills), Codex
+  skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension; `lib/` links
+  the package
 - `experiments/` — benchmark-only: `te_bench/` (adapters, arms, facade, benchmark-only
   controllers), `te_harness/` (Docker runners), `scripts/`, `docs/`, its own `tests/`
 - `package.json` — the repository as a Pi package (`pi install git:github.com/…`); it names

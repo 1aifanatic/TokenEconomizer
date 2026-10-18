@@ -361,6 +361,33 @@ def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):
         assert outs[0] == outs[1] and outs[0]
         body = {}
         for name in (new, old):
-            text = open(os.path.join(PLUGIN, "commands", f"{name}.md"), encoding="utf-8").read()
+            text = open(os.path.join(PLUGIN, "slash-commands", f"{name}.md"), encoding="utf-8").read()
             body[name] = re.search(r'"\$te" --cwd "\$\(pwd\)" (\w+)', text).group(1)
         assert body[new] == body[old] == new
+
+
+def test_toolprune_note_after_refresh_catalog(tmp_path, monkeypatch, capsys):
+    """Right after `refresh-catalog`, the repository has not folded a session with the catalog
+    yet; the note says so instead of asking for the command just run."""
+    from tokeneconomizer.plugin import cli
+    home = tmp_path / "home"
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", str(home))
+    work = tmp_path / "work"
+    work.mkdir()
+    assert cli.main(["--cwd", str(work), "--host", "claude", "toolprune"]) == 0
+    assert "without `te --host claude toolprune refresh-catalog`" in capsys.readouterr().out
+    (home / "hosts" / "claude").mkdir(parents=True)
+    (home / "hosts" / "claude" / "catalog.json").write_text("{}", encoding="utf-8")
+    assert cli.main(["--cwd", str(work), "--host", "claude", "toolprune"]) == 0
+    out = capsys.readouterr().out
+    assert "joins this repository's evidence from its next session" in out
+    assert "without `te --host" not in out
+
+
+def test_codex_sees_no_claude_format_commands_folder():
+    """Codex turns a plugin's `commands/` folder into skills of its own, which would list every
+    command twice beside `codex-skills/`; Claude Code and Copilot read `slash-commands/` instead."""
+    assert not os.path.exists(os.path.join(PLUGIN, "commands"))
+    for manifest in (".claude-plugin/plugin.json", ".github/plugin/plugin.json"):
+        with open(os.path.join(PLUGIN, manifest), encoding="utf-8") as fh:
+            assert json.load(fh)["commands"] == "./slash-commands/"
