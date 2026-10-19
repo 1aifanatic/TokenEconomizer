@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img src="https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg" alt="arXiv"></a>
+  <a href="https://arxiv.org/abs/2610.22732"><img src="https://img.shields.io/badge/arXiv-2610.22732-b31b1b.svg" alt="arXiv"></a>
   <a href="https://tokeneconomizer.github.io"><img src="https://img.shields.io/badge/project-page-2f6fb0.svg" alt="Project page"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776ab.svg" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache 2.0 license">
@@ -158,7 +158,7 @@ only `tokeneconomizer/`.
   author  = {Li, Aaron J. and Xu, Weijia and Singh, Chandan and Chen, Zixiao and
              Inala, Jeevana Priya and Siska, Charlotte and Tamersoy, Acar and Yu, Bin and
              Stoica, Ion and Galley, Michel and Gao, Jianfeng},
-  journal = {arXiv preprint arXiv:XXXX.XXXXX},
+  journal = {arXiv preprint arXiv:2610.22732},
   year    = {2026}
 }
 ```
