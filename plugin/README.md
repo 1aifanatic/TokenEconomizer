@@ -1,21 +1,8 @@
 # TokenEconomizer plugin
 
-Experience-driven black-box cost control for coding agents. In each repository it works in, it:
-
-* **injects what it learned (micro-skills).** Environment facts your sessions keep rediscovering
-  the hard way ("`tox …` fails here with command not found; `python -m pytest …` works") are
-  added to the next session's context.
-* **prunes tools you never use (tool pruning).** Tools that stay loaded but unused for several
-  sessions are proposed as a deny list. You review it and apply it; nothing changes until you
-  do. On Codex the unit is a capability package (sub-agents, goals, images); on the Copilot CLI
-  it is a whole MCP server.
-* **redirects a turn stuck in a failing loop (loop guard).** When a turn keeps repeating the
-  same failing edit/test cycle well past what this repository's turns usually take, the agent
-  gets one mid-turn redirect.
-
-Every hook fails open, the plugin's actions are announced in one line, and by default it makes
-no model calls of its own. All of its state stays on your machine, under `~/.tokeneconomizer`.
-Design, verified agent behaviour and limits: [`docs/PLUGIN.md`](../docs/PLUGIN.md).
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI and Pi. What
+the plugin does and why is in the [main README](../README.md); its design and the verified
+behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·

@@ -1,258 +1,182 @@
-# TokenEconomizer — reproducing the paper's experiments
+# Reproducing the experiments
 
-This directory holds the code behind the paper: the Docker benchmark harness, the sweep and
-aggregation scripts, the evaluated task sets, and the run book. It is **not part of the
-plugin** and is not packaged with it. The plugin, and the shared core both use, live at the
-repository root; see [`../README.md`](../README.md).
+This directory is the code behind the paper's results: a harness that runs Claude Code, Codex
+and the Copilot CLI on SWE-Bench and Web-Bench, the launchers, and the aggregation scripts. It
+is not part of the plugin; the method is described in the [main README](../README.md).
 
-Everything here keeps the layout the experiments were run with: `te_harness/`, `scripts/`,
-`workloads/` and `docs/` sit side by side. The shared core, `tokeneconomizer`, stays at the
-repository root, one level up, and the scripts put both directories on `sys.path`
-themselves (an editable install, `pip install -e ..`, works too). Run commands from this
-directory (`cd experiments`), or by path from anywhere; the scripts locate their own root. The `.env` the scripts read is
-`experiments/.env`, else the repository root's.
-
-### Experience-driven black-box cost control for coding agents
-
-**Externally-delivered, agent-agnostic middleware that aims to cut a sealed coding agent's
-amortized token cost without hurting task success.**
-
----
-
-## The problem
-
-A sealed coding agent — Claude Code, the Copilot CLI, Codex — is optimized for **task
-success, not the token bill**. You cannot retrain it, patch it, or see inside it. What you
-get is a fixed interface: a launch command, an instruction channel, a tool contract, and a
-stream of events. Meanwhile its transcript grows monotonically and is replayed into every
-model call.
-
-That shape produces three costs that recur on *every task in a stream*, not once:
-
-| | Cost region | What it looks like |
-|---|---|---|
-| 1 | **Repeated environment discovery** | Re-probing the test command, the build, the repo layout — things the agent already worked out on the previous task, and the task before that. |
-| 2 | **The fixed tool contract** | Every tool schema re-sent on every turn, including the ones this repository will never need. |
-| 3 | **The unproductive tail** | Tokens burned after a rollout has stopped making progress but before it gives up. |
-
-An experienced engineer working in a familiar repository avoids all three. They already know
-the test command, they don't reach for tools the project doesn't use, and they abandon a dead
-approach early.
-
-## The question this repository asks
-
-**Can an external controller supply that familiarity while leaving the agent completely
-fixed** — no weight updates, no fine-tuning, no changes to agent code?
-
-A static plugin is not enough, and that is the substantive claim. How much there is to save,
-and where, depends on the repository, the harness, the agent's tool surface, and the
-trajectory currently unfolding. So the controller has to be **stateful and observational**:
-it reads completed and live traces, maintains per-repository state across a task stream, and
-acts only through interfaces the harness already exposes — the launch call, the instruction
-channel, and the event stream.
-
-Three independently-switchable mechanisms each target one cost region, at a different point
-in a task's lifecycle:
-
-```
-task lifecycle:   ── inject ──▶ construct tools ──▶ ═══ rollout ═══▶ finalize ──
-                       │              │                    │
-                   injection       tooling              spiral
-              learned per-repo   drop inapplicable   kill/nudge a stuck
-              operating manual   tool schemas /      rollout vs a learned
-              before the task    capabilities        resolved-turn envelope
-              (between tasks)    (before each task)  (during rollout)
-```
-
-Because they are independently switchable, each can be measured alone as an ablation of the
-combined stack rather than as a separate system.
-
-| Mechanism | Module | What it does |
-|---|---|---|
-| **injection** (micro-skills) | `tokeneconomizer/microskills/` | A paid proposer learns a firing-gated per-repo operating manual (the canonical test command, "a repro script is redundant here", a required env var) over the task stream, and injects it before each task. A formation / decay / firing-gate lifecycle keeps only facts that actually fire. |
-| **tooling** (tool pruning) | `tokeneconomizer/toolprune/` | Drops inapplicable tool schemas: evidence untooling (loaded-but-unused for *N* consecutive tasks) plus an optional instruction-aware judge. Never drops a protected tool — without an edit path and a shell there is no task. |
-| **spiral** (loop guard) | `tokeneconomizer/loopguard/`; the benchmark controllers `te_bench/spiral_stage.py`, `te_bench/nudge_guard.py`, `te_bench/codex_spiral.py` | Kills or nudges a stuck rollout against a learned per-repo resolved-turn envelope: cheap gate → sampled LLM judge → nudge, then abort. |
-
-## What is actually measured
-
-The objective is to **minimize cache-aware effective cost while holding resolve rate** (or
-F1, on the classification domains).
-
-Two properties make that honest rather than rhetorical:
-
-- **Cache-aware cost.** Most raw transcript tokens are cached re-reads. Counting them at full
-  weight would let a method look good merely by pruning cheap repetition, so cost is
-  measured in fresh-input-token equivalents.
-- **The controller pays for itself.** Every token the controller spends — proposer, tool
-  judge, spiral judge, nudge writer — is charged back to TokenEconomizer in the same ledger
-  as the task. Reported savings are **net of the mechanisms' own overhead**, so a mechanism
-  that buys savings with paid calls has to win on the balance.
-
-One consequence worth stating up front: a mechanism's overhead line is *not* a saving
-available by deleting it, because the mechanisms shape the trajectory that produces every
-other number in the row. Use the ledger to price a mechanism, not to predict its removal.
-
-Results are not part of this repository; the code here produces them.
-
----
-
-## How the repository is organised
-
-The layout follows one rule: **the controller must not be able to reach the things it is
-supposed to be independent of.** That is enforced structurally, by what sits underneath
-what, rather than by convention.
-
-### Three layers
-
-**Layer 1 — `tokeneconomizer/`, the controller.** The mechanisms, the cost definition, and
-the trace reader. It is **stdlib-only with zero runtime dependencies**: `import
-tokeneconomizer` cannot touch Docker, an agent CLI, or an LLM SDK, because none of that code
-lives beneath it. This is what makes the agent-agnostic claim checkable instead of
-aspirational.
-
-**Layer 2 — `te_harness/`, the reference harness.** The heavy machinery: launching a sealed
-agent inside a benchmark's Docker image, applying the controller's per-task decisions,
-streaming events back, and grading with the benchmark's *official* grader. It is a
-**sibling** package of `tokeneconomizer`, not a submodule, and is excluded from the
-distributed wheel — which is precisely what keeps Layer 1's guarantee structural. Swapping in
-your own harness is a supported path, not a fallback: nothing above the seam changes, because
-the controller never learns which harness it is talking to.
-
-`tokeneconomizer/plugin/` is the second harness, and the proof of that claim: the plugin
-runtime runs the same mechanism classes inside a user's own Claude Code, Codex, Copilot CLI or
-Pi sessions, through the hooks the agent exposes, and `plugin/` (at the repository root)
-packages it for installation. The mechanisms never import it (a test pins that); it ships in
-the wheel, because it is what `te` runs. See [`../docs/PLUGIN.md`](../docs/PLUGIN.md).
-
-**Layer 3 — `scripts/`, the reproduction pipeline.** Planning a sweep, driving one arm,
-aggregating row trees into CSVs, and comparing arms. Nothing here is imported by Layers 1
-or 2.
-
-### The four seams
-
-Every crossing between layers goes through exactly one interface, which is why a new agent,
-harness, or benchmark is an addition rather than an edit:
-
-| Seam | Module | Separates |
-|---|---|---|
-| `AgentRunner` | `runner.py` | the controller from task execution and paid LLM calls |
-| `DomainAdapter` | `domain.py` | the controller from what a "task" is |
-| trace | `trace/` | every mechanism from the shape of a rollout's event stream |
-| ledger | `ledger.py` | every mechanism from the definition of cost |
-
-The mechanisms read rollouts through the one trace seam and charge cost through the one
-ledger, so a change to either is a change in one place, and no mechanism can quietly adopt
-its own accounting.
-
-### The tree
-
-```
-experiments/              the paper's reproduction code (this directory)
-  te_bench/                 Layer 1b — the benchmark side of the controller; the plugin never
-                            ships or imports it
-    facade.py                 Economizer, the orchestration entry point
-    spiral_stage.py  nudge_guard.py  codex_spiral.py
-                              the loop guard as the benchmark runs it: the stage, the streamed
-                              kill-and-resume guard, the Codex finalize policy
-    arms.py  mechanism_arms.py  _armspec.py
-                              named arm → exact configuration (the experiment's vocabulary)
-    runner.py                 AgentRunner interface — the harness seam
-    workloads.py              the evaluated task set, as data (which instances, per domain)
-    adapters/                 swebench · webbench · creddata · reposvul · cybergym · webarena
-    baselines/                third-party tool scaffolds (rtk · serena · aider repo-map) —
-                              comparison points, not mechanisms
-  te_harness/               Layer 2 — reference AgentRunner: Docker + agent CLIs + official graders
-    swebench.py               agent in the instance's pinned image, graded by get_eval_report
-    webbench.py               agent at the Node evaluator's HTTP seam, graded by its own suites
-    copilot.py                Copilot CLI overrides (GitHub auth, own catalog, own accounting)
-    codex.py                  Codex CLI seam — the OpenAI API, the capability→config
-                              mapping, own accounting
-    guards/                   measurement-integrity guards — refusing fetches of a benchmark's
-                              own answer key, enforced twice: a PreToolUse hook in each CLI's
-                              own hook file, and an /etc/hosts block in the task container
-    capture_catalog.py        mines the real tool catalog off a live run's wire
-  scripts/                  Layer 3 — reproduction pipeline (planning, driving, aggregating, comparing)
-  workloads/                the evaluated task sets as committed JSON (ids only, ~28 KB)
-  docs/                     setup, provisioning, the harness, the run book (see below)
-  tests/                    offline suite for the harness and pipeline — no Docker, no datasets
-
-../tokeneconomizer/       Layer 1 — the controller (stdlib-only, zero deps): what the plugin ships
-  microskills/  toolprune/  loopguard/
-                            the three mechanisms (injection · tooling · spiral in the arms)
-  trace/                    the one trace seam: each agent's session-log format
-  config.py  ledger.py  pricing.py
-                            the mechanisms' switches, the one cost definition, the price table
-  domain.py  stage.py       the DomainAdapter interface (benchmark adapters are in te_bench/)
-                            and the Stage hooks
-  plugin/                   the plugin runtime; repomap_gen.py there is aider's repo-map
-                            generator, run as a subprocess by the plugin's opt-in map and by
-                            the repomap baseline
-../plugin/                the installable plugin directory (see ../README.md)
-
-── and deliberately NOT in the repository ───────────────────────────────────────
-te_data/                  the data root, beside the repository: benchmark checkouts, task
-                          specs, grading tables, Docker-image manifests, every results tree.
-                          Reached only through TOKENECONOMIZER_* / DATA env vars.
-```
-
-### The data root lives *outside* the repository
-
-Nothing large that the project reads or writes belongs in the checkout. Benchmark
-checkouts, task specifications, grading tables, and every results tree live under **one data
-root of your choosing, outside the repo** — conventionally `te_data/` beside it — and the
-code reaches it only through `TOKENECONOMIZER_*` / `DATA` environment variables.
-
-The reason is scale, and then three practical ones. A working root for this project runs to
-tens of gigabytes (the Web-Bench monorepo alone is ~24 GB, results trees a few GB more),
-on top of ~165 GB of pinned per-instance Docker images that live in the daemon's own store.
-None of that is versionable, and none of it should be one `git add -A` away from a commit.
-Beyond size:
-
-- **A clone becomes disposable.** Delete or re-clone the repo and your results are untouched
-  — which is what makes it safe to test a change in a throwaway clone against the corpus you
-  already have.
-- **Several checkouts can share one root.** Two clones, or a git worktree, can run against
-  the same provisioned data and the same results tree without re-provisioning any of it.
-- **No machine-specific path is baked into the code.** These variables have no built-in
-  defaults on purpose: the harness raises at construction when one is missing rather than
-  silently resolving to a path that only exists on whichever machine wrote the code.
-
-`.gitignore` is the belt-and-braces half of the same decision — `results/`, `*.csv`,
-`*.jsonl`, rendered images and `.env` are all excluded — but the primary defence is that
-the data was never inside the tree to begin with. [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)
-and [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) cover the layout and what to put where.
-
-### Provenance, kept as data
-
-The identities of the evaluated tasks live in the core package (and are mirrored as committed
-JSON under `workloads/`), not in a results tree. So the exact set a published number was
-computed over can be re-provisioned and re-run without inheriting anyone's output directory.
-The published corpus ran a fixed subset per domain rather than a whole benchmark; two
-SWE-bench streams have since been extended because every arm had saturated them, so a *new*
-run's task set is deliberately not identical to the recorded one — [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
-spells out both.
-
----
-
-## Where things are documented
-
-| Document | What it covers |
+| Path | Contents |
 |---|---|
-| [`../docs/METHOD.md`](../docs/METHOD.md) | why the mechanisms are shaped this way |
-| [`docs/SETUP.md`](docs/SETUP.md) | fresh clone → running, gated step by step |
-| [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | machine requirements and Docker setup |
-| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | per-benchmark provisioning and on-disk layout |
-| [`docs/HARNESS.md`](docs/HARNESS.md) | the `AgentRunner` seam, and writing your own harness |
-| [`docs/COPILOT.md`](docs/COPILOT.md) | running the Copilot CLI as the sealed agent |
-| [`docs/RUNNING.md`](docs/RUNNING.md) | the run book: authentication per agent, the arm catalog, one command per lane |
+| `te_harness/` | runs an agent CLI in each SWE-Bench task's Docker image (on the host for Web-Bench) and grades it with the benchmark's own grader |
+| `te_bench/` | the experiment arms, the benchmark adapters, and the evaluated task sets (`workloads.py`) |
+| `scripts/` | `launch/` (the launchers), `run_experiment.py` (one arm on one task stream), `aggregate.py` and `compare_arms.py` |
+| `workloads/` | the evaluated task ids: `swebench.json` (277 tasks), `webbench.json` (102), and the security sets |
+| `tests/` | offline tests: no Docker, data or API keys |
 
-**The plugin** — the mechanisms in your own sessions — is documented at the repository root:
-[`../README.md`](../README.md) and [`../plugin/README.md`](../plugin/README.md).
+## Requirements
 
-**Start here:** [`../docs/METHOD.md`](../docs/METHOD.md) for the ideas,
-[`docs/SETUP.md`](docs/SETUP.md) to get it running, and
-[`docs/RUNNING.md`](docs/RUNNING.md) to reproduce the experiments.
+- Linux x86_64 with Docker usable without `sudo`, and about 200 GB of disk for the SWE-Bench
+  images.
+- Python 3.10 or newer, git, and Node.js with npm (for Web-Bench).
+- An Anthropic API key and an OpenAI API key. Claude Code and the Copilot CLI bill the first,
+  Codex the second.
+- The agent CLIs on the host, at the versions the paper used. The harness mounts them into
+  each task container.
 
-Requires Python ≥ 3.10. The core has no runtime dependencies; `requirements.txt` here covers
-the test suite (`python -m pytest tests`, from this directory, or
-`python -m pytest` at the repository root for both suites).
+```bash
+curl -fsSL https://claude.ai/install.sh | bash -s 2.1.170          # Claude Code
+npm install -g @openai/codex@0.153.1                                 # Codex
+curl -fsSL https://gh.io/copilot-install | VERSION=1.0.84-7 bash     # Copilot CLI
+```
+
+## Setup
+
+**1. Install and check the code.** Every command after `cd experiments` runs from this directory.
+
+```bash
+git clone https://github.com/microsoft/TokenEconomizer.git && cd TokenEconomizer
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e '.[test,baselines]'        # baselines: aider, for the RepoMap arms
+cd experiments
+python -m pytest tests -q
+bash scripts/launch/smoke_test.sh         # every arm wired end to end, with a stub agent
+```
+
+**2. SWE-Bench.** Pick a data directory outside the repository, and use its canonical path:
+Web-Bench fails every test when reached through a symlink.
+
+```bash
+export DATA="$(readlink -f ~/te_data)"
+git clone https://github.com/SWE-bench/SWE-bench.git "$DATA/SWE-bench"
+pip install -e "$DATA/SWE-bench"          # the official grader, into this venv
+python scripts/export_swebench_tasks.py --out-dir "$DATA/swebench"
+docker login                              # anonymous pulls are rate-limited
+xargs -a "$DATA/swebench/image_tags.txt" -P 4 -n 1 docker pull -q
+```
+
+The export writes the task list, the grading file and the list of the 277 task images.
+
+**3. Web-Bench.** The five evaluated projects, built, with the Playwright browser they pin:
+
+```bash
+git clone https://github.com/bytedance/web-bench.git "$DATA/web-bench"
+( cd "$DATA/web-bench" && npm install -g @microsoft/rush && rush install \
+  && rush build --to @web-bench/eval --to @web-bench/calculator --to @web-bench/expressjs \
+                --to @web-bench/react --to @web-bench/zustand --to @web-bench/table \
+  && cd projects/calculator && npx playwright install chromium chromium-headless-shell )
+export TOKENECONOMIZER_WEBBENCH_PROJECTS="$DATA/web-bench/projects"
+export TOKENECONOMIZER_WEBBENCH_TASKS="$DATA/webbench_tasks.json"
+python scripts/webbench_tasks_from_yaml.py --all    # zustand ships only tasks.yml
+python scripts/export_webbench_tasks.py
+```
+
+**4. Keys and paths.** `cp .env.example .env`, then fill it in with absolute paths (the file
+does not expand variables):
+
+| Variable | Value |
+|---|---|
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | your keys |
+| `COPILOT_PROVIDER_API_KEY` | your Anthropic key again: the Copilot CLI bills Anthropic through its own provider settings, already set in the file |
+| `DATA` | the data directory |
+| `TOKENECONOMIZER_RESULTS` | where results go, e.g. `$DATA/results` |
+| `TOKENECONOMIZER_SWEBENCH_TASKS` | `$DATA/swebench/swebench_tasks.json` |
+| `TE_SWEBENCH_REPO` | `$DATA/SWE-bench` |
+| `TOKENECONOMIZER_WEBBENCH_PROJECTS`, `TOKENECONOMIZER_WEBBENCH_TASKS` | as exported in step 3 |
+
+**5. One paid task.** Before a full run, check that one task produces a graded row:
+
+```bash
+AGENT=claude MODEL=claude-sonnet-5 DOMAIN=swebench ARMS=baseline REPOS=sympy/sympy SEEDS=0 \
+  LIMIT=1 DETACH=0 RUNNER=te_harness.swebench:make_runner bash scripts/launch/main_sweep.sh
+```
+
+Its `row.json`, under `$TOKENECONOMIZER_RESULTS/claude_swebench_sonnet5/baseline/sympy_s0/`,
+should show `num_turns` above zero, token counts, and a `resolved` value.
+
+## Running the paper's experiments
+
+`main_sweep.sh` runs Claude Code and the Copilot CLI, `codex_ab.sh` runs Codex. Each command
+below is one lane, one agent and model on one benchmark: every arm it names, on every
+repository or project, with seeds 0, 1 and 2. A lane runs in the background and prints where
+its log is and how to stop it, so the commands in a loop run in parallel. Run a command again
+to resume a lane: cells already finished are skipped. `DRYRUN=1` prints a lane's plan without
+running it, and `DETACH=0` keeps it in the foreground.
+
+The arms, by the names the paper uses:
+
+| Arm | In the paper |
+|---|---|
+| `baseline`, `baseline-medium`, `baseline-low` | default execution at high, medium and low effort |
+| `rtk`, `repomap` | the fixed strategies RTK and RepoMap |
+| `trimech` (`codex-trimech` on Codex) | TokenEconomizer |
+| `trimech-rtk`, `trimech-repomap` (`codex-trimech-…`) | TokenEconomizer+RTK, TokenEconomizer+RepoMap |
+| `inject-only`, `untool-only`, `spiral-only` | micro-skills, tool pruning and the failure-loop guard alone |
+| `trimech-web` | TokenEconomizer on Web-Bench, whose streams are short |
+
+**SWE-Bench: Table 1, Figures 1(b) and 5, and the ablation in Table 2(a).**
+
+```bash
+SWE="baseline baseline-medium baseline-low rtk repomap trimech trimech-rtk trimech-repomap"
+for MODEL in claude-sonnet-5 claude-opus-4-8; do
+  AGENT=claude MODEL=$MODEL DOMAIN=swebench ARMS="$SWE inject-only untool-only spiral-only" \
+    RUNNER=te_harness.swebench:make_runner bash scripts/launch/main_sweep.sh
+done
+AGENT=copilot MODEL=claude-sonnet-5 DOMAIN=swebench ARMS="$SWE" \
+  RUNNER=te_harness.swebench:make_runner bash scripts/launch/main_sweep.sh
+for MODEL in gpt-5.6-terra gpt-5.6-sol; do
+  MODEL=$MODEL DOMAIN=swebench \
+    ARMS="baseline baseline-medium baseline-low rtk repomap codex-trimech codex-trimech-rtk codex-trimech-repomap" \
+    RUNNER=te_harness.swebench:make_runner bash scripts/launch/codex_ab.sh
+done
+```
+
+**Web-Bench: Table 2(b).** The same agent–model settings as on SWE-Bench.
+
+```bash
+for MODEL in claude-sonnet-5 claude-opus-4-8; do
+  AGENT=claude MODEL=$MODEL DOMAIN=webbench ARMS="baseline trimech-web" \
+    RUNNER=te_harness.webbench:make_runner bash scripts/launch/main_sweep.sh
+done
+AGENT=copilot MODEL=claude-sonnet-5 DOMAIN=webbench ARMS="baseline trimech-web" \
+  RUNNER=te_harness.webbench:make_runner bash scripts/launch/main_sweep.sh
+for MODEL in gpt-5.6-terra gpt-5.6-sol; do
+  MODEL=$MODEL DOMAIN=webbench ARMS="baseline codex-trimech" \
+    RUNNER=te_harness.webbench:make_runner bash scripts/launch/codex_ab.sh
+done
+```
+
+**Security benchmarks.** The CredData and ReposVul task sets (`workloads/creddata.json`,
+`workloads/reposvul.json`) and their adapters are included, but this harness does not run or
+grade them.
+
+Every arm, the baseline included, runs behind an answer-key guard that blocks the benchmarks'
+public answers on GitHub. The rtk binary is downloaded into `$DATA/scaffolds`.
+
+## Results
+
+Each lane writes one results tree, `$TOKENECONOMIZER_RESULTS/<agent>_<benchmark>_<model>/`
+(for example `claude_swebench_sonnet5`), with one directory per arm and cell
+(`<arm>/<repository>_s<seed>/`) and a run directory per task holding `row.json`,
+`transcript.jsonl` and `run_config.json`. At the end of a lane, `aggregate.py` writes
+`index/all_rows.csv`, one row per task run, and `index/summary_by_cell.csv`, one row per arm,
+repository and seed; run `python scripts/aggregate.py <tree>` to refresh it. A task run again
+keeps both runs, and the index takes the newest.
+
+```bash
+python scripts/compare_arms.py --baseline <tree>/baseline/<cell> --arm <tree>/<arm>/<cell>
+```
+
+`compare_arms.py` pairs one cell's tasks by instance and reports cost and resolved tasks
+against the baseline. Cost is in cache-aware effective tokens and includes the arm's own model
+calls. Web-Bench rows carry `resolved_p2`, the Pass@2 the paper reports. Never pool two trees:
+the agent and the model are both part of the cost basis.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| a launch prints `RUNNER=stub -- SYNTHETIC run` | `RUNNER` was not set; the stub runs no agent |
+| `ModuleNotFoundError` at grading | the SWE-Bench grader is not installed in the venv the launcher uses (step 2) |
+| every Web-Bench test fails and the app never renders | a non-canonical data path; `readlink -f` it (step 2) |
+| `Executable doesn't exist at …/chromium_headless_shell-…` | Playwright was installed outside a project, so its browser build differs from the one the projects pin (step 3) |
+| Codex gets 401 with a valid key | a key issued for a regional endpoint; set `OPENAI_BASE_URL` in `.env` |
+| a lane needs stopping | `kill -TERM -$(cat <log>.pid)`, as printed at launch; the leading `-` stops the whole process group |

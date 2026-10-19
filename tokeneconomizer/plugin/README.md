@@ -4,13 +4,8 @@ What the plugin's hooks and the `te` command run. The agent launches itself; thi
 only when the agent calls a hook, each call a fresh process, so what is learned lives on disk and
 every handler returns fast and fails open.
 
-| Hook | What happens (`controller.py`) |
-|---|---|
-| SessionStart | inject the repository's micro-skills; mention a pending deny-list proposal; fold any earlier session whose end was missed |
-| UserPromptSubmit | open a prompt-turn for the loop guard |
-| PostToolUse / PostToolUseFailure | fold the call into the turn's guard; redirect or stop when it says so |
-| Stop | close the turn; a turn that ended green feeds the envelope |
-| SessionEnd | fold the session in a detached `te fold` |
+What happens at each hook, and how each agent was verified to behave, is in
+[`docs/PLUGIN.md`](../../docs/PLUGIN.md); `controller.py` implements it.
 
 | Module | |
 |---|---|

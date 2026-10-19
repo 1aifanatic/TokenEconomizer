@@ -34,7 +34,7 @@ The single-mechanism arms use the SAME parameters trimech co-activates, so each 
 ablation of it rather than a separately tuned arm. The external tool scaffolds are
 implemented in `experiments/te_bench/baselines/` and install into the task container; a
 misconfigured one fails at runner construction rather than producing rows that merely look
-like a scaffold result (docs/HARNESS.md, External tool scaffolds).
+like a scaffold result.
 
 The arm tables live next to the code they configure -- `experiments/te_bench/mechanism_arms.py`
 for everything the economizer drives (including the two `trimech-*` integrations, which sit
@@ -45,7 +45,7 @@ entry point the docs point at.
 The heavy task-execution harness (Docker + agent CLI + official gold grading) lives BELOW
 the ``te_bench.runner.AgentRunner`` seam, in the repo's ``te_harness`` package -- the
 one the published rows came from, so ``--runner te_harness.swebench:make_runner`` reproduces
-them as committed (docs/HARNESS.md). Any other harness works the same way: pass
+them as committed. Any other harness works the same way: pass
 ``--runner module:factory`` (a zero-arg callable returning an AgentRunner). ``--runner stub``
 selects the built-in offline StubRunner used by the smoke test -- it writes a synthetic
 transcript and a plausible row so the full facade -> aggregate -> figures pipeline can be
@@ -59,7 +59,7 @@ Usage:
 Placeholders (env vars): the driver reads a --tasks-file JSON list per domain
 (TOKENECONOMIZER_SWEBENCH_TASKS / _WEBBENCH_TASKS / _CREDDATA_TASKS / _REPOSVUL_TASKS); the
 adapters + harness separately read the dataset roots (_WEBBENCH_PROJECTS / _CREDDATA_ROOT /
-_REPOSVUL_ROOT / _CYBERGYM_SUITE). See docs/BENCHMARKS.md. The results root is git-ignored.
+_REPOSVUL_ROOT). See README.md. The results root is git-ignored.
 """
 import argparse
 import collections
@@ -217,16 +217,14 @@ def load_runner(spec, agent, model=None, scaffold=None):
 
 def load_adapter(name, tasks_file, repo=""):
     from te_bench.adapters import (
-        SwebenchAdapter, WebBenchAdapter, CredDataAdapter, ReposVulAdapter,
-        CyberGymAdapter)
+        SwebenchAdapter, WebBenchAdapter, CredDataAdapter, ReposVulAdapter)
     if name == "swebench":
         return SwebenchAdapter(tasks_path=tasks_file)
     if name == "webbench":
         # the Web-Bench project (= one stream) is selected by --repo; the per-task judge
         # then reads <projects>/<project>/tasks.jsonl. Defaults to 'dom' if --repo is unset.
         return WebBenchAdapter(repo.split("/")[-1] or "dom")
-    return {"creddata": CredDataAdapter, "reposvul": ReposVulAdapter,
-            "cybergym": CyberGymAdapter}[name]()
+    return {"creddata": CredDataAdapter, "reposvul": ReposVulAdapter}[name]()
 
 
 def workload_ids(workload_file, repo):
@@ -337,10 +335,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0, help="cap tasks (0 = all)")
     ap.add_argument("--adapter", default="swebench",
-                    choices=["swebench", "webbench", "creddata", "reposvul", "cybergym"])
+                    choices=["swebench", "webbench", "creddata", "reposvul"])
     ap.add_argument("--tasks-file", required=True,
                     help="JSON list of {instance_id, problem_statement, repo} (a placeholder "
-                         "you point at your dataset export; see docs/BENCHMARKS.md)")
+                         "you point at your dataset export; see README.md)")
     ap.add_argument("--workload", default="",
                     help="workloads/<domain>.json manifest naming the exact evaluated "
                          "instances; --tasks-file is filtered to it (and to --repo's group). "

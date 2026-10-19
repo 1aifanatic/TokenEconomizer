@@ -23,7 +23,7 @@ resolving to whichever machine happened to write this file):
   ANTHROPIC_API_KEY      Anthropic API key. REQUIRED: the Claude lane bills
                          api.anthropic.com directly and nothing else. ANTHROPIC_BASE_URL
                          and ANTHROPIC_AUTH_TOKEN are not inputs -- see resolve_anthropic_key
-  ANTHROPIC_MODEL        agent model            (default claude-opus-5)
+  ANTHROPIC_MODEL        agent model            (default claude-sonnet-5)
   (no optimizer-model knob: the between-task proposer/judge/nudge-writer runs on the
    AGENT'S OWN model, against the agent's own endpoint. TE_OPTIMIZER_MODEL is refused.)
   TE_CLAUDE_BIN          host claude binary     (default: resolved from `which claude`)
@@ -440,8 +440,8 @@ def _import_swebench():
 # An agent that can browse is therefore not solving the task, it is retrieving the answer,
 # and the resolve verdict measures nothing.
 #
-# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across the live
-# claude-opus-5 / claude-sonnet-5 trees, 32 tasks reached the network and 14 pulled
+# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across two live
+# development trees, 32 tasks reached the network and 14 pulled
 # something patch-shaped -- `sympy/pulls/16597/files`, `django/commit/2cbd3967.patch`,
 # `sphinx-doc/commit/0eff5818.patch`, `svg-chart/test/task-4.spec.js` -- and 13 of those
 # scored RESOLVED. The published claude-opus-4.8 trees are clean (0 of 800 transcripts),
@@ -555,7 +555,7 @@ class ClaudeSwebenchRunner:
 
     def __init__(self, agent="claude", model=None, grading_path=None, scaffold=None):
         self.agent = agent
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
         # The Anthropic API directly, on ANTHROPIC_API_KEY -- the one endpoint this lane
         # bills. There is no argument for it: see resolve_anthropic_key.
         self.api_key = resolve_anthropic_key()
@@ -1966,7 +1966,7 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
         ~/.copilot, whose short-lived token is only refreshed when a copilot process runs
         on the HOST. On a long unattended sweep that token goes stale and every later
         container fast-fails with an empty patch, so keep a host-side keepalive running
-        (docs/COPILOT.md) or set COPILOT_GITHUB_TOKEN.
+        or set COPILOT_GITHUB_TOKEN.
     """
 
     # Copilot reads project instructions from .github/copilot-instructions.md, takes an
@@ -2248,7 +2248,7 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
             raise RuntimeError(
                 f"copilot refused this configuration: {bad}\n"
                 f"  model={self.model!r} effort={self.effort!r}\n"
-                "  fix COPILOT_MODEL / TE_EFFORT_LEVEL (see docs/COPILOT.md step 2); "
+                "  fix COPILOT_MODEL / TE_EFFORT_LEVEL; "
                 "COPILOT_MODEL=auto always works but does not apply an effort level.")
 
         log_text = _run(["docker", "exec", name, "bash", "-lc",
@@ -2562,8 +2562,7 @@ class CodexSwebenchRunner(ClaudeSwebenchRunner):
         the CLI: those probes keyed the event kebab-case (`pre-tool-use`; Codex reads
         PascalCase `PreToolUse`, as Claude Code does), gave the handler an argv list rather
         than a command string, and ran without the trust bypass. Codex rows stored before
-        2026-09-30 therefore ran without the hook, guarded by the hosts block alone
-        (docs/HARNESS.md, "The answer-key guard").
+        2026-09-30 therefore ran without the hook, guarded by the hosts block alone.
 
         The rest is the shared lifecycle's: the script is copied in, the interpreter found,
         and the guard made to refuse its probe before the lane reports itself armed.

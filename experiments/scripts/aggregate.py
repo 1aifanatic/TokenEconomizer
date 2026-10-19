@@ -182,7 +182,7 @@ def vendor_usd(d):
 
 # Agents that never report a per-task dollar figure at all: Copilot meters premium
 # requests and Codex bills a subscription, so a null `cost_usd_vendor` on those lanes is
-# the documented normal case (docs/COPILOT.md), not a defect. Matched on the agent prefix,
+# the normal case, not a defect. Matched on the agent prefix,
 # so a suffixed label is covered without a new entry.
 AGENTS_WITHOUT_VENDOR_USD = ("copilot", "codex")
 

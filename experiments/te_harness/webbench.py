@@ -41,7 +41,7 @@ Environment (all optional except the key; see the repo's .env / .env.example):
                          and ANTHROPIC_AUTH_TOKEN are not inputs, and are removed from the
                          agent's environment (swebench.resolve_anthropic_key,
                          swebench.agent_credential_env -- shared with that domain)
-  ANTHROPIC_MODEL        agent model            (default claude-opus-5)
+  ANTHROPIC_MODEL        agent model            (default claude-sonnet-5)
   (no optimizer-model knob: the between-task proposer/judge/nudge-writer runs on the
    AGENT'S OWN model, against the agent's own endpoint. TE_OPTIMIZER_MODEL is refused.)
   TE_CLAUDE_BIN          host claude binary     (default: resolved from `which claude`)
@@ -277,8 +277,8 @@ def _ignored(rel, globs):
 # An agent that can browse is therefore not solving the task, it is retrieving the answer,
 # and the resolve verdict measures nothing.
 #
-# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across the live
-# claude-opus-5 / claude-sonnet-5 trees, 32 tasks reached the network and 14 pulled
+# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across two live
+# development trees, 32 tasks reached the network and 14 pulled
 # something patch-shaped -- `sympy/pulls/16597/files`, `django/commit/2cbd3967.patch`,
 # `sphinx-doc/commit/0eff5818.patch`, `svg-chart/test/task-4.spec.js` -- and 13 of those
 # scored RESOLVED. The published claude-opus-4.8 trees are clean (0 of 800 transcripts),
@@ -303,7 +303,7 @@ def _ignored(rel, globs):
 #
 # The cap is COOPERATIVE -- checked between lines of the CLI's stream, so a turn already in
 # flight runs to completion. The ceiling is therefore `cap + longest single turn`, measured
-# at +16s on claude-opus-4.8 and +21s on claude-opus-5. So the ceiling must sit well below
+# at +16s and +21s on two Claude models. So the ceiling must sit well below
 # 300, not just under it: the default leaves ~60s for the overshoot and the hard max ~40s.
 # A 290 max would have allowed 290+21 = 311s, i.e. straight back over the wall.
 # 2026-09-21: the "no configuration above ~300s can help" above is true of WEB-BENCH's
@@ -622,7 +622,7 @@ class WebBenchRunner:
 
     def __init__(self, agent="claude", model=None, repo=None, scaffold=None):
         self.agent = agent
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
         # The Anthropic API directly, on ANTHROPIC_API_KEY -- one resolver, shared with the
         # SWE-bench runner so the two domains cannot drift apart about what they bill.
         self.api_key = resolve_anthropic_key()
@@ -685,8 +685,8 @@ class WebBenchRunner:
         # so our reply lands on a closed socket (BrokenPipeError out of do_POST), the answer
         # is DISCARDED, and the task is scored a pass@1 miss for a plumbing reason. Worse,
         # it burns a retry -- and when it burns the LAST retry the evaluator ends the whole
-        # stream, so every later task comes back UNREACHED. Measured 2026-09-07 on
-        # claude-opus-5: threejs/task-14 2nd attempt clipped at
+        # stream, so every later task comes back UNREACHED. Measured 2026-09-07 in a
+        # development run: threejs/task-14 2nd attempt clipped at
         # Request 300.858s and took tasks 15-20 down with it; svg-chart hit the same wall
         # from task-6 on. The old 1800s default predated a model slow enough to reach it.
         self.task_timeout = webbench_task_timeout()
@@ -1404,8 +1404,7 @@ class WebBenchRunner:
         # Scaffold provenance (rtk_installed / rtk_hook_registered / scaffold_error / ...).
         # A failed install ran the task NATIVE, so these fields are what tells a real
         # scaffold row from a baseline row wearing a scaffold's name -- filter on them
-        # before quoting a scaffold arm's mean (docs/HARNESS.md, "External tool
-        # scaffolds").
+        # before quoting a scaffold arm's mean.
         if scaffold_notes:
             row.update(scaffold_notes)
             row["scaffold"] = self.scaffold.name
@@ -1898,7 +1897,7 @@ class CopilotWebBenchRunner(WebBenchRunner):
             raise RuntimeError(
                 f"copilot refused this configuration: {bad}\n"
                 f"  model={self.model!r} effort={self.effort!r}\n"
-                "  fix COPILOT_MODEL / TE_EFFORT_LEVEL (see docs/COPILOT.md step 2).")
+                "  fix COPILOT_MODEL / TE_EFFORT_LEVEL.")
 
         log_text = copilot.read_log_dir(logdir)
         usage = copilot.row_usage("\n".join(stream_lines), log_text)
@@ -2115,7 +2114,7 @@ class CodexWebBenchRunner(WebBenchRunner):
         ran and logged it, while a control command ran. Without the bypass Codex skips every
         hook nobody has approved in /hooks, which an unattended run cannot do -- so arming
         here is what turns the bypass on in `_segment`. The namespace hosts block stays the
-        primary layer (docs/HARNESS.md, "The answer-key guard").
+        primary layer.
         """
         self._net_guard_armed = bool(super()._install_net_guard(home, run_dir_path))
         return self._net_guard_armed
@@ -2399,6 +2398,5 @@ def make_runner(agent=None, scaffold=None, **kwargs):
             f"the {scaffold!r} baseline is not wired for Web-Bench "
             f"(supported: {', '.join(sorted(WEBBENCH_SCAFFOLDS))}). Web-Bench runs the "
             f"agent on the HOST with no per-task repo container, and the repo map "
-            f"generates a PYTHON symbol map that a Node/TypeScript project does not have. "
-            f"See docs/HARNESS.md, \"External tool scaffolds\".")
+            f"generates a PYTHON symbol map that a Node/TypeScript project does not have.")
     return RUNNERS[agent](agent=agent, scaffold=scaffold, **kwargs)

@@ -34,8 +34,8 @@ te_load_env() {
 
 # te_dryrun_skips_billed <what> — true when this is a DRYRUN, so a BILLED probe must not run.
 #
-# A dry run is the gesture the run book teaches for costing a lane before spending anything
-# (docs/RUNNING.md section 2), so a probe that BILLS during one contradicts the whole
+# A dry run is how a lane is costed before spending anything, so a probe that BILLS during
+# one contradicts the whole
 # point: DRYRUN=1 on a Copilot lane used to spend up to three premium requests and ~240 s
 # before printing "nothing was run".
 te_dryrun_skips_billed() {
@@ -125,7 +125,7 @@ te_model_tag() {
 # nothing when the id has only one spelling.
 #
 #   claude-opus-4-8  -> claude-opus-4.8        claude-haiku-4.5 -> claude-haiku-4-5
-#   claude-opus-5    -> (empty)                claude-sonnet-5  -> (empty)
+#   claude-sonnet-5  -> (empty)
 #
 # Two catalogs serve the same model under two spellings: the Copilot CLI's own list uses
 # a DOT (`claude-opus-4.8`, measured healthy on 63 stored subscription rows), while the
@@ -149,8 +149,8 @@ te_model_alt_spelling() {
 # native catalog on a subscription (`claude-opus-4.8`), so a copilot lane gets the dotted
 # form there -- and only there: under Copilot BYOK the CLI speaks the Anthropic wire API,
 # which takes the dash. Any other agent is normalised TO the dash, so a dotted id typed from
-# an older doc cannot 404 once per task. Ids with a single spelling (`claude-opus-5`,
-# `claude-sonnet-5`) pass through untouched, as does anything that is not a versioned
+# an older doc cannot 404 once per task. Ids with a single spelling (`claude-sonnet-5`)
+# pass through untouched, as does anything that is not a versioned
 # Claude id. te_check_copilot_model still VERIFIES the result against the CLI and switches
 # back if a vendor rotates a catalog, so this is a default, not a bet.
 te_model_for_agent() {
@@ -274,7 +274,7 @@ te_copilot_refused_die() {
   echo "   turns=1 / eff_tok=0 rows." >&2
   echo "   Wait for the quota to reset, or run the Copilot CLI on your own provider:" >&2
   echo "     COPILOT_PROVIDER_TYPE=anthropic COPILOT_PROVIDER_BASE_URL=https://api.anthropic.com \\" >&2
-  echo "     COPILOT_PROVIDER_API_KEY=... (docs/COPILOT.md, BYOK)" >&2
+  echo "     COPILOT_PROVIDER_API_KEY=...   (see README.md)" >&2
   exit 2
 }
 
@@ -289,7 +289,7 @@ te_copilot_refused_die() {
 # ~/.copilot/config.json only when a copilot process RUNS on the host, so on a box that has
 # been idle a while the FIRST invocation can report "No authentication information found"
 # and warm the token as a side effect. The probe therefore doubles as the warm-up -- and
-# for a long unattended sweep you still want the keepalive loop (docs/COPILOT.md).
+# for a long unattended sweep on the subscription, keep the token warm (or use BYOK).
 te_check_copilot_auth() {
   local bin="${COPILOT_HOST_BIN:-$HOME/.local/bin/copilot}" out ok=0
   command -v "$bin" >/dev/null 2>&1 || [[ -x "$bin" ]] || bin="$(command -v copilot || true)"
@@ -409,11 +409,11 @@ te_check_copilot_model() {
       echo "!! copilot model '$model' is not served by the BYOK provider at $COPILOT_PROVIDER_BASE_URL." >&2
       echo "   $(printf '%s' "$out" | grep -i 'not found on provider' | head -1)" >&2
       echo "   Under COPILOT_PROVIDER_TYPE=anthropic the provider takes Anthropic's own ids" >&2
-      echo "   (claude-opus-4-8, claude-sonnet-5, claude-opus-5); pin one it serves." >&2
+      echo "   (claude-sonnet-5, claude-opus-4-8); pin one it serves." >&2
     else
       echo "!! copilot model '$model' is not available on this subscription." >&2
       echo "   pick one it serves, or set COPILOT_MODEL=auto (which cannot apply an" >&2
-      echo "   effort level -- see docs/COPILOT.md step 2)." >&2
+      echo "   effort level)." >&2
     fi
     exit 2
   fi

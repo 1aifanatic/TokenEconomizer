@@ -430,59 +430,88 @@ CODEX_PUBLISHED_ARMS = frozenset({
 })
 
 
-def _doc(name):
+def _readme():
     import os
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return open(os.path.join(repo, "docs", name)).read()
+    return open(os.path.join(repo, "README.md"), encoding="utf-8").read()
 
 
-def _section(text, start, end=None):
-    i = text.index(start)
-    return text[i:text.index(end, i + 1)] if end else text[i:]
-
-
-def _table_arms(sec):
-    """The arm names a run-book table lists, one per row, in order."""
+def _launches():
+    """Each launcher call in the README's command blocks: (script, {VAR: value}), with the
+    block's own shell variables (`SWE="..."`, a loop's `$MODEL`) expanded the way bash would."""
     import re
-    return re.findall(r"^\| `([a-z0-9-]+)` \|", sec, re.M)
+    import shlex
+    out = []
+    for block in re.findall(r"```bash\n(.*?)```", _readme(), re.S):
+        text = re.sub(r"\\\n\s*", " ", block)
+        names = {}
+        for line in text.splitlines():
+            line = re.sub(r"#.*$", "", line).strip()
+            for loop in re.findall(r"for (\w+) in ([^;]+);", line):
+                names[loop[0]] = loop[1].split()[0]
+            if not re.search(r"scripts/launch/(main_sweep|codex_ab)\.sh", line):
+                for key, val in re.findall(r'^(\w+)="([^"]*)"$', line):
+                    names[key] = val
+                continue
+            line = re.sub(r"^.*?\bdo\b\s*", "", line) if line.startswith("for ") else line
+            line = re.sub(r"\$(\w+)", lambda m: names.get(m.group(1), m.group(0)), line)
+            env = {}
+            for tok in shlex.split(line):
+                if "=" in tok and tok.split("=", 1)[0].isupper():
+                    k, v = tok.split("=", 1)
+                    env[k] = v
+            script = re.search(r"scripts/launch/(\w+)\.sh", line).group(1)
+            out.append((script, env))
+    return out
 
 
-def _loop_arms(sec):
-    """The arm names a run-book command block launches, through `ARMS=` or a `for ARM` loop."""
+def test_every_arm_the_readme_launches_is_registered_and_planned():
+    """An arm named in a command but absent from the registry is a doc promising something
+    nobody implemented; one absent from the plan gets "the plan is empty" at launch."""
+    launches = _launches()
+    assert {s for s, _ in launches} == {"main_sweep", "codex_ab"}, launches
+    for script, env in launches:
+        arms = env.get("ARMS", "").split()
+        assert arms, (script, env)
+        for arm in arms:
+            assert arm in RX.ARMS, f"the README launches {arm!r}, which is not registered"
+        if script == "main_sweep":
+            planned = set(SP.SWEEP_ARMS[env.get("DOMAIN", "swebench")])
+            assert set(arms) <= planned, f"{sorted(set(arms) - planned)} are not planned"
+        else:
+            assert set(arms) <= CODEX_PUBLISHED_ARMS, sorted(set(arms) - CODEX_PUBLISHED_ARMS)
+
+
+def test_every_readme_launch_uses_the_runner_of_its_domain():
+    """A Web-Bench command carrying the SWE-bench factory runs the wrong lifecycle against the
+    right ids; the launcher refuses it, but a reader would have copied it."""
+    import os
+    for script, env in _launches():
+        domain = env.get("DOMAIN", "swebench")
+        assert env.get("RUNNER") == f"te_harness.{domain}:make_runner", (script, env)
+        if "WORKLOAD" in env:
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                env["WORKLOAD"])
+            assert os.path.isfile(path), env["WORKLOAD"]
+
+
+def test_the_readme_arm_table_names_only_registered_arms():
     import re
-    names = set()
-    for group in re.findall(r'ARMS="([a-z0-9\- ]+)"', sec):
-        names |= set(group.split())
-    for group in re.findall(r"for ARM in ([a-z0-9\- \\\n]+?);", sec):
-        names |= set(group.replace("\\", " ").split())
-    return names
-
-
-# The run book's lanes: the Claude Code / Copilot section and the Codex section, each split
-# into one swebench and one webbench subsection.
-_GENERIC = ("## 4. Claude Code and Copilot", "## 5. Codex")
-_CODEX = ("## 5. Codex", "## 6.")
+    text = _readme()
+    table = text[text.index("| Arm | In the paper |"):]
+    table = table[:table.index("\n\n")]
+    named = set(re.findall(r"`([a-z0-9-]+)`", table)) - {"codex-trimech-"}
+    assert named, "no arms parsed out of the README's arm table"
+    for arm in named:
+        assert arm in RX.ARMS, f"the README's arm table lists {arm!r}, which is not registered"
 
 
 def test_the_codex_lane_publishes_exactly_one_arm_per_mechanism():
-    """Checked both ways, because both failures have happened here.
-
-    Every published arm must appear in the catalog -- it drifted twice, once missing the
-    effort baselines and once missing `repomap`. And every arm the catalog names must be
-    registered and published: a doc promising an arm nobody implemented is one failure, a doc
-    quietly re-offering a dropped ablation beside the mechanism it ablates is the other.
-    """
-    codex = _section(_doc("RUNNING.md"), *_CODEX)
-    sb = _section(codex, "### swebench", "### webbench")
-    named = set(_table_arms(sb))
-    assert named == CODEX_PUBLISHED_ARMS, (
-        f"catalog names {sorted(named)}, published set is {sorted(CODEX_PUBLISHED_ARMS)}")
-    assert _loop_arms(sb) == named, "the swebench command launches a different arm set"
-    wb = _section(codex, "### webbench")
-    assert _loop_arms(wb) == set(_table_arms(wb)), "the webbench command and table disagree"
-    invented = sorted(n for n in named | set(_table_arms(wb)) if n not in RX.ARMS)
-    assert not invented, f"the catalog names arms that do not exist: {invented}"
-    cfgs = {n: RX.ARMS[n].cfg() for n in named}
+    """Every published Codex arm is registered, and each mechanism has exactly one arm that
+    runs it alone -- a dropped ablation must not come back beside the mechanism it ablates."""
+    invented = sorted(n for n in CODEX_PUBLISHED_ARMS if n not in RX.ARMS)
+    assert not invented, f"published arms that do not exist: {invented}"
+    cfgs = {n: RX.ARMS[n].cfg() for n in CODEX_PUBLISHED_ARMS}
     one = lambda mech: sorted(
         n for n, c in cfgs.items()
         if getattr(c, mech).enabled and not any(
@@ -490,83 +519,6 @@ def test_the_codex_lane_publishes_exactly_one_arm_per_mechanism():
     assert one("injection") == ["codex-inject"]
     assert one("tooling") == ["codex-untool"]
     assert one("spiral") == ["codex-spiral"]
-
-
-def test_every_arm_the_generic_lanes_launch_is_registered_and_planned():
-    """The Claude Code and Copilot lanes launch through `main_sweep.sh`, which plans cells from
-    `sweep_plan.SWEEP_ARMS`. An arm named in the book but absent from the plan gets "the plan is
-    empty" at launch; one absent from the registry is a doc promising something nobody
-    implemented."""
-    generic = _section(_doc("RUNNING.md"), *_GENERIC)
-    sb = set(_table_arms(_section(generic, "### swebench", "### webbench")))
-    wb = set(_table_arms(_section(generic, "### webbench", "### The frontier lane")))
-    assert sb, "no swebench arms parsed"
-    for arm in sb | wb:
-        assert arm in RX.ARMS, f"the run book lists {arm!r}, which is not registered"
-    # the swebench catalog IS the planned set, and so is the webbench one
-    assert sb == set(SP.SWEEP_ARMS["swebench"]), (
-        f"swebench catalog {sorted(sb)} != plan {sorted(SP.SWEEP_ARMS['swebench'])}")
-    assert wb == set(SP.SWEEP_ARMS["webbench"]), (
-        f"webbench catalog {sorted(wb)} != plan {sorted(SP.SWEEP_ARMS['webbench'])}")
-    frontier = _loop_arms(_section(generic, "### The frontier lane"))
-    for arm in frontier:
-        assert arm in RX.ARMS, f"the frontier lane launches unregistered arm {arm!r}"
-
-
-def test_each_lane_splits_its_commands_by_domain():
-    """Both lanes present SWE-bench and Web-Bench as two separate subsections, each with its
-    own table and its own command, so a reader can follow it top to bottom.
-
-    The runner check is the other half -- a Web-Bench command carrying the SWE-bench factory
-    runs the wrong lifecycle against the right ids, which the launcher refuses but a reader
-    would have copied.
-    """
-    import re
-    text = _doc("RUNNING.md")
-    for lane in (_GENERIC, _CODEX):
-        sec = _section(text, *lane)
-        heads = [(m.start(), m.group(0)) for m in
-                 re.finditer(r"^### (swebench|webbench) — \d+ arms$", sec, re.M)]
-        kinds = [("webbench" if "webbench" in h else "swebench") for _, h in heads]
-        assert kinds == ["swebench", "webbench"], f"{lane[0]}: got {heads}"
-        for i, (start, head) in enumerate(heads):
-            body = sec.index("\n", start)
-            nxt = re.search(r"^#{2,3} ", sec[body:], re.M)
-            stop = body + nxt.start() if nxt else len(sec)
-            sub = sec[start:stop]
-            domain = kinds[i]
-            entries = _table_arms(sub)
-            assert entries and len(entries) == len(set(entries)), f"{lane[0]}/{domain}"
-            claimed = int(re.search(r"(\d+) arms", head).group(1))
-            assert claimed == len(entries), f"{head!r} but {len(entries)} entries"
-            wrong = "swebench" if domain == "webbench" else "webbench"
-            assert f"te_harness.{domain}:make_runner" in sub, f"{lane[0]}/{domain}"
-            assert f"te_harness.{wrong}:make_runner" not in sub, f"{lane[0]}/{domain}"
-
-
-def test_the_harness_scaffold_table_names_every_arm_that_carries_each_scaffold():
-    """docs/HARNESS.md maps scaffold -> arms. It is the table a reader consults to find out
-    which arms need `aider` on the host or the staged rtk binary, so an arm missing from it
-    reads as needing nothing. It went stale twice in one day, both times when a Codex
-    sibling arm was added, so pin it against the registry rather than against a copy."""
-    import re
-    from te_bench import baselines
-    text = _doc("HARNESS.md")
-    table = text[text.index("| Scaffold | Arms |"):]
-    table = table[:table.index("\n\n")]
-    listed = {}
-    for line in table.splitlines():
-        cells = [c.strip() for c in line.split("|")]
-        if len(cells) < 4 or not cells[1].startswith("`"):
-            continue
-        scaffold = cells[1].strip("`")
-        listed[scaffold] = set(re.findall(r"`([a-z0-9-]+)`", cells[2]))
-    assert listed, "no scaffold rows parsed out of docs/HARNESS.md"
-    for scaffold, arms in listed.items():
-        real = {a for a, s in baselines.ARM_SCAFFOLDS.items() if s == scaffold}
-        assert arms == real, (
-            f"HARNESS.md lists {scaffold!r} arms as {sorted(arms)}, "
-            f"but ARM_SCAFFOLDS says {sorted(real)}")
 
 
 def test_the_published_spiral_arm_is_the_defensive_profile():
@@ -587,15 +539,23 @@ def test_the_published_spiral_arm_is_the_defensive_profile():
     assert RX.ARMS["codex-spiral-defensive"].cfg().spiral == sp
 
 
-def test_the_codex_lane_uses_the_whole_evaluated_workload_not_one_repo():
-    """`codex_ab.sh` defaults to one repository, so the run book must name them all or a
-    6-repo sweep quietly becomes a 1-repo one."""
+def test_the_codex_lane_runs_the_whole_evaluated_workload_by_default():
+    """`codex_ab.sh` without REPOS plans every group of its workload, so the README's Codex
+    commands cannot quietly become a one-repository sweep."""
+    import os
+    import subprocess
     from te_bench import workloads
-    codex = _section(_doc("RUNNING.md"), *_CODEX)
-    for group in workloads.task_counts("swebench"):
-        assert group in codex, f"{group} is in the evaluated workload but not in the run book"
-    for project in workloads.task_counts("webbench"):
-        assert project in codex, f"{project} is an evaluated project but not in the run book"
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for domain in ("swebench", "webbench"):
+        env = dict(os.environ, DRYRUN="1", ARMS="baseline", DOMAIN=domain, RUNNER="stub",
+                   TASKS_FILE=os.devnull, SEEDS="0",
+                   TOKENECONOMIZER_ENV_FILE=os.path.join(repo, "no-such.env"))
+        env.pop("REPOS", None)
+        out = subprocess.run(["bash", os.path.join(repo, "scripts", "launch", "codex_ab.sh")],
+                             env=env, capture_output=True, text=True, check=True).stdout
+        planned = {line.split("\t")[1] for line in out.splitlines()
+                   if line.startswith("  baseline\t")}
+        assert planned == set(workloads.task_counts(domain)), (domain, planned)
 
 
 def test_codex_trimech_rtk_is_codex_trimech_with_the_scaffold_and_nothing_else():

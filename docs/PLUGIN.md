@@ -1,19 +1,11 @@
-# The plugin — the three mechanisms in your own agent sessions
+# The plugin: design and verified agent behaviour
 
-The experiments in this repository hold a sealed agent fixed and run it, headless, over streams
-of benchmark tasks. This document is about the other way to use the same controller: as a
-**plugin** that runs inside the sessions you already have — Claude Code, Codex, the GitHub
-Copilot CLI and Pi — through the hooks (or, on Pi, the extension events) the agent exposes.
-
-It covers what the plugin does at each hook, what changes relative to the experimental setting
-and why, the agent behaviour each design choice rests on, how to install and configure it, and
-what is not done yet. The code is `tokeneconomizer/plugin/` (the runtime the hooks run) on top of
-the three mechanism packages (`microskills`, `toolprune`, `loopguard`), and `plugin/` (the host
-packaging).
-
-> **The plugin ships the mechanisms, not results.** The experiments ran on sealed, headless,
-> graded SWE-bench / Web-Bench streams; a real session is interactive, has no grader, and
-> differs in the ways listed in §2. Each mechanism can be switched off on its own (§5).
+How the plugin runs the three mechanisms inside your own Claude Code, Codex, Copilot CLI and Pi
+sessions, through the hooks (on Pi, the extension events) each agent exposes: what it does at
+each hook, what differs from the experiments and why, the agent behaviour each choice rests on,
+where its state lives, and its known limitations. The code is `tokeneconomizer/plugin/` (what
+the hooks run) and `plugin/` (the packaging for each agent). To install and use it, see
+[`plugin/README.md`](../plugin/README.md).
 
 ---
 
@@ -70,7 +62,7 @@ Every hook fails open: any error becomes an empty output (no change) and a trace
 ## 3. Verified agent behaviour
 
 What the code relies on about each agent, and how it was checked. Each block names the version
-and date it was verified on; §7 says what has not been exercised.
+and date it was verified on; §5 says what has not been exercised.
 
 **Claude Code 2.1.286 — verified with a local plugin (`--plugin-dir`) on Haiku, 2026-09-30:**
 
@@ -128,6 +120,10 @@ isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`; 2026-09-30):
   variables, which is why the host is detected from the payload (`turn_id`), never the env.
 * `CODEX_HOME` under `/tmp` makes Codex refuse to install its helper binaries, and its sandbox then
   fails every command (`codex-linux-sandbox: No such file`); keep it out of temporary dirs.
+* Codex also turns a plugin's `commands/` folder into skills of its own (`source-command-status`,
+  …), which listed every command twice in its skill picker beside `codex-skills/`. The slash
+  commands therefore live in `slash-commands/`, which the Claude Code and Copilot manifests name
+  and Codex does not read (verified 2026-10-17).
 
 Hooks are **trust-gated**: skipped until approved in `/hooks` (stored as
 `[hooks.state.<key>].trusted_hash`), unless the run passes `--dangerously-bypass-hook-trust`.
@@ -184,7 +180,9 @@ feature flags):
   `paid_model`, else a concrete `COPILOT_MODEL`, else `claude-haiku-4-5` on an Anthropic
   provider. It answered, and was priced from its own session log. The local capture behind
   `refresh-catalog` and `measure` mimics the person's model family, so it records the same
-  built-in tools (`edit`/`create` for Claude models, not `apply_patch`).
+  built-in tools (`edit`/`create` for Claude models, not `apply_patch`). Copilot 1.0.83 does not
+  pass its `COPILOT_PROVIDER_*` variables to the hooks, so with BYOK set through them the side
+  calls run signed out; they answer nothing and say so in `errors.log`.
 
 **GitHub Copilot CLI 1.0.83 — verified live, 2026-10-07**, against a scripted OpenAI-compatible
 endpoint on localhost (Copilot's BYOK mode, `COPILOT_PROVIDER_BASE_URL`). Every request the CLI
@@ -308,125 +306,7 @@ needed sessions that edited different files and, once injected, decayed (the fol
 what the session was given); a Codex install copy had no package; side calls failed silently
 and left sessions in Claude Code's history; `te` without `--host` showed Claude Code's state.
 
-## 4. Install
-
-The plugin directory is `plugin/`; the repository root is also a Claude Code marketplace
-(`.claude-plugin/marketplace.json`). Requires Python ≥ 3.10 on `PATH` (or `TE_PYTHON`).
-
-**Claude Code, from a checkout**
-(`git clone https://github.com/microsoft/TokenEconomizer.git`). This loads in place,
-so edits apply at the next session. Then run `/tokeneconomizer:toolprune refresh-catalog` once on
-the machine (the catalog is per machine); without it, evidence pruning sees only deferred tools:
-
-```bash
-claude --plugin-dir /path/to/TokenEconomizer/plugin          # one session
-# or, persistently:
-/plugin marketplace add /path/to/TokenEconomizer
-/plugin install tokeneconomizer@tokeneconomizer
-```
-
-**From a bundle** — a marketplace install that copies the plugin directory finds the package in
-the checkout it came from, so that checkout must stay. For a copy that carries the package itself,
-`python3 scripts/build_plugin.py` writes a self-contained marketplace to
-`dist/marketplace/` (add it with `/plugin marketplace add`, publish it as a branch or repository,
-or `--zip` it for `claude --plugin-url`).
-
-**Codex** — the plugin carries `.codex-plugin/plugin.json`, `hooks/codex-hooks.json` and, as
-Codex has no plugin slash commands, its commands as Codex skills (`codex-skills/`:
-`tokeneconomizer-status`, `-microskills`, `-toolprune`, `-config`, each running the matching
-`te --host codex` command). Codex 0.153.1 also turns a plugin's `commands/` folder into skills
-(`source-command-status`, …), which listed every command twice in its skill picker; the slash
-commands therefore live in `slash-commands/`, which the Claude Code and Copilot manifests name and
-Codex does not read. Codex copies an installed plugin; the copy finds the package in the
-checkout it was added from (or carries it, from the bundle):
-
-```bash
-codex plugin marketplace add /path/to/TokenEconomizer
-codex plugin add tokeneconomizer@tokeneconomizer
-# self-contained instead: python3 scripts/build_plugin.py --out ~/te-marketplace, and add that
-```
-
-Then approve its hooks once in the TUI (headless runs: `codex exec
---dangerously-bypass-hook-trust`, for automation that vets its hook sources). Verified end to
-end on 0.153.1 (2026-10-08, in an isolated `CODEX_HOME`): the bundle installs as a copy with the
-package in `lib/`. Until trusted, the hooks do not run, and a session leaves no plugin
-state. At start the TUI says "Hooks need review: 5 hooks are new or changed". Its hooks screen
-lists the plugin's five hooks; `t` trusts all, recorded as
-`[hooks.state."tokeneconomizer@tokeneconomizer:hooks/codex-hooks.json:…"] trusted_hash`.
-After that, a plain `codex exec` ran them, folded and priced the session, and wrote
-`~/.tokeneconomizer/bin/te` pointing into the plugin cache. Through that launcher, `toolprune
-apply` removed sub-agents, goals and the image viewer from the next live session, by the
-model's own report, and `restore` gave them back. The deny list
-(`te --host codex toolprune …`) writes the project's `.codex/config.toml`, which Codex reads only
-once you trust the project.
-
-**Copilot CLI** — the plugin carries `.github/plugin/plugin.json` and `hooks/copilot-hooks.json`.
-Copilot loads a local marketplace in place, so the checkout itself is the install:
-
-```bash
-copilot plugin marketplace add /path/to/TokenEconomizer
-copilot plugin install tokeneconomizer@tokeneconomizer
-/tokeneconomizer:toolprune refresh-catalog       # in Copilot, once: the tools a session loads
-```
-
-Copilot runs the plugin's slash commands in its interactive mode, not under `copilot -p` (its
-notices show in both). From a terminal, use `~/.tokeneconomizer/bin/te --host copilot <command>`
-(or `plugin/scripts/te`; in Copilot's own shell, `te` detects Copilot without `--host`).
-Copilot does not pass its environment's `COPILOT_PROVIDER_*` variables to the hooks (1.0.83), so
-under BYOK set through them the paid side calls run signed out; they answer nothing and say so in
-errors.log.
-
-**Pi** — the repository root is a Pi package (`package.json` → `pi.extensions` →
-`plugin/pi/tokeneconomizer.ts`), and so is `plugin/` on its own, for the bundle. A git source
-clones the repository and loads it from its root, as a local path does:
-
-```bash
-pi install git:github.com/microsoft/TokenEconomizer      # what a Pi user runs
-pi install /path/to/TokenEconomizer                        # a checkout, loaded in place
-pi -e /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts   # one run only
-```
-
-Inside Pi, `/te status` (and `microskills`, `config`) runs the command line: its answer is a
-notice in the terminal UI (and over RPC), and goes to stderr in print and JSON modes.
-
-## 5. Configure
-
-Each mechanism has its own switch, and each takes a plain `on` / `off` (`on` = the default
-below). The defaults are the conservative end of each:
-
-| Key | Default | Values |
-|---|---|---|
-| `microskills` | `envfacts` | `off`, `envfacts`, `envfacts+distiller`, `distiller` (the last two make paid calls) |
-| `toolprune` | `propose` | `off`, `propose`, `auto` (apply proposals as they form) |
-| `loopguard` | `nudge` | `off`, `nudge`, `stop` (nudge, then stop — headless only) |
-| `mode` | `auto` | `auto`, `interactive`, `headless` |
-| `paid` | `false` | gate for every LLM call a mechanism would make |
-| `paid_model` | `""` | model for paid calls (`haiku` on Claude Code when empty; Pi's own default model on Pi) |
-| `shadow` | `false` | compute and log every decision, act on none |
-
-Hyperparameters, set by hand:
-
-| Key | Default | Sets |
-|---|---|---|
-| `microskills_max_facts`, `microskills_max_tokens` | `4`, `150` | caps on the injected fact block (`InjectionConfig.max_facts` / `max_tokens`, passed to `EnvFactsDistiller`) |
-| `microskills_propose_every` | `5` | sessions between paid proposer runs |
-| `toolprune_evidence` | `5` | sessions a tool must go unused (×3 for NotebookEdit and Codex's `image_media`; WebFetch / WebSearch are never proposed) |
-| `loopguard_aggr` | `default` | `conservative`, `default`, `aggressive` (`loopguard.SPIRAL_LEVELS`) |
-| `loopguard_nudges` | `1` | the guard's nudge budget per prompt-turn |
-| `loopguard.<name>` | the preset | one key of `DEFAULT_THRESHOLDS`, pinned: `loopguard.thresholds` applies it over the preset and over what the repository's envelope learned; the `envelope_*` keys go to the `EnvelopeTracker` itself |
-| `repomap`, `repomap_tokens`, `repomap_python`, `repomap_timeout` | `off`, `2048`, auto, `8` | the opt-in repository map (`plugin/repomap.py`): aider's ranked map, made by the Python that has aider (`plugin/repomap_gen.py --git --cache`), cached per commit in the state directory, injected once per session -- ranked toward the first prompt where the prompt hook carries context (Claude Code, Copilot, Pi), at session start otherwise (Codex, or `repomap=start`) |
-
-Set them with `te config set KEY=VALUE` (this repository) or `--global`, `te config unset KEY`
-to fall back, or per session with `TE_<KEY>` (`TE_LOOPGUARD_THRESHOLDS` takes JSON);
-`TE_DISABLE=1` turns the plugin off. The names before the rename (`inject`, `untool`, `spiral`,
-their settings and `TE_*` variables, `spiral=guard`) are still read, and a new name wins over
-its old one. `te config show` prints each mechanism's state and the guard's thresholds in
-effect. Commands: `/tokeneconomizer:status`, `:microskills`, `:toolprune` (`:facts` and
-`:untool` still work),
-`:config` in Claude Code and Copilot; `plugin/scripts/te <command>` anywhere. The
-user-facing reference is the Settings section of [`plugin/README.md`](../plugin/README.md#settings).
-
-## 6. State and privacy
+## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
 per repository and host: the mechanisms' own state, `ledger.jsonl` (one priced record per
@@ -453,7 +333,7 @@ command forms and hosts, and lints out completion advice; the paid proposer's fa
 open-vocabulary. Read them with `te microskills` before enabling the proposer on a repository you do
 not trust.
 
-## 7. Not done yet
+## 5. Known limitations
 
 * **Copilot CLI** — the real-model checks used one model (Claude Haiku 4.5, over BYOK). A
   per-tool deny list waits on Copilot gaining a persistent per-tool filter.

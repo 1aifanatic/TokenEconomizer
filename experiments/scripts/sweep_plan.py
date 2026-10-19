@@ -9,7 +9,6 @@ API key):
 
   --format cells      one `arm<TAB>repo<TAB>seed` line per cell, for a launcher to loop over
   --format estimate   task-runs, wall-clock and dollars for the requested slice
-  --format matrix     the estimate for the WHOLE sweep, every agent x model x domain
 
 Task counts come from the committed `workloads/<domain>.json` manifest -- the same file
 the launcher passes as `--workload` and the driver filters the task stream to -- so the
@@ -23,9 +22,8 @@ the estimate so a reader can rescale it. They are means over a heavy-tailed dist
 treat the output as an order of magnitude, not a quote.
 
 Usage:
-    python scripts/sweep_plan.py --format matrix
     python scripts/sweep_plan.py --domain swebench --arms baseline trimech \\
-        --repos django/django --seeds 0 1 2 3 4 --format cells
+        --repos django/django --seeds 0 1 2 --format cells
 """
 import argparse
 import json
@@ -97,9 +95,8 @@ SWEEP_ARMS_WEBBENCH_OUT_OF_SCOPE = ("inject-only", "untool-only", "spiral-only-w
 #   serena  -- an MCP navigation server for a codebase. Web-Bench hands the agent a file
 #              set with no installed project, and the projects run 1-140 files, so there is
 #              essentially nothing to navigate.
-# Generic arms only: this planner enumerates the Claude / Copilot sweep. The Codex catalog
-# (docs/RUNNING.md section 5) is launched by its own loops, and its Web-Bench list
-# already leaves out the two repomap-bearing arms for the same reason as here.
+# Generic arms only: this planner enumerates the Claude / Copilot sweep. The Codex arms
+# are launched by codex_ab.sh, and its Web-Bench list already leaves out the two repomap-bearing arms for the same reason as here.
 SWEEP_ARMS_WEBBENCH_UNAVAILABLE = ("serena", "repomap", "trimech-repomap")
 # `trimech-rtk` is not "unavailable" on Web-Bench -- it is SUPERSEDED there by
 # `trimech-rtk-web`, exactly as `trimech` is by `trimech-web`. Listing it as unavailable
@@ -107,82 +104,7 @@ SWEEP_ARMS_WEBBENCH_UNAVAILABLE = ("serena", "repomap", "trimech-repomap")
 SWEEP_ARMS_WEBBENCH_SUPERSEDED = {"trimech": "trimech-web",
                                   "spiral-only": "spiral-only-web",
                                   "trimech-rtk": "trimech-rtk-web"}
-# Every arm that carries an external tool baseline, from the baselines registry itself so
-# this module cannot drift from it. Used only for reporting.
-try:
-    from te_bench.baselines import ARM_SCAFFOLDS as _ARM_SCAFFOLDS
-    SCAFFOLD_ARM_NAMES = frozenset(_ARM_SCAFFOLDS)
-except ImportError:                                   # pragma: no cover - core is stdlib
-    SCAFFOLD_ARM_NAMES = frozenset()
-
-# The agents, and the models they are crossed with. Model ids are what the CLI is passed
-# and what the row records; the tree name gets the short tag (te_model_tag in
-# scripts/launch/_env.sh), so every model in this list lands in its OWN tree and lanes for
-# different models can run at the same time without ever sharing a cell.
-SWEEP_AGENT_NAMES = ("claude", "copilot")
-
-# Verified 2026-09-12 on the Copilot CLI (serves + accepts --effort). Any id here can be
-# run; te_model_tag gives each a distinct tag and pricing.MODEL_WEIGHTS prices each, so
-# adding one needs no other change. Spelled the Anthropic API's way (dashes); the launcher
-# re-spells a two-spelling id for the one backend that differs (the Copilot CLI's own
-# catalog says `claude-opus-4.8`) -- see te_model_for_agent in scripts/launch/_env.sh.
-SWEEP_MODELS_SUPPORTED = ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-8")
-
-# What the DEFAULT sweep runs. Deliberately not all of SWEEP_MODELS_SUPPORTED: the matrix is
-# linear in this list, so adding a third model is a 1.5x bill on a sweep already estimated
-# at five figures. That is the experiment owner's call, not a default. Override
-# without editing this file:
-#
-#   TE_SWEEP_MODELS="claude-opus-4-8 claude-sonnet-5 claude-opus-5" \
-#     python scripts/sweep_plan.py --format matrix
-#
-# Accepts spaces or commas. An id outside SWEEP_MODELS_SUPPORTED is allowed but warned
-# about, since the check above has not been run for it.
-#
-# `claude-opus-5` is NOT here on purpose, and that is NOT the same as optional. Its lanes
-# are required -- they just run a 4-arm subset instead of the full matrix (baseline /
-# baseline-medium / baseline-low / trimech, both domains -- the Copilot and Claude run
-# books, 3b), so they are launched by their own commands rather than by
-# crossing this list. Listing it here would plan a third FULL 21-arm lane, which is a
-# different and much larger thing: it costs ~2.5x per call what claude-opus-4-8 does on the
-# Copilot path, and the matrix is linear in this list.
-SWEEP_MODELS = ("claude-opus-4-8", "claude-sonnet-5")
-
-
-def _sweep_models():
-    """The model list, honouring TE_SWEEP_MODELS. Unknown ids warn rather than raise --
-    a new vendor id should be runnable the day it appears, not after a code change."""
-    raw = os.environ.get("TE_SWEEP_MODELS", "")
-    if not raw.strip():
-        return list(SWEEP_MODELS)
-    models = [m for m in raw.replace(",", " ").split() if m]
-    # Compare with separators folded, the way te_model_tag does: claude-opus-4-8 and
-    # claude-opus-4.8 are one model spelled for two catalogs, not two models to list.
-    known = {m.replace(".", "").replace("-", "") for m in SWEEP_MODELS_SUPPORTED}
-    unknown = [m for m in models
-               if m.replace(".", "").replace("-", "") not in known]
-    # Warn once per process: this helper is called several times while formatting a matrix,
-    # and three identical notices read like three different problems.
-    if unknown and not _sweep_models._warned:
-        _sweep_models._warned = True
-        print(f"[sweep_plan] note: {' '.join(unknown)} not in SWEEP_MODELS_SUPPORTED -- "
-              f"run one paid cell on it (docs/RUNNING.md section 3) before spending",
-              file=sys.stderr)
-    return models
-
-
-_sweep_models._warned = False
-
-
-def sweep_agents():
-    """(agent, model) pairs: every agent crossed with every requested model."""
-    return tuple((a, m) for a in SWEEP_AGENT_NAMES for m in _sweep_models())
-
-
-# Back-compat: modules and tests that read the constant directly get the default cross.
-SWEEP_AGENTS = tuple((a, m) for a in SWEEP_AGENT_NAMES for m in SWEEP_MODELS)
-SWEEP_DOMAINS = ("swebench", "webbench")
-SWEEP_SEEDS = (0, 1, 2, 3, 4)
+SWEEP_SEEDS = (0, 1, 2)   # the paper's three seeds
 
 # Measured on the stored claude_swebench tree: 984 task-runs, mean $0.34/task on the honest
 # basis (effective + overhead at the $5/1M-output tier), and ~112-133 s/task from the two
@@ -191,7 +113,7 @@ DEFAULT_SEC_PER_TASK = 120.0
 DEFAULT_USD_PER_TASK = 0.34
 
 
-def group_sizes(domain):
+def group_sizes(domain, manifest=None):
     """{group -> n_tasks} a NEW run will actually execute, per group.
 
     NOT `workloads.task_counts()`, which is the provenance record and deliberately does
@@ -204,9 +126,9 @@ def group_sizes(domain):
     completed cells, paid for, silently. So this reads the same committed manifest the
     launcher passes as `--workload` and the driver filters to (`load_tasks` keeps exactly
     the ids the manifest names), and falls back to `runnable_instances` when a manifest is
-    not on disk. tests/test_sweep_arms.py asserts the two agree.
+    not on disk. tests/test_sweep_arms.py asserts the two agree. `manifest` names another one.
     """
-    manifest = os.path.join(_EXPERIMENTS, "workloads", f"{domain}.json")
+    manifest = manifest or os.path.join(_EXPERIMENTS, "workloads", f"{domain}.json")
     if os.path.exists(manifest):
         with open(manifest, encoding="utf-8") as fh:
             groups = json.load(fh).get("groups") or {}
@@ -230,7 +152,7 @@ def cells(domain, arms, repos, seeds):
     return out
 
 
-def estimate(domain, arms, repos, seeds, sec_per_task, usd_per_task, limit=0):
+def estimate(domain, arms, repos, seeds, sec_per_task, usd_per_task, limit=0, manifest=None):
     """Task-runs, wall-clock and dollars for the requested slice.
 
     `limit` mirrors the launcher's LIMIT (cap tasks per cell, 0 = all). It has to be
@@ -239,7 +161,7 @@ def estimate(domain, arms, repos, seeds, sec_per_task, usd_per_task, limit=0):
     -- which is the wrong direction for a number whose whole job is to be checked before
     spending money.
     """
-    sizes = group_sizes(domain)
+    sizes = group_sizes(domain, manifest)
     unknown = [r for r in repos if r not in sizes]
     per_repo = {r: sizes.get(r, 0) for r in repos}
     if limit and limit > 0:
@@ -292,12 +214,14 @@ def main():
                          "task count, and reads like a quote it cannot support)")
     ap.add_argument("--sec-per-task", type=float, default=DEFAULT_SEC_PER_TASK)
     ap.add_argument("--usd-per-task", type=float, default=DEFAULT_USD_PER_TASK)
+    ap.add_argument("--workload", default=None,
+                    help="workload manifest to count tasks from (default: workloads/<domain>.json)")
     ap.add_argument("--format", default="estimate",
-                    choices=["cells", "estimate", "matrix", "arms", "counts"])
+                    choices=["cells", "estimate", "arms", "counts"])
     args = ap.parse_args()
 
     arms = args.arms or list(SWEEP_ARMS[args.domain])
-    repos = args.repos or sorted(group_sizes(args.domain))
+    repos = args.repos or sorted(group_sizes(args.domain, args.workload))
     seeds = args.seeds if args.seeds is not None else list(SWEEP_SEEDS)
 
     bad = [a for a in arms if a not in ARMS]
@@ -309,7 +233,7 @@ def main():
             print(a)
         return
     if args.format == "counts":
-        for group, n in sorted(group_sizes(args.domain).items()):
+        for group, n in sorted(group_sizes(args.domain, args.workload).items()):
             print(f"{group}\t{n}")
         return
     if args.format == "cells":
@@ -329,7 +253,8 @@ def main():
                   if not (args.domain == "webbench"
                           and a in SWEEP_ARMS_WEBBENCH_UNAVAILABLE)]
         e = estimate(args.domain, usable, repos, seeds,
-                     args.sec_per_task, args.usd_per_task, limit=args.limit)
+                     args.sec_per_task, args.usd_per_task, limit=args.limit,
+                     manifest=args.workload)
         if e["unknown_repos"]:
             print(f"!! not in the {args.domain} workload record: "
                   f"{' '.join(e['unknown_repos'])} (counted as 0 tasks)", file=sys.stderr)
@@ -338,57 +263,6 @@ def main():
             print(f"  at {args.sec_per_task:.0f}s and ${args.usd_per_task:.2f} per task-run "
                   f"(measured means, heavy-tailed -- an order of magnitude, not a quote)")
         return
-
-    # --format matrix: the whole sweep, every agent x model x domain
-    pairs = sweep_agents()
-    print(f"main sweep: {len(pairs)} agent-model pairs x {len(SWEEP_DOMAINS)} "
-          f"domains x {len(SWEEP_SEEDS)} seeds")
-    print(f"  agent-model : {', '.join(f'{a}/{m}' for a, m in pairs)}")
-    if len(_sweep_models()) < len(SWEEP_MODELS_SUPPORTED):
-        rest = [m for m in SWEEP_MODELS_SUPPORTED if m not in _sweep_models()]
-        print(f"  not planned here: {' '.join(rest)}")
-        # NOT the same as optional. claude-opus-5 runs 4 REQUIRED arms per domain, launched
-        # by their own main_sweep.sh calls; this planner only crosses full 21-arm lanes, so
-        # a model absent from SWEEP_MODELS is invisible to it either way. Saying "also
-        # supported" here read as "skip if you like", which is wrong for that model.
-        if any("opus-5" in m.replace(".", "-") for m in rest):
-            print("    claude-opus-5: 4 arms x both domains are REQUIRED and are launched "
-                  "separately\n"
-                  "                   (baseline baseline-medium baseline-low trimech"
-                  " / trimech-web -- docs/RUNNING.md, the frontier lane).")
-        print(f"    to plan one of these as a FULL {len(SWEEP_ARMS['swebench'])}-arm lane"
-              f" instead: TE_SWEEP_MODELS=\"{' '.join(list(_sweep_models()) + rest)}\"")
-    total_tasks = total_usd = total_hours = total_cells = 0
-    for domain in SWEEP_DOMAINS:
-        arms_d = list(SWEEP_ARMS[domain])
-        repos_d = sorted(group_sizes(domain))
-        e = estimate(domain, arms_d, repos_d, list(SWEEP_SEEDS),
-                     args.sec_per_task, args.usd_per_task)
-        per_pair = _fmt_estimate(e, args.show_cost)
-        print(f"  per agent-model pair: {per_pair}")
-        print(f"    arms  : {' '.join(arms_d)}")
-        print(f"    groups: {' '.join(repos_d)}")
-        total_tasks += e["n_task_runs"] * len(pairs)
-        total_usd += e["usd"] * len(pairs)
-        total_hours += e["hours_serial"] * len(pairs)
-        total_cells += e["n_cells"] * len(pairs)
-    total = f"  TOTAL: {total_cells:,} cells  {total_tasks:,} task-runs"
-    if args.show_cost:
-        total += (f"  ~${total_usd:,.0f}  {total_hours:,.0f} h serial "
-                  f"({total_hours / 24:,.0f} days; "
-                  f"/{len(pairs) * len(SWEEP_DOMAINS)} lanes = "
-                  f"{total_hours / 24 / (len(pairs) * len(SWEEP_DOMAINS)):,.0f} days)")
-    print(total)
-    if not args.show_cost:
-        print("  (exact counts. --show-cost adds a derived $ / wall-clock total: one "
-              "repo-dominated per-task mean x the count, so do not quote it -- budget from "
-              "the PER-ARM runtime instead: time one arm on your host and multiply)")
-    hosted = sorted(a for a in SWEEP_ARMS["webbench"] if a in SCAFFOLD_ARM_NAMES)
-    print(f"  Web-Bench runs the scaffold arms it can host ({' '.join(hosted)}) and NOT "
-          f"({' '.join(SWEEP_ARMS_WEBBENCH_UNAVAILABLE)}): the repo map generates a PYTHON "
-          f"symbol map a Node/TypeScript project does not have, and Serena is a codebase "
-          f"navigation server for a benchmark that ships a file set, not a codebase "
-          f"-- see SWEEP_ARMS_WEBBENCH_UNAVAILABLE")
 
 
 if __name__ == "__main__":

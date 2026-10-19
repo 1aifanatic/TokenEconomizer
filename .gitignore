@@ -9,7 +9,7 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Local virtualenvs. experiments/docs/ENVIRONMENT.md tells you to create `.venv` right here,
+# Local virtualenvs. experiments/README.md tells you to create `.venv` right here,
 # and CPython's venv only started writing a self-excluding .gitignore in 3.13 — so ignore it
 # explicitly rather than relying on the tool that happened to create it.
 .venv/

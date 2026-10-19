@@ -1,8 +1,7 @@
 # Loop guard
 
-Failure-loop intervention. A prompt-turn that keeps repeating the same failing edit-and-test
-cycle is redirected once, mid-turn; if it keeps failing, it is stopped (headless) or the person
-is told (interactive).
+How the failure-loop guard (see the [main README](../../README.md)) decides, one tool call at a
+time.
 
 Per tool call, `turn.TurnGuard`:
 

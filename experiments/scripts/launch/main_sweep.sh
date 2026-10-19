@@ -29,20 +29,20 @@
 # Billing: Claude Code on the Anthropic API (ANTHROPIC_API_KEY), the Copilot CLI on its
 # GitHub subscription or Copilot's own BYOK (COPILOT_PROVIDER_*).
 #
-# Usage (one lane; see docs/RUNNING.md for every lane):
-#   AGENT=claude MODEL=claude-opus-5 DOMAIN=swebench \
+# Usage (one lane; README.md lists every lane of the paper):
+#   AGENT=claude MODEL=claude-sonnet-5 DOMAIN=swebench \
 #   RUNNER=te_harness.swebench:make_runner \
 #     bash scripts/launch/main_sweep.sh
 #
 # Env:
 #   AGENT      claude | copilot                          (default claude)
-#   MODEL      model id passed to the CLI and recorded   (default claude-opus-5)
+#   MODEL      model id passed to the CLI and recorded   (default claude-sonnet-5)
 #              It also picks the tree suffix via te_model_tag, so it is REQUIRED to be a
 #              pinned id: `auto`/`agent` gives no tag and no controlled cost basis.
 #   DOMAIN     swebench | webbench                       (default swebench)
 #   ARMS       space-separated arm list        (default: the domain's SWEEP_ARMS)
 #   REPOS      space-separated groups          (default: every group in the workload record)
-#   SEEDS      space-separated seeds           (default "0 1 2 3 4")
+#   SEEDS      space-separated seeds           (default "0 1 2")
 #   LIMIT      cap tasks per cell, 0 = all     (default 0)
 #   RUNNER     'stub' or 'module:factory'      (default stub -- SYNTHETIC, not a benchmark)
 #   SKIP_DONE  1 = skip a cell that already holds its full row count (default 1)
@@ -51,7 +51,9 @@
 #   ON_FAIL    continue | abort                (default continue: one bad cell must not
 #              take a 200-cell lane with it; the lane still exits nonzero and lists them)
 #   DETACH     1 = background (default), 0 = foreground
-#   TASKS_FILE / WORKLOAD / TOKENECONOMIZER_RESULTS  as in trimech_ab.sh
+#   TASKS_FILE task-spec JSON                (default: the domain's TOKENECONOMIZER_*_TASKS)
+#   WORKLOAD   workload manifest, or 'none'    (default workloads/$DOMAIN.json)
+#   TOKENECONOMIZER_RESULTS  results root     (default ./results)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -63,14 +65,14 @@ PY="${PYTHON:-python3}"
 te_load_env
 
 AGENT="${AGENT:-claude}"
-MODEL="${MODEL:-claude-opus-5}"
+MODEL="${MODEL:-claude-sonnet-5}"
 # One spelling in the docs, the backend's spelling on the wire: the Copilot CLI's own
 # catalog lists the older Opus as `claude-opus-4.8` while the Anthropic API takes
 # `claude-opus-4-8`. te_model_for_agent picks the served form (and says so); the Copilot
 # probe below still verifies it. The tree tag folds both, so nothing forks.
 MODEL="$(te_model_for_agent "$AGENT" "$MODEL")"
 DOMAIN="${DOMAIN:-swebench}"
-SEEDS="${SEEDS:-0 1 2 3 4}"
+SEEDS="${SEEDS:-0 1 2}"
 LIMIT="${LIMIT:-0}"
 RUNNER="${RUNNER:-stub}"
 SKIP_DONE="${SKIP_DONE:-1}"
@@ -94,7 +96,7 @@ MODEL_TAG="$(te_model_tag "$MODEL")"
 if [[ -z "$MODEL_TAG" ]]; then
   echo "!! MODEL='$MODEL' is a router directive, not a pinned model: the tree would carry" >&2
   echo "!! no model tag and the effort arms could not pin effort. Pin an id (e.g."         >&2
-  echo "!! MODEL=claude-opus-5 or MODEL=claude-sonnet-5)."                             >&2
+  echo "!! MODEL=claude-sonnet-5 or MODEL=claude-opus-4-8)."                          >&2
   exit 2
 fi
 
@@ -127,7 +129,7 @@ DEST="$RESULTS_ROOT/$(te_tree_name "$AGENT" "$DOMAIN" "$MODEL_TAG")"
 # Captured into a variable first, NOT piped into `mapfile < <(...)`: a process substitution
 # discards the producer's exit status, so an unknown arm or an unreadable workload would
 # come back as an empty plan and this lane would report a clean zero-cell success.
-if ! PLAN_RAW="$("$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" \
+if ! PLAN_RAW="$("$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${WORKLOAD_ARGS[@]}" \
       "${ARM_ARGS[@]}" "${REPO_ARGS[@]}" --seeds $SEEDS --format cells)"; then
   echo "!! could not plan the sweep (see the error above)" >&2
   exit 2
@@ -145,8 +147,8 @@ echo "[main_sweep] dest=$DEST"
 echo "[main_sweep] cells=${#PLAN[@]} seeds='$SEEDS' runner=$RUNNER skip_done=$SKIP_DONE"
 # --limit must be forwarded or the estimate describes the FULL stream while the run is
 # capped: a LIMIT=1 pilot printed "task-runs= 40 ... ~$14" for one task.
-"$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${ARM_ARGS[@]}" "${REPO_ARGS[@]}" \
-  --seeds $SEEDS --limit "$LIMIT" --format estimate | sed 's/^/[main_sweep] /'
+"$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${WORKLOAD_ARGS[@]}" "${ARM_ARGS[@]}" \
+  "${REPO_ARGS[@]}" --seeds $SEEDS --limit "$LIMIT" --format estimate | sed 's/^/[main_sweep] /'
 
 # Credentials preflight (and the loud synthetic-run warning when RUNNER=stub).
 te_check_routing "$AGENT"
@@ -167,7 +169,7 @@ fi
 # AFTER the preflights, so a dry run still refuses a missing credential. The BILLED probes
 # skip themselves on a dry run (te_dryrun_skips_billed), and te_check_routing returns early
 # on RUNNER=stub, so DRYRUN=1 on a fresh clone with nothing configured still costs nothing
-# and still works (docs/RUNNING.md section 2).
+# and still works.
 if [[ "$DRYRUN" == "1" ]]; then
   echo "[main_sweep] DRYRUN -- the cells this lane would run, in order:"
   printf '  %s\n' "${PLAN[@]}"
@@ -181,10 +183,10 @@ mkdir -p "$DEST"
 # here belongs in a log rather than a terminal a laptop lid will close on.
 te_detach "main_sweep__${AGENT}_${MODEL_TAG}_${DOMAIN}" "$0" "$@"
 
-# expected_rows <repo> — the task count of that group, from the committed workload record.
+# expected_rows <repo> -- the task count of that group, from the workload manifest.
 declare -A GROUP_N
 while IFS=$'\t' read -r g n; do GROUP_N["$g"]="$n"; done < <(
-  "$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" --format counts)
+  "$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${WORKLOAD_ARGS[@]}" --format counts)
 
 # cell_rows <arm> <repo> <seed> — how many row.json files that cell already holds.
 cell_rows() {

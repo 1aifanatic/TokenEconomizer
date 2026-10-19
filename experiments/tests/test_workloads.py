@@ -303,3 +303,34 @@ def test_raising_the_ceiling_preserves_an_existing_node_options():
                                  "NODE_OPTIONS": "--max-old-space-size=4096"})
     assert extra["NODE_OPTIONS"].startswith("--max-old-space-size=4096 ")
     assert "--import" in extra["NODE_OPTIONS"]
+
+
+def _export_swebench():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "scripts", "export_swebench_tasks.py")
+    spec = importlib.util.spec_from_file_location("export_swebench_tasks", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_swebench_export_writes_the_stream_in_order_and_prefers_verified():
+    """The task list follows the workload's stream order whatever order the splits come in,
+    a Verified row wins over the full split's, and grading carries the grader's fields."""
+    from te_bench import workloads
+    ex = _export_swebench()
+    order = [i for ids in workloads.runnable_instances("swebench").values() for i in ids]
+
+    def row(iid, tag):
+        r = {k: f"{tag}:{k}" for k in ex.GRADING_FIELDS}
+        r.update(instance_id=iid, repo=f"{tag}:repo", problem_statement=f"{tag}:issue")
+        return r
+    verified = [row(i, "verified") for i in reversed(order[::2])]
+    full = [row(i, "full") for i in order] + [row("not__evaluated-1", "full")]
+    tasks, grading = ex.build([verified, full], set(order))
+    assert [t["instance_id"] for t in tasks] == order == list(grading)
+    assert tasks[0]["problem_statement"] == "verified:issue"
+    assert tasks[1]["problem_statement"] == "full:issue"
+    assert set(grading[order[0]]) == set(ex.GRADING_FIELDS)

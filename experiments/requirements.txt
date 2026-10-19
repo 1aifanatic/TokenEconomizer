@@ -8,7 +8,7 @@
 #   pip install -e .                        # then install the package itself (editable)
 #
 # NOT included on purpose (these belong to the EXTERNAL harness, Layer 2 — see
-# docs/ENVIRONMENT.md and docs/BENCHMARKS.md): Docker, the sealed agent CLIs, and the
+# README.md): Docker, the sealed agent CLIs, and the
 # provisioning-only tools (git, Node/npm, the HuggingFace `datasets` package).
 
 pytest>=7.0        # offline test suite (no Docker, no datasets)

@@ -89,7 +89,7 @@ C_BIN = C_VENDOR + "/bin/codex"
 C_HOME = "/opt/codex-home"
 
 # The OpenAI Platform's global Responses endpoint. Only a DEFAULT: a region-scoped key
-# 401s here and must set OPENAI_BASE_URL to its own region (docs/SETUP.md step 3).
+# 401s here and must set OPENAI_BASE_URL to its own region.
 OPENAI_DIRECT = "https://api.openai.com/v1"
 
 # The one credential the Codex lane bills on. config.toml names it (`env_key`) and the
@@ -117,7 +117,7 @@ def codex_vendor(binary=None):
 
     Resolved from the Node shim's install tree rather than hardcoded: the AgentEO driver
     pinned an absolute path under one machine's nvm prefix, which is exactly the kind of
-    path docs/BENCHMARKS.md keeps out of the code. TE_CODEX_VENDOR overrides.
+    machine-specific path the code must not carry. TE_CODEX_VENDOR overrides.
 
     Raises when the ELF is absent. Docker invents an EMPTY directory for a missing bind
     mount source rather than failing, so an unchecked bad path here becomes "codex: not

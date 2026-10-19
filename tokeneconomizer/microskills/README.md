@@ -1,9 +1,6 @@
 # Micro-skills
 
-Short repository facts, learned from finished sessions and stated at the start of the next one.
-An agent that fails at the same environment detail session after session -- the test runner is
-missing, the interpreter needs a path, a label needs a different prefix -- is told the working
-form up front.
+How micro-skills (see the [main README](../../README.md)) are learned, kept and injected.
 
 Each finished session goes through three steps:
 

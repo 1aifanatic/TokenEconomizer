@@ -81,7 +81,7 @@ def test_does_not_flag_a_row_that_has_a_figure():
 
 def test_does_not_flag_an_agent_that_never_reports_dollars():
     # Copilot meters premium requests and Codex bills a subscription: null is the
-    # documented normal case there (docs/COPILOT.md), not a defect.
+    # normal case there, not a defect.
     for agent in ("copilot", "codex"):
         row = _ran(agent=agent, cost_usd_vendor=None)
         assert _agg().vendor_cost_missing(row)[0] is False, agent

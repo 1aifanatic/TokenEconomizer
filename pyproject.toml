@@ -26,7 +26,7 @@ te = "tokeneconomizer.plugin.cli:main"
 # Test suite is offline (no Docker / no datasets).
 test = ["pytest>=7.0"]
 # The reference task-execution harness under experiments/te_harness/ (see
-# experiments/docs/HARNESS.md). It adds no
+# experiments/README.md). It adds no
 # PyPI dependency -- it is stdlib-only at import time and the official SWE-bench grader is
 # imported lazily from a checkout named by TE_SWEBENCH_REPO -- so this extra installs
 # nothing. It exists to give "I intend to run the harness" a name, since what the harness

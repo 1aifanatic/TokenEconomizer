@@ -2,8 +2,8 @@
 
 A plugin for Claude Code, Codex, the Copilot CLI and Pi that reads finished sessions and changes
 what later sessions in the same repository pay for: micro-skills, tool pruning, and a loop guard.
-See `README.md` for the overview, `docs/PLUGIN.md` for the design and the verified agent
-behavior, and `docs/METHOD.md` for the method.
+See `README.md` for the overview and the method, `docs/PLUGIN.md` for the design and the verified
+agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
 
 ## Layout
 - `tokeneconomizer/` — the one Python package, standard library only
@@ -19,7 +19,8 @@ behavior, and `docs/METHOD.md` for the method.
   skills (`codex-skills/`, Codex having no plugin slash commands), the Pi extension; `lib/` links
   the package
 - `experiments/` — benchmark-only: `te_bench/` (adapters, arms, facade, benchmark-only
-  controllers), `te_harness/` (Docker runners), `scripts/`, `docs/`, its own `tests/`
+  controllers), `te_harness/` (Docker runners), `scripts/`, `workloads/`, its own `tests/`;
+  its `README.md` is the run book
 - `package.json` — the repository as a Pi package (`pi install git:github.com/…`); it names
   the same extension as `plugin/package.json`, which a test pins
 - `scripts/build_plugin.py` — a self-contained plugin bundle for marketplace installs

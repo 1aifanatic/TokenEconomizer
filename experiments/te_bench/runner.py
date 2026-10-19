@@ -13,8 +13,7 @@ this interface. The economizer needs only two capabilities from a runner:
      mask, spiral params), returning a normalized row + the path to the saved transcript.
 
 A concrete runner (Docker + claude/codex/copilot CLI + official gold grading) ships in the
-repo's `te_harness` package -- the one the published rows were produced with
-(experiments/docs/HARNESS.md);
+repo's `te_harness` package -- the one the published rows were produced with;
 its image and dataset paths are env-var placeholders. Supply a different one with
 ``--runner your_pkg.harness:make_runner``; nothing here changes, because the economizer
 never learns which harness it is talking to.

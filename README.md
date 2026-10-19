@@ -45,6 +45,31 @@ Each mechanism can be switched off or tuned on its own. The plugin's actions are
 one line, every hook fails open, and by default it makes no model calls of its own. What it learns
 stays on your machine, under `~/.tokeneconomizer`.
 
+## How it works
+
+Coding agents are built for task success, not for what a task costs, and every turn re-bills
+the agent's instructions, every loaded tool, and the conversation so far. Developers use the same
+agent on the same codebase over many tasks, so much of that cost recurs: the same environment
+facts rediscovered, the same unused tools re-sent, the same kind of failing loop. TokenEconomizer
+holds the agent fixed -- no change to its model, weights or code -- and treats a repository's
+stream of sessions as the unit to optimize: what finished sessions show about the repository
+shapes what later sessions are given, and anything the plugin spends is amortized over the stream.
+Four principles shape the mechanisms:
+
+- **Act through what the agent already reads.** Facts go into the context at session start and
+  tools leave through the agent's own settings, so nothing depends on the agent adopting a new
+  tool.
+- **Count cost as it is billed.** Most tokens in a session are cached re-reads, so cost is
+  measured on a cache-aware basis, including any model calls the plugin makes.
+- **Keep task success.** Facts form only from recurring evidence, tools are pruned only after
+  going unused, and the loop guard spares a turn that is still making progress.
+- **Recover from mistakes.** A fact a later session contradicts is retired, an applied deny list
+  can be restored, and the guard redirects before it ever stops a turn.
+
+The paper evaluates these mechanisms with Claude Code, Codex and the Copilot CLI on SWE-Bench,
+Web-Bench and two security benchmarks; [`experiments/`](experiments/README.md) reruns the
+SWE-Bench and Web-Bench experiments.
+
 ## Supported agents
 
 | Agent | Install |
@@ -98,19 +123,12 @@ terminal inside the repository, as `~/.tokeneconomizer/bin/te <command>`.
 ```text
 /tokeneconomizer:config set loopguard=off                 # one mechanism off, in this repository
 /tokeneconomizer:config set toolprune=off --global        # ... or in every repository
-/tokeneconomizer:config set microskills_max_facts=2       # inject at most two facts
-/tokeneconomizer:config set toolprune_evidence=10         # wait ten unused sessions before proposing
-/tokeneconomizer:config set loopguard_nudges=2            # allow two redirects per turn
-/tokeneconomizer:config set loopguard.min_turns=30        # 30 tool calls before a turn can count as stuck
-/tokeneconomizer:config unset loopguard.min_turns         # back to the default
+/tokeneconomizer:config set microskills_max_facts=2       # tune one: inject at most two facts
 ```
 
-The paid extras are off unless you set `paid=true`: an LLM proposer that authors repository
-facts beyond the free ones (`microskills=envfacts+distiller`) and a stuck judge for the loop
-guard, both run through your own agent's CLI, on the same plan or login as your sessions, and
-recorded in the session's ledger. Every
-setting, its default and its environment variable: [Settings](plugin/README.md#settings).
-Settings written under the earlier names (`inject`, `untool`, `spiral`, ...) are still read.
+The paid helpers -- an LLM fact proposer and a judge for the loop guard -- are off unless you set
+`paid=true`; they run through your own agent's CLI, on the same plan or login as your sessions.
+Every setting, its default and its environment variable: [Settings](plugin/README.md#settings).
 
 ## What it does on each agent
 
@@ -123,7 +141,8 @@ Settings written under the earlier names (`inject`, `untool`, `spiral`, ...) are
 
 Nothing is written to your settings until you approve it, and `toolprune restore` removes only
 what the plugin added. How each agent's hooks and settings were verified to behave is in
-**[`docs/PLUGIN.md`](docs/PLUGIN.md)**; the method itself is in **[`docs/METHOD.md`](docs/METHOD.md)**.
+**[`docs/PLUGIN.md`](docs/PLUGIN.md)**, and how the package fits together in
+**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
 
 ## Repository
 
@@ -135,8 +154,8 @@ what the plugin added. How each agent's hooks and settings were verified to beha
 | [`tokeneconomizer/trace`](tokeneconomizer/trace/) | Each agent's session log, read into one shape |
 | [`tokeneconomizer/plugin`](tokeneconomizer/plugin/) | The runtime the hooks and the `te` command run |
 | [`plugin`](plugin/) | The installable plugin: manifests, hook files, launchers, slash commands, the Pi extension |
-| [`experiments`](experiments/) | The benchmark harness, arms, workloads and run book behind the paper |
-| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior) and `METHOD.md` (the method) |
+| [`experiments`](experiments/) | The harness, launchers and task sets behind the paper's results |
+| [`docs`](docs/) | `PLUGIN.md` (design, verified agent behavior) and `ARCHITECTURE.md` (how the package fits together) |
 | [`tests`](tests/) | Offline tests for the package and the plugin |
 
 The package is standard-library only. Run the tests with `python -m pytest tests` (add
@@ -145,10 +164,10 @@ The package is standard-library only. Run the tests with `python -m pytest tests
 
 ## Reproducing the experiments
 
-The benchmark experiments -- the Docker harness that runs sealed agents on SWE-bench and
-Web-Bench, the arms, the sweep and aggregation pipeline, and the evaluated task sets -- live in
-**[`experiments/`](experiments/README.md)**. They are not packaged with the plugin and share
-only `tokeneconomizer/`.
+The code behind the paper's results -- a harness that runs Claude Code, Codex and the Copilot CLI
+on SWE-Bench and Web-Bench, the launchers, and the evaluated task sets -- is in
+**[`experiments/`](experiments/README.md)**, whose README gives the setup and one command per
+result. It is not packaged with the plugin and shares only `tokeneconomizer/`.
 
 ## Citation
 

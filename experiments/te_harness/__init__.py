@@ -23,7 +23,7 @@ Both `make_runner` factories take the driver's `--agent` label and return the ru
 that agent -- `claude` (Claude Code, on the Anthropic API), `copilot` (GitHub Copilot CLI,
 on its own GitHub or BYOK auth) or `codex` (OpenAI Codex CLI, on the OpenAI API). An
 unknown label raises rather than falling back, because a runner that quietly ran the wrong
-agent would produce plausible rows under the wrong name. Copilot setup: docs/COPILOT.md.
+agent would produce plausible rows under the wrong name. Setup: experiments/README.md.
 """
 import os as _os
 import sys as _sys

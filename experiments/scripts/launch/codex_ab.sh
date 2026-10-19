@@ -2,7 +2,7 @@
 # Reproduce a Codex-native A/B: a BASELINE arm and one of the two independently-effective
 # Codex mechanisms (or their combo), then aggregate into the index CSVs compare_arms.py reads.
 #
-# Exact arm configurations (the full catalog is in docs/RUNNING.md section 5):
+# Exact arm configurations (README.md lists the arms the paper ran):
 #   baseline      : native Codex cost basis, no economizer
 #   codex-untool  : --codex-recent-adaptive-untool-v7   (evidence-gated capability untooling;
 #                   deferred_wait is CORE and never demoted)
@@ -48,11 +48,12 @@
 #           an unprivileged user+mount namespace rather than by a hook the CLI ignores; the
 #           runner probes that at construction and refuses to pretend otherwise. Selects the
 #           tasks file, the workload manifest and the RUNNER default.
+#   ARMS    space-separated arm list: run exactly these, in one lane (ARM/BASELINE ignored)
 #   BASELINE 1 = run baseline too (paired A/B, default); 0 = run only $ARM against a
 #           baseline already stored elsewhere; only = run ONLY the baseline arm (a fresh
 #           baseline lane to pair with an arm running concurrently in another lane)
-#   REPOS   space-separated repo slugs                  (default "pydata/xarray")
-#   SEEDS   space-separated seeds                        (default "0")
+#   REPOS   space-separated repo slugs / projects       (default: every group in WORKLOAD)
+#   SEEDS   space-separated seeds                        (default "0 1 2")
 #   LIMIT   cap tasks per (repo,seed), 0 = all           (default 0)
 #   RUNNER  'stub' or 'module:factory'                   (default stub)
 #   TASKS_FILE  task-spec JSON (default TOKENECONOMIZER_SWEBENCH_TASKS)
@@ -97,22 +98,35 @@ te_load_env
 # fleet cgroup cap below hold the aggregate.
 export TE_SWEBENCH_MAX_CPUS="${TE_SWEBENCH_MAX_CPUS:-4}"
 
-ARM="${ARM:-codex-untool}"
-case "$ARM" in baseline|baseline-medium|baseline-low|repomap|rtk|serena|codex-untool|codex-spiral|codex-spiral-postgreen|codex-spiral-defensive|codex-combo|codex-trimech|codex-trimech-rtk|codex-trimech-repomap|codex-inject|codex-inject-untool|codex-inject-envfacts|codex-inject-distiller) ;; *)
-  echo "ARM must be baseline | baseline-medium | baseline-low | repomap | rtk | serena | codex-untool | codex-spiral | codex-spiral-postgreen | codex-spiral-defensive | codex-combo | codex-trimech | codex-trimech-rtk | codex-trimech-repomap | codex-inject | codex-inject-untool | codex-inject-envfacts | codex-inject-distiller (got $ARM)"; exit 2 ;; esac
-# BASELINE=0 runs ONLY $ARM, for a lane whose baseline already exists in a stored tree
-# (compare with scripts/compare_arms.py). BASELINE=only runs ONLY the baseline arm, so a
-# fresh baseline and an arm can run as two concurrent lanes into the same tree. Default 1 =
-# the paired A/B this script is named for.
-BASELINE="${BASELINE:-1}"
-case "$BASELINE" in
-  0)    ARMS_TO_RUN=("$ARM") ;;
-  only) ARMS_TO_RUN=(baseline) ;;
-  *)    ARMS_TO_RUN=(baseline "$ARM") ;;
-esac
-LANE_TAG="$([[ "$BASELINE" == "only" ]] && echo baseline || echo "$ARM")"
-REPOS="${REPOS:-pydata/xarray}"
-SEEDS="${SEEDS:-0}"
+CODEX_ARMS="baseline baseline-medium baseline-low repomap rtk serena codex-untool codex-spiral \
+codex-spiral-postgreen codex-spiral-defensive codex-combo codex-trimech codex-trimech-rtk \
+codex-trimech-repomap codex-inject codex-inject-untool codex-inject-envfacts codex-inject-distiller"
+te_codex_arm() {
+  case " $CODEX_ARMS " in *" $1 "*) return 0 ;; esac
+  echo "!! unknown Codex arm '$1'; one of: $CODEX_ARMS" >&2; exit 2
+}
+if [[ -n "${ARMS:-}" ]]; then
+  # ARMS runs exactly the listed arms, one lane, like main_sweep.sh (BASELINE is ignored).
+  read -r -a ARMS_TO_RUN <<<"$ARMS"
+  for a in "${ARMS_TO_RUN[@]}"; do te_codex_arm "$a"; done
+  LANE_TAG="arms"
+else
+  ARM="${ARM:-codex-untool}"
+  te_codex_arm "$ARM"
+  # BASELINE=0 runs ONLY $ARM, for a lane whose baseline already exists in a stored tree
+  # (compare with scripts/compare_arms.py). BASELINE=only runs ONLY the baseline arm, so a
+  # fresh baseline and an arm can run as two concurrent lanes into the same tree. Default 1 =
+  # the paired A/B this script is named for.
+  BASELINE="${BASELINE:-1}"
+  case "$BASELINE" in
+    0)    ARMS_TO_RUN=("$ARM") ;;
+    only) ARMS_TO_RUN=(baseline) ;;
+    *)    ARMS_TO_RUN=(baseline "$ARM") ;;
+  esac
+  LANE_TAG="$([[ "$BASELINE" == "only" ]] && echo baseline || echo "$ARM")"
+fi
+REPOS="${REPOS:-}"
+SEEDS="${SEEDS:-0 1 2}"
 LIMIT="${LIMIT:-0}"
 RUNNER="${RUNNER:-stub}"
 SKIP_DONE="${SKIP_DONE:-1}"
@@ -155,13 +169,16 @@ if [[ "$WORKLOAD" != "none" ]]; then
   fi
   WORKLOAD_ARGS=(--workload "$WORKLOAD")
 fi
+if [[ -z "$REPOS" ]]; then
+  [[ "$WORKLOAD" != "none" ]] || { echo "!! WORKLOAD=none needs an explicit REPOS" >&2; exit 2; }
+  REPOS="$("$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" --workload "$WORKLOAD" --format counts | cut -f1 | tr '\n' ' ')"
+fi
 
 RESULTS_ROOT="${TOKENECONOMIZER_RESULTS:-$REPO_ROOT/results}"
 # codex_<domain>_<model-tag>. The MODEL is part of the cost basis, so it belongs in the
 # tree name -- otherwise two models' lanes share a tree and aggregate.py averages two bases.
 MODEL_TAG="$(te_model_tag "$MODEL")"
 DEST="$RESULTS_ROOT/$(te_tree_name "$AGENT" "$DOMAIN" "$MODEL_TAG")"
-mkdir -p "$DEST"
 
 # DRYRUN=1 prints the cells and exits WITHOUT detaching -- before te_detach, so a dry run
 # cannot hand back the terminal and then bill a full A/B in the background.
@@ -176,9 +193,11 @@ if [[ "${DRYRUN:-0}" == "1" ]]; then
   exit 0
 fi
 
+mkdir -p "$DEST"
+
 # Detach by default: config is resolved and credentials are checked, so anything that
 # fails from here on is a run-time failure that belongs in the log, not the terminal.
-te_detach "codex_ab__${LANE_TAG}" "$0" "$@"
+te_detach "codex_ab__${MODEL_TAG}_${DOMAIN}_${LANE_TAG}" "$0" "$@"
 
 # One budget for every lane on the host, re-asserted here so a launch cannot inherit an
 # uncapped cgroup from an earlier session. Idempotent; never fatal.
@@ -190,12 +209,10 @@ echo "[codex_ab] cpus: per-container ${TE_SWEBENCH_MAX_CPUS}, fleet ${TE_FLEET_C
 echo "[codex_ab] tasks=$TASKS_FILE workload=$WORKLOAD"
 echo "[codex_ab] skip_done=$SKIP_DONE on_fail=$ON_FAIL"
 
-# expected_rows <repo> -- the task count of that group, from the committed workload record.
-# Same source main_sweep.sh uses: the counts are per GROUP and carry no arm or agent, so
-# the Codex lane reads them unchanged.
+# expected_rows <repo> -- the task count of that group, from the workload manifest.
 declare -A GROUP_N
 while IFS=$'\t' read -r g n; do GROUP_N["$g"]="$n"; done < <(
-  "$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" --format counts)
+  "$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${WORKLOAD_ARGS[@]}" --format counts)
 
 # cell_rows <arm> <repo> <seed> -- how many row.json files that cell already holds.
 cell_rows() {
@@ -237,9 +254,8 @@ for seed in $SEEDS; do
 done
 
 # Aggregate every arm PRESENT in the tree, not just this lane's: --arms limits the rewrite,
-# so passing it would drop the other arms' rows from the index the comparisons read. This
-# lane runs ONE arm per invocation (docs/RUNNING.md section 5), so passing it would
-# leave the index holding whichever arm was launched last.
+# so passing it would drop the other arms' rows from the index the comparisons read, and a
+# lane that ran one arm would leave the index holding only that arm.
 echo "[codex_ab] aggregating -> $DEST/index/"
 "$PY" "$HERE/../aggregate.py" "$DEST"
 echo "[codex_ab] DONE in $(( (SECONDS - START) / 60 )) min: ran=$RAN skipped=$SKIPPED failed=${#FAILED[@]}"

@@ -3,7 +3,7 @@
 
 Web-Bench is a PUBLIC repository. `bytedance/web-bench` ships, for every project, the exact
 Playwright spec each task is graded by -- so an agent that can reach GitHub is not solving
-the task, it is reading the answer key. Measured 2026-09-07 on claude-opus-5: three
+the task, it is reading the answer key. Measured 2026-09-07 in development runs: three
 Web-Bench tasks curled their own grading spec
 (`raw.githubusercontent.com/bytedance/web-bench/main/projects/<p>/test/task-N.spec.js`) and
 two of them then passed.
@@ -32,8 +32,7 @@ CLI: they keyed the event kebab-case (`pre-tool-use`) where Codex wants PascalCa
 handler an argv list where it wants a command string, and ran without the trust bypass --
 and Codex skips every hook a person has not approved in /hooks, which an unattended run
 cannot do. Rows stored before 2026-09-30 on the Codex lanes therefore carry
-`net_guard_installed: false` and were guarded by the DNS layer below alone
-(docs/HARNESS.md, "The answer-key guard").
+`net_guard_installed: false` and were guarded by the DNS layer below alone.
 
 WHY A HOOK AND NOT A TOOL MASK. `WebSearch`/`WebFetch` are masked out separately, but the
 agent simply used `curl` inside `Bash` -- and `Bash` is in `PROTECTED_TOOLS`, so it can

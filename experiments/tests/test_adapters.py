@@ -5,10 +5,10 @@ import pytest
 
 from te_bench.adapters import (
     DomainAdapter, SwebenchAdapter, WebBenchAdapter, CredDataAdapter,
-    ReposVulAdapter, CyberGymAdapter, WebArenaAdapter)
+    ReposVulAdapter)
 
 
-ALL_CONCRETE = [SwebenchAdapter, CredDataAdapter, ReposVulAdapter, CyberGymAdapter]
+ALL_CONCRETE = [SwebenchAdapter, CredDataAdapter, ReposVulAdapter]
 
 
 def test_swebench_is_domain_adapter():
@@ -20,8 +20,6 @@ def test_all_adapters_importable_and_named():
     assert WebBenchAdapter("dom").name == "webbench"
     assert CredDataAdapter().name == "creddata"
     assert ReposVulAdapter().name == "reposvul"
-    assert CyberGymAdapter().name == "cybergym"
-    assert WebArenaAdapter().name == "webarena"
 
 
 def test_swebench_reading_methods_delegate():
@@ -64,7 +62,3 @@ def test_creddata_classify_domain_differs():
     assert SwebenchAdapter().classify_domain() is None
     assert CredDataAdapter().classify_domain() is not None
 
-
-def test_webarena_stub_raises():
-    with pytest.raises(NotImplementedError):
-        WebArenaAdapter().load_trajectory("x")

@@ -1,8 +1,6 @@
 # Tool pruning
 
-Every tool definition an agent loads is re-sent with every request. Tool pruning watches which
-loaded tools a repository's sessions actually use, and proposes dropping the ones that go unused
-session after session.
+How tool pruning (see the [main README](../../README.md)) decides what to drop, per agent.
 
 - **Evidence pruning** (Claude Code, Copilot CLI; `stage.ToolingStage`). After each session, a
   loaded tool's unused streak grows or resets. A tool is proposed once its streak reaches

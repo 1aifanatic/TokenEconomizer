@@ -1,7 +1,7 @@
 """pytest setup for the reproduction suite (experiments/tests).
 
-`experiments/` keeps the layout the experiments always had -- te_harness/, scripts/,
-workloads/, docs/ -- so a test's "repo root" (`_REPO` in the test files) is experiments/.
+`experiments/` holds te_harness/, te_bench/, scripts/ and workloads/, so a test's "repo
+root" (`_REPO` in the test files) is experiments/.
 The shared core, `tokeneconomizer`, lives one level up at the repository root, and so do
 the shared transcript writers (`fixtures`), with the plugin's own tests in tests/.
 """

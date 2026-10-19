@@ -136,7 +136,7 @@ def capture(instance_id=CAPTURE_INSTANCE, port=None, out_path=None, desc_chars=N
     port = int(port or os.environ.get("TE_CATALOG_PORT", "8770"))
     out_path = out_path or os.environ.get("TE_CATALOG_OUT", DEFAULT_OUT)
     desc_chars = int(desc_chars or os.environ.get("TE_CATALOG_DESC_CHARS", "300"))
-    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
     effort = effort or os.environ.get("TE_EFFORT_LEVEL", "high")
     # Must match what a task run uses (te_harness.swebench.run_task) -- see pass 1 below.
     turn_cap = int(os.environ.get("TE_MAX_TURNS", "80"))
