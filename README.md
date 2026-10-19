@@ -153,13 +153,16 @@ only `tokeneconomizer/`.
 ## Citation
 
 ```bibtex
-@article{li2026tokeneconomizer,
-  title   = {{TokenEconomizer}: Experience-Driven Black-Box Cost Control for Coding Agents},
-  author  = {Li, Aaron J. and Xu, Weijia and Singh, Chandan and Chen, Zixiao and
-             Inala, Jeevana Priya and Siska, Charlotte and Tamersoy, Acar and Yu, Bin and
-             Stoica, Ion and Galley, Michel and Gao, Jianfeng},
-  journal = {arXiv preprint arXiv:2610.22732},
-  year    = {2026}
+@misc{li2026tokeneconomizer,
+  title         = {{TokenEconomizer}: Experience-Driven Black-Box Cost Control for Coding Agents},
+  author        = {Li, Aaron J. and Xu, Weijia and Singh, Chandan and Chen, Zixiao and
+                   Inala, Jeevana Priya and Siska, Charlotte and Tamersoy, Acar and Yu, Bin and
+                   Stoica, Ion and Galley, Michel and Gao, Jianfeng},
+  year          = {2026},
+  eprint        = {2610.22732},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  url           = {https://arxiv.org/abs/2610.22732}
 }
 ```
 
