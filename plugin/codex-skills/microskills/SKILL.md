@@ -1,10 +1,10 @@
 ---
-name: "tokeneconomizer-microskills"
+name: "microskills"
 description: >
   Show the repository facts (micro-skills) TokenEconomizer learned and injects at the start of each session here, and the ones still forming. Use when the user asks what TokenEconomizer learned or injects, or about its facts or micro-skills.
 ---
 
-# tokeneconomizer-microskills
+# TokenEconomizer: microskills
 
 Run this command in the repository's root directory:
 

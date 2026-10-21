@@ -1,10 +1,10 @@
 ---
-name: "tokeneconomizer-config"
+name: "config"
 description: >
   Show or change TokenEconomizer's settings: turn micro-skills, tool pruning or the loop guard on or off, or tune them, for this repository or (with --global) every repository. Use when the user asks to configure, enable or disable TokenEconomizer or one of its mechanisms.
 ---
 
-# tokeneconomizer-config
+# TokenEconomizer: config
 
 Run this command in the repository's root directory:
 
@@ -13,6 +13,8 @@ Run this command in the repository's root directory:
 ```
 
 Use `show` as ARGS unless the user asked to change a setting; then `set KEY=VALUE ...` or `unset KEY ...`, adding `--global` only if they asked for every repository. Show the output verbatim in a code block; if a setting was rejected, say why in one sentence.
+
+Changing a setting (`set`, `unset`) writes TokenEconomizer's own state under `~/.tokeneconomizer`, outside the workspace, which the sandbox keeps read-only: run that command with `sandbox_permissions` set to `"require_escalated"` and a one-line `justification`, so that Codex asks the user to approve it. `show` reads only and needs no approval.
 
 The command reads and writes only TokenEconomizer's own state (under `~/.tokeneconomizer`)
 and, for `toolprune apply` or `restore`, the project's `.codex/config.toml`; it makes no model

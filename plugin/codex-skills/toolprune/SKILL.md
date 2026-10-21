@@ -1,10 +1,10 @@
 ---
-name: "tokeneconomizer-toolprune"
+name: "toolprune"
 description: >
   Review, apply or undo TokenEconomizer's proposed list of Codex capabilities this repository never uses (written to the project's .codex/config.toml). Use when the user asks about TokenEconomizer's tool pruning or deny list, or asks to apply or restore it.
 ---
 
-# tokeneconomizer-toolprune
+# TokenEconomizer: toolprune
 
 Run this command in the repository's root directory:
 
@@ -13,6 +13,8 @@ Run this command in the repository's root directory:
 ```
 
 Use `show` as ARGS unless the user asked to `apply`, `restore` or `measure` (optionally naming capabilities). Never run `apply` or `restore` unless the user asked for it. Show the output verbatim in a code block; if it is a proposal, end with one line saying how to apply it and that it takes effect from the next session.
+
+`apply` and `restore` edit the project's `.codex/config.toml` and record the change in TokenEconomizer's own state under `~/.tokeneconomizer`, outside the workspace, which the sandbox keeps read-only: run that command with `sandbox_permissions` set to `"require_escalated"` and a one-line `justification`, so that Codex asks the user to approve it. `show` and `measure` need no approval.
 
 The command reads and writes only TokenEconomizer's own state (under `~/.tokeneconomizer`)
 and, for `toolprune apply` or `restore`, the project's `.codex/config.toml`; it makes no model

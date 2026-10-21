@@ -124,6 +124,16 @@ isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`; 2026-09-30):
   …), which listed every command twice in its skill picker beside `codex-skills/`. The slash
   commands therefore live in `slash-commands/`, which the Claude Code and Copilot manifests name
   and Codex does not read (verified 2026-10-17).
+* Codex lists a plugin's skills under the plugin's name, `tokeneconomizer:<skill>` (every release
+  from 0.131.0, the first with `codex plugin add`, to 0.163.0), and in `codex exec` a `$` mention
+  matches only that full name: `$tokeneconomizer-status`, the name these guides once gave, reached
+  no skill. The skills are therefore named after the commands, so `$tokeneconomizer:status` reads
+  as `/tokeneconomizer:status` does on the other agents (verified 2026-10-21, with arguments:
+  `$tokeneconomizer:config set loopguard=off --global`). Releases before 0.141.0 install the
+  plugin but never run its hooks (tried: 0.131.0, 0.135.0, 0.140.0).
+  A question in plain words is a weaker route: on `gpt-5.4-mini`, *"what has TokenEconomizer
+  learned here?"* ran the skill's command in none of six `codex exec` runs, under either naming
+  (the model read the plugin's state files instead), so the guides name the skill.
 
 Hooks are **trust-gated**: skipped until approved in `/hooks` (stored as
 `[hooks.state.<key>].trusted_hash`), unless the run passes `--dangerously-bypass-hook-trust`.
@@ -306,13 +316,67 @@ needed sessions that edited different files and, once injected, decayed (the fol
 what the session was given); a Codex install copy had no package; side calls failed silently
 and left sessions in Claude Code's history; `te` without `--host` showed Claude Code's state.
 
+**Again as a new user, interactively, 2026-10-21** -- one fresh home for all four agents (Claude
+Code 2.1.306, Codex 0.163.0, Copilot CLI 1.0.101, Pi 1.3.0; every model through OpenRouter),
+the main README's Quick start typed as written. `git clone https://github.com/microsoft/…` and
+`pi install git:github.com/microsoft/…` ran unchanged, a `url.insteadOf` in the new user's
+`~/.gitconfig` pointing them at a local repository of the tree. Each agent then ran in its own
+terminal UI: the first-run prompts, every Everyday command, the Update row, and a session that
+ended and was folded and priced. What the run showed:
+
+* Claude Code asks a new user to trust the folder (**Yes, I trust this folder**); its default
+  auto mode then ran the plugin's script with no prompt.
+* Codex asks for the folder (**Trust and continue**), then **Hooks need review**: **Review
+  hooks**, **Trust all and continue**, or continue without them. Its default sandbox keeps
+  `~/.tokeneconomizer` read-only, and `$tokeneconomizer:config set …` failed with a traceback
+  until the skills that change state asked to leave the sandbox (`sandbox_permissions:
+  require_escalated`); Codex now asks the user, and `te` refuses a change it could only half
+  make. `/exit` keeps a session open to `codex resume` and sends no `SessionEnd`, so such a
+  session is folded at a later session start once quiet; `codex debug prompt-input` sends a
+  `SessionEnd` for a thread that never started, which the plugin now ignores.
+* Copilot offers **Yes, and remember this folder for future sessions**, which a deny list in
+  `.github/copilot` needs. It substituted a slash command's arguments into `$ARGUMENTS`, yet the
+  model ran `config show` for `config set loopguard=off` three times: the command's text said
+  "use `show` when no arguments were given" and "do not run `set` … unless those words appear in
+  the arguments above". Rewritten to name the typed arguments plainly, it ran what was typed.
+* Pi announced `pi update --extensions` itself when the repository moved on, and `/te` answered
+  in its terminal UI with no model call.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
 per repository and host: the mechanisms' own state, `ledger.jsonl` (one priced record per
-session), `events.jsonl` (every injection, nudge, stop), and per-session guard state. A
-repository is identified by its `origin` remote, so worktrees and re-clones share what was
-learned. Uninstalling the plugin leaves this directory; delete it to forget. Like the agents'
+session), `events.jsonl` (every injection, nudge, stop), and per-session guard state.
+Uninstalling the plugin leaves this directory; delete it to forget. `te repos` lists what it
+holds.
+
+Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
+
+* **One key per repository.** A checkout with an `origin` remote is identified by the remote, so
+  every clone, worktree and re-clone shares what was learned, whatever its folder is called; one
+  without a remote by its main checkout's path (its worktrees share it); a directory outside any
+  checkout by itself. A `.git` counts only as git counts it -- a directory holding `HEAD`, or a
+  `gitdir:` file naming one that exists -- and the walk up from a session's directory stops at
+  the home directory, so a versioned (or stray, empty) `~/.git` is the repository of sessions
+  started in `~` and of nothing below it. `GIT_CEILING_DIRECTORIES` is honoured as git does.
+* **One repository per session.** A hook's `cwd` is where the agent is now (Claude Code's
+  follows its `cd`), so the first hook of a session pins it (`sessions/<host>/<id>.json`) and
+  every later hook, and the fold it hands off, uses the repository it started in -- where the
+  agent files its own session log. `te status` run inside a session says so when the two differ.
+* **Deny lists stay per checkout.** The clones of a repository share its evidence and proposal,
+  but each has its own settings file, so `untool_applied.json` records what was added per file.
+* **State from earlier keys is carried over.** Up to 0.1.0 a checkout's folder name was part of
+  the key, any `.git` entry made a checkout, and a session was recorded wherever the agent was.
+  The first time a checkout is seen (`index.json`) the state under its earlier keys is sent
+  where it belongs, and once after an upgrade a background `te repos migrate` does the same for
+  every directory: each recorded session goes to the repository the first directory in its log
+  resolves to now, sessions whose directory is gone stay put, and a directory none of whose
+  sessions resolves to it any more is merged whole -- its learned state too, if it learned from
+  more sessions than the destination. Learned state is not additive, so the other side's
+  sessions are folded again from their logs where those still exist; a session folded under two
+  keys counts once, at its later fold. Nothing is deleted: a merged directory moves to
+  `merged/`, displaced learned state to `premerge-*`. `te repos merge KEY [INTO]` joins two by
+  hand, for state whose checkouts are gone. Like the agents'
 own session logs it is derived from, it is private to you: the plugin creates it `0700` and its
 files `0600`, and tightens a looser one it finds.
 

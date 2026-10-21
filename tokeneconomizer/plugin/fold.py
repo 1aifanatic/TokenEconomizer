@@ -95,7 +95,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     stage.tool_unused_streaks = {k: int(v) for k, v in (st.get("streaks") or {}).items()}
     stage.catalog_tools = set(st.get("catalog_tools", []))
     stage.catalog_desc = dict(st.get("catalog_desc") or {})
-    applied = denylist.applied(ctx.store)
+    applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     stage._exclude_tools = list(applied)        # the mask this session actually ran under
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
@@ -109,7 +109,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
         except RuntimeError:            # an unreadable or redirected settings file: leave it
             restored = []
     if restored:
-        applied = denylist.applied(ctx.store)
+        applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     # The stage warns once per STREAM when no catalog parses -- a harness defect signal there.
     # Here a stage lives for one fold, and a session that called no tool legitimately has no
     # observed catalog; the source (or its absence) is recorded in untool.json instead.
@@ -189,7 +189,7 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
                          repo=ctx.repo.label, results_root=ctx.mech_dir, fresh=False)
     stage._warned_no_catalog = True
     stage.build_tools({"instance_id": session_id}, 0)
-    applied = denylist.applied(ctx.store)
+    applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
     srow = {}
     stage.after_task({"instance_id": session_id}, {}, run_dir, srow)
@@ -269,7 +269,7 @@ def fold_session(ctx, session_id, transcript_path=None):
                 "turns": len(turns),
                 "nudges": int(sess.get("nudges", 0)), "aborts": int(sess.get("aborts", 0)),
                 "injected_chars": int(sess.get("injected_chars", 0)),
-                "untool_applied": denylist.applied(ctx.store),
+                "untool_applied": denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name),
                 "overhead": {
                     "optimizer_tokens": ((record.get("injection") or {}).get("optimizer_tokens")
                                          or 0),
@@ -307,8 +307,9 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
         except OSError:
             quiet = False
         if sess.get("ended") or quiet:
-            out.append(sid)
-    return out
+            out.append((float(sess.get("started") or 0), sid))
+    # Oldest first: the sessions a migration hands over are folded in the order they ran.
+    return [sid for _, sid in sorted(out)]
 
 
 def spawn_fold(ctx, session_ids):

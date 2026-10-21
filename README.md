@@ -70,65 +70,95 @@ The paper evaluates these mechanisms with Claude Code, Codex and the Copilot CLI
 Web-Bench and two security benchmarks; [`experiments/`](experiments/README.md) reruns the
 SWE-Bench and Web-Bench experiments.
 
-## Supported agents
-
-| Agent | Install |
-|---|---|
-| Claude Code | `claude plugin marketplace add /path/to/TokenEconomizer`<br>`claude plugin install tokeneconomizer@tokeneconomizer` |
-| Codex | `codex plugin marketplace add /path/to/TokenEconomizer`<br>`codex plugin add tokeneconomizer@tokeneconomizer`, then trust its hooks when Codex asks |
-| Copilot CLI | `copilot plugin marketplace add /path/to/TokenEconomizer`<br>`copilot plugin install tokeneconomizer@tokeneconomizer` |
-| Pi | `pi install git:github.com/microsoft/TokenEconomizer` |
-
-**Any plan or login works.** The plugin runs inside your agent's own sessions and never handles
-credentials, so it works with whatever your agent is signed in with: a Claude subscription or an
-Anthropic API key for Claude Code, a ChatGPT plan or an OpenAI API key for Codex, a Copilot
-subscription or a bring-your-own-key provider for the Copilot CLI, and any provider Pi is set up
-with. It needs no API key of its own.
-
-Claude Code, Codex and the Copilot CLI install from a clone of this repository, through their
-own plugin commands; Pi installs the package straight from GitHub, as any Pi package does. You
-need Python 3.10 or newer on `PATH`, and nothing else. Plugins load when a session starts, so
-start a new one. **[`plugin/README.md`](plugin/README.md)** walks through each agent: the first
-run, its commands, updating, uninstalling, Copilot with your own model key, and troubleshooting.
-
 ## Quick start
 
-```bash
-git clone https://github.com/microsoft/TokenEconomizer.git
-claude plugin marketplace add ./TokenEconomizer
-claude plugin install tokeneconomizer@tokeneconomizer
-```
+You need one of the four agents, signed in any way it supports, and Python 3.10 or newer on
+`PATH`. The plugin runs inside your agent's own sessions and never handles credentials, so any
+plan or login works (a Claude subscription or Anthropic API key, a ChatGPT plan or OpenAI API
+key, a Copilot subscription or your own model key, any provider Pi is set up with), and it needs
+no API key of its own.
 
-Then, in a new Claude Code session inside one of your repositories:
+### Install
 
-```text
-/tokeneconomizer:toolprune refresh-catalog    # once on this machine: record the tools a session loads
-```
+Steps 1 and 2 run in your shell; steps 4 and 5 are typed into the agent, in a new session
+started inside one of your repositories.
 
-Work as usual; the plugin needs nothing from you. To see what it is doing:
+| | Claude Code | Codex | Copilot CLI | Pi |
+|---|---|---|---|---|
+| **1. Get it** | `git clone https://github.com/microsoft/TokenEconomizer.git` | same as Claude Code | same as Claude Code | nothing to clone |
+| **2. Install** | `claude plugin marketplace add "$PWD/TokenEconomizer"`<br>`claude plugin install tokeneconomizer@tokeneconomizer` | `codex plugin marketplace add "$PWD/TokenEconomizer"`<br>`codex plugin add tokeneconomizer@tokeneconomizer` | `copilot plugin marketplace add "$PWD/TokenEconomizer"`<br>`copilot plugin install tokeneconomizer@tokeneconomizer` | `pi install git:github.com/microsoft/TokenEconomizer` |
+| **3. Start a session** | trust the folder when asked (**Yes, I trust this folder**) | **Trust and continue** for the folder, then at **Hooks need review** choose **Trust all and continue**; the hooks run from the next session on | **Yes, and remember this folder for future sessions** | nothing to approve |
+| **4. Check it** | `/tokeneconomizer:status`, allowing its script if asked | `$tokeneconomizer:status` | `/tokeneconomizer:status`, choosing **Yes** to run its script | `/te status` |
+| **5. Once per machine** | `/tokeneconomizer:toolprune refresh-catalog` | not needed | `/tokeneconomizer:toolprune refresh-catalog` | not needed |
+| **Update** | `git pull` in the clone | `git pull` in the clone, then `codex plugin add tokeneconomizer@tokeneconomizer` again | `git pull` in the clone | `pi update --extensions` |
 
-| Command | What it shows or does |
-|---|---|
-| `/tokeneconomizer:status` | what it learned in this repository, what it did, and what your sessions cost |
-| `/tokeneconomizer:microskills` | the facts it injects at session start, and those still forming |
-| `/tokeneconomizer:toolprune` | the proposed deny list and its evidence; `… apply` accepts it, `… restore` undoes it |
-| `/tokeneconomizer:config` | the settings: what is on, and every value in effect |
+Run step 2 where you ran step 1. The marketplace path must be absolute (the Copilot CLI reads
+`./TokenEconomizer` as the name of a GitHub repository), and the clone must stay where it is:
+Claude Code, Codex and the Copilot CLI run the plugin from it. Pi can install from the clone too,
+as `pi install ./TokenEconomizer`. Step 4 prints a short status block. Step 5 records which tools
+a session loads, with no model call, so that tool pruning sees all of them; repeat it after the
+agent updates. Uninstalling, Copilot with your own model key, and troubleshooting are in
+**[`plugin/README.md`](plugin/README.md)**, which walks through each agent.
 
-On Codex, ask for them or name the skill (`$tokeneconomizer-status`, `-microskills`,
-`-toolprune`, `-config`); on Pi they are `/te <command>`. On any agent they are also free from a
-terminal inside the repository, as `~/.tokeneconomizer/bin/te <command>`.
+### Supported versions
+
+The commands in this section were checked on these versions:
+
+| Agent | Checked on | Older versions |
+|---|---|---|
+| Claude Code | 2.1.306, 2.1.300 | not supported |
+| Codex | 0.163.0, 0.153.1 | not supported (before 0.141.0, Codex does not run the plugin's hooks at all) |
+| Copilot CLI | 1.0.101, 1.0.83 | not supported |
+| Pi | 1.3.0, 1.2.0 | 0.99.x: instead of step 2, start each session with `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`; older: not supported |
+
+### Everyday commands
+
+Work as usual; the plugin needs nothing from you. To see what it does, or to change it:
+
+| To | Claude Code | Codex | Copilot CLI | Pi |
+|---|---|---|---|---|
+| see what it learned and did, and what sessions cost | `/tokeneconomizer:status` | `$tokeneconomizer:status` | `/tokeneconomizer:status` | `/te status` |
+| see the facts it injects, and those forming | `/tokeneconomizer:microskills` | `$tokeneconomizer:microskills` | `/tokeneconomizer:microskills` | `/te microskills` |
+| review the proposed deny list | `/tokeneconomizer:toolprune` | `$tokeneconomizer:toolprune` | `/tokeneconomizer:toolprune` | not used: Pi loads four tools |
+| accept it, from the next session | `/tokeneconomizer:toolprune apply` | `$tokeneconomizer:toolprune apply` | `/tokeneconomizer:toolprune apply` | — |
+| undo it | `/tokeneconomizer:toolprune restore` | `$tokeneconomizer:toolprune restore` | `/tokeneconomizer:toolprune restore` | — |
+| show every setting in effect | `/tokeneconomizer:config` | `$tokeneconomizer:config` | `/tokeneconomizer:config` | `/te config` |
+| turn a mechanism off in this repository | `/tokeneconomizer:config set loopguard=off` | `$tokeneconomizer:config set loopguard=off` | `/tokeneconomizer:config set loopguard=off` | `/te config set loopguard=off` |
+| ... or in every repository | `/tokeneconomizer:config set loopguard=off --global` | `$tokeneconomizer:config set loopguard=off --global` | `/tokeneconomizer:config set loopguard=off --global` | `/te config set loopguard=off --global` |
+| put a setting back to its default | `/tokeneconomizer:config unset loopguard` | `$tokeneconomizer:config unset loopguard` | `/tokeneconomizer:config unset loopguard` | `/te config unset loopguard` |
+| list every repository it keeps state for | `/tokeneconomizer:repos` | `$tokeneconomizer:repos` | `/tokeneconomizer:repos` | `/te repos` |
+| **from a terminal**, inside the repository | `~/.tokeneconomizer/bin/te --host claude status` | `~/.tokeneconomizer/bin/te --host codex status` | `~/.tokeneconomizer/bin/te --host copilot status` | `~/.tokeneconomizer/bin/te --host pi status` |
+| check the installation (terminal only) | `~/.tokeneconomizer/bin/te --host claude doctor` | `~/.tokeneconomizer/bin/te --host codex doctor` | `~/.tokeneconomizer/bin/te --host copilot doctor` | `~/.tokeneconomizer/bin/te --host pi doctor` |
+
+Inside an agent, each command is one model turn. Codex has no plugin slash commands, so there they
+are skills, named like the slash commands: type `$tokeneconomizer` and pick one. (A question in
+plain words may be answered from the plugin's files without running the command; naming the skill
+runs it.) A Codex command that changes something (`config set`, `toolprune apply`, ...) writes
+outside Codex's sandbox, so Codex asks first: choose **Yes, proceed**. The Copilot CLI runs slash
+commands in its interactive mode only, and asks before each: choose **Yes**. From a terminal every
+command is free: put any of the ones above after `te --host <agent>` (`te --host codex toolprune
+apply`, `te --host pi repos`; settings are shared by every agent, so `te config set loopguard=off
+--global` needs none). From a plain terminal, `te` without `--host` means the agent that last worked
+in the repository. The launcher in `~/.tokeneconomizer/bin` is written by the first session.
 
 ## Settings
 
+The three mechanisms are `microskills`, `toolprune` and `loopguard`; each takes `on` or `off`,
+and each has numbers you can tune with the same `config set` command (in Claude Code's form here;
+each agent's is in the table above):
+
 ```text
-/tokeneconomizer:config set loopguard=off                 # one mechanism off, in this repository
-/tokeneconomizer:config set toolprune=off --global        # ... or in every repository
-/tokeneconomizer:config set microskills_max_facts=2       # tune one: inject at most two facts
+/tokeneconomizer:config set microskills_max_facts=2     # inject at most two facts
+/tokeneconomizer:config set toolprune_evidence=10       # propose after ten unused sessions
+/tokeneconomizer:config set loopguard=stop              # stop stuck headless turns (Claude, Pi)
 ```
 
-The paid helpers -- an LLM fact proposer and a judge for the loop guard -- are off unless you set
-`paid=true`; they run through your own agent's CLI, on the same plan or login as your sessions.
-Every setting, its default and its environment variable: [Settings](plugin/README.md#settings).
+For one session only, set an environment variable when you start the agent:
+`TE_DISABLE=1 claude` turns the whole plugin off, and `TE_LOOPGUARD=off codex` (likewise
+`TE_MICROSKILLS`, `TE_TOOLPRUNE`) one mechanism. The paid helpers -- an LLM fact proposer and a
+judge for the loop guard -- are off unless you set `paid=true`; they run through your own agent's
+CLI, on the same plan or login as your sessions. Every setting, its default and its environment
+variable: [Settings](plugin/README.md#settings).
 
 ## What it does on each agent
 

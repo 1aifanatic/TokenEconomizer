@@ -32,6 +32,7 @@ def env(tmp_path):
 def repo(tmp_path):
     r = tmp_path / "repo"
     (r / ".git" / "info").mkdir(parents=True)
+    (r / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     (r / ".git" / "config").write_text(
         '[remote "origin"]\n\turl = https://github.com/acme/widget.git\n')
     (r / "pyproject.toml").write_text("[project]\nname='w'\n")

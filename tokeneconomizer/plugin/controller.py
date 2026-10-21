@@ -23,7 +23,7 @@ import os
 import time
 
 from .. import loopguard
-from . import denylist, fold, repomap
+from . import denylist, fold, repomap, repos
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -46,9 +46,11 @@ class LiveController:
     def _session(self):
         s = self.store.read(self._sess_name())
         if not isinstance(s, dict):
+            # Where the session started (its first hook's directory): what `repos` resolves
+            # to tell which repository the session belongs to, when its log does not say.
             s = {"session_id": self.sid, "host": self.host.name, "started": time.time(),
-                 "turns": [], "nudges": 0, "aborts": 0, "judge_tokens": 0.0,
-                 "writer_tokens": 0.0}
+                 "cwd": self.host.cwd(self.p, self.ctx.env), "turns": [], "nudges": 0,
+                 "aborts": 0, "judge_tokens": 0.0, "writer_tokens": 0.0}
         return s
 
     def _save(self, s):
@@ -75,6 +77,8 @@ class LiveController:
         # leave an "unknown" session behind.
         if not self.cfg.enabled or not self.host.session_id(self.p):
             return {}
+        self.ctx.settle()
+        self.cfg = self.ctx.config
         event = self.p.get("hook_event_name") or ""
         # PostToolUseFailure: Copilot reports a failed tool there, not in PostToolUse.
         handler = {"SessionStart": self.session_start, "UserPromptSubmit": self.user_prompt,
@@ -91,7 +95,7 @@ class LiveController:
             pass
         s = self._session()
         s["source"] = source
-        s["cwd"] = self.host.cwd(self.p, self.ctx.env)
+        s.setdefault("cwd", self.host.cwd(self.p, self.ctx.env))
         outputs = []
         seen = self.store.read("notices.json") or {}
 
@@ -118,7 +122,10 @@ class LiveController:
 
         if (self.cfg.toolprune == "propose" and denylist.supports(self.host.name)
                 and not self.cfg.shadow):
-            prop = (self.store.read("untool.json") or {}).get("proposal") or []
+            # What this checkout already applied is no news here (another clone may not have).
+            mine = set(denylist.applied_for(self.store, self.ctx.repo.root, self.host.name))
+            prop = [t for t in (self.store.read("untool.json") or {}).get("proposal") or []
+                    if t not in mine]
             key = ",".join(prop)
             if prop and seen.get("untool") != key:
                 outputs.append(self.host.notice(
@@ -127,6 +134,10 @@ class LiveController:
                     f"{'...' if len(prop) > 4 else ''}). Review with "
                     f"`{self._cmd('toolprune')}`; nothing changes until you apply it."))
                 seen["untool"] = key
+
+        note = repos.migration_notice(self.ctx.root, self._cmd("repos"))
+        if note and not self.cfg.shadow:
+            outputs.append(self.host.notice(note))
 
         if self.cfg.repomap != "off":
             if repomap.stale(self.ctx):
@@ -140,6 +151,9 @@ class LiveController:
         if outputs:
             self.store.write("notices.json", seen)
         self._save(s)
+        repos.note_repo(self.ctx.root, self.ctx.repo)
+        repos.prune_pins(self.ctx.root, self.host.name)
+        repos.start_migration(self.ctx)
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
 
@@ -268,6 +282,13 @@ class LiveController:
 
     # ---- SessionEnd ---------------------------------------------------------------------
     def session_end(self):
+        # An end with no start and no session log is no session to learn from: Codex 0.163.0
+        # sends one for a thread that never ran a prompt (`codex debug prompt-input`), and
+        # recording it would only leave an unreadable fold in the ledger.
+        tp = self.host.transcript(self.p)
+        if not os.path.exists(self.store.path(self._sess_name())) and not (
+                tp and os.path.exists(tp)):
+            return {}
         s = self._session()
         self._close_turn(s, stopped_normally=False)
         s["ended"] = time.time()

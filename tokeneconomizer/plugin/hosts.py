@@ -122,6 +122,11 @@ class Host:
     def cwd(self, p, env):
         return p.get("cwd") or env.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
+    def env_session_id(self, env):
+        """The session a `te` command runs inside, from its shell's environment ("" if none is
+        named). `TE_SESSION_ID` is set by the Pi extension's `/te`."""
+        return str(env.get("TE_SESSION_ID") or "")
+
     def turn_key(self, p):
         return ""
 
@@ -205,6 +210,10 @@ class ClaudeCode(Host):
 
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
+
+    def env_session_id(self, env):
+        # Claude Code exports its session id to the Bash tool's shell (seen on 2.1.304).
+        return str(env.get("TE_SESSION_ID") or env.get("CLAUDE_CODE_SESSION_ID") or "")
 
     def stop(self, reason):
         return {"continue": False, "stopReason": reason}

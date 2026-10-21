@@ -329,7 +329,10 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
 
 def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
     """Codex has no plugin slash commands; its plugins carry skills. Ours live outside `skills/`,
-    which Claude Code and Copilot would load beside their slash commands."""
+    which Claude Code and Copilot would load beside their slash commands. Codex lists a plugin's
+    skills under the plugin's name (0.163.0), so `status` is `$tokeneconomizer:status`, as the
+    slash command is `/tokeneconomizer:status`; each description names TokenEconomizer, which is
+    what a request in plain words, or a Codex that lists the bare name, matches on."""
     from tokeneconomizer.plugin import cli
     manifest = _json(PLUGIN, ".codex-plugin", "plugin.json")
     assert manifest["skills"] == "./codex-skills"
@@ -337,13 +340,13 @@ def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
     root = os.path.join(PLUGIN, "codex-skills")
     subcommands = set(cli.build_parser()._subparsers._group_actions[0].choices)
     names = sorted(os.listdir(root))
-    assert names == ["tokeneconomizer-config", "tokeneconomizer-microskills",
-                     "tokeneconomizer-status", "tokeneconomizer-toolprune"]
+    assert names == ["config", "microskills", "repos", "status", "toolprune"]
     for name in names:
         text = open(os.path.join(root, name, "SKILL.md"), encoding="utf-8").read()
         assert text.startswith(f'---\nname: "{name}"\ndescription: >\n')
+        assert "TokenEconomizer" in text.split("\n")[3]
         cmd = re.search(r'bin/te" --host codex --cwd "\$\(pwd\)" (\w+)', text)
-        assert cmd and cmd.group(1) in subcommands and cmd.group(1) == name.split("-", 1)[1]
+        assert cmd and cmd.group(1) in subcommands and cmd.group(1) == name
 
 
 def test_the_commands_keep_their_earlier_names(tmp_path, monkeypatch, capsys):

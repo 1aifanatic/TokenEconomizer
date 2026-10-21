@@ -26,8 +26,9 @@ Rules common to all three:
   * Only the person's approval (`te toolprune apply`), or `toolprune: auto`, writes the file,
     and only from the NEXT session: tools are fixed at session start, and changing them
     mid-session would rewrite the cached prompt prefix.
-  * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`);
-    an entry the person wrote is never touched.
+  * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`,
+    per settings file, since the clones of one repository share its state but not their
+    settings); an entry the person wrote is never touched.
   * When the plugin creates the file, it adds the path to `.git/info/exclude`, so a file meant
     to be per-user can never be committed by accident.
 
@@ -162,13 +163,48 @@ def _exclude_from_git(repo_root, rel=SETTINGS_REL):
         return False
 
 
-def applied(store):
-    return list((store.read("untool_applied.json") or {}).get("tools", []))
+# What the writer added, per settings file: clones and worktrees of one repository share its
+# state (and so its proposal), but each checkout has its own settings file. Up to 0.1.0 the
+# record held one file's entries (`{"tools", "path"}`); that shape is still read.
+APPLIED = "untool_applied.json"
+
+
+def _canon(path):
+    return os.path.realpath(path) if path else ""
+
+
+def applied_by_path(doc):
+    """{settings file: [entries the plugin added to it]} from an `untool_applied.json`."""
+    if isinstance(doc.get("by_path"), dict):
+        return {_canon(p): list(t or []) for p, t in doc["by_path"].items()}
+    if doc.get("tools"):
+        return {_canon(doc.get("path") or ""): list(doc["tools"])}
+    return {}
+
+
+def write_applied(store, by_path):
+    store.write(APPLIED, {"by_path": {p: sorted(t) for p, t in by_path.items() if t},
+                          "updated": time.time()})
+
+
+def applied(store, path=None):
+    """What the plugin added to the settings file at `path`; without one, to any checkout's."""
+    by = applied_by_path(store.read(APPLIED) or {})
+    if path is None:
+        return sorted(set().union(*by.values())) if by else []
+    return list(by.get(_canon(path)) or by.get("") or [])
+
+
+def applied_for(store, repo_root, host="claude"):
+    """What the plugin added to this checkout's settings file for `host`."""
+    return applied(store, settings_path(repo_root, host))
 
 
 def _record(store, items, path):
-    store.write("untool_applied.json", {"tools": sorted(items), "path": path,
-                                        "updated": time.time()})
+    by = applied_by_path(store.read(APPLIED) or {})
+    by.pop("", None)
+    by[_canon(path)] = sorted(items)
+    write_applied(store, by)
 
 
 # ---- the JSON-list hosts: Claude Code's deny rules, Copilot's disabled MCP servers -------
@@ -191,12 +227,12 @@ def _apply_json_list(repo_root, items, store, host):
     write_json(path, data)
     if created:
         _exclude_from_git(repo_root, _SETTINGS[host])
-    _record(store, set(applied(store)) | set(added), path)
+    _record(store, set(applied(store, path)) | set(added), path)
     return added
 
 
 def _restore_json_list(repo_root, store, items, host):
-    mine = set(applied(store))
+    mine = set(applied(store, settings_path(repo_root, host)))
     target = mine if not items else mine & set(items)
     if not target:
         return []
@@ -358,7 +394,7 @@ def _apply_codex(repo_root, capabilities, store):
     text = original
     added = []
     for cap in capabilities:
-        if cap not in CODEX_TOGGLES or cap in applied(store):
+        if cap not in CODEX_TOGGLES or cap in applied(store, path):
             continue
         for table, key, value in CODEX_TOGGLES[cap]:
             text, _ = _toml_insert(text, table, key, value, f"{MARK}:{cap}")
@@ -377,12 +413,12 @@ def _apply_codex(repo_root, capabilities, store):
         raise RuntimeError(f"Codex rejected the edited {path}, so it was put back: {err}")
     if created:
         _exclude_from_git(repo_root, CODEX_CONFIG_REL)
-    _record(store, set(applied(store)) | set(added), path)
+    _record(store, set(applied(store, path)) | set(added), path)
     return added
 
 
 def _restore_codex(repo_root, store, capabilities):
-    mine = set(applied(store))
+    mine = set(applied(store, settings_path(repo_root, "codex")))
     target = mine if not capabilities else mine & set(capabilities)
     if not target:
         return []

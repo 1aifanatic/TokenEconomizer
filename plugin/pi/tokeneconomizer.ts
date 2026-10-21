@@ -40,13 +40,19 @@ const SECTION = "tokeneconomizer";
 const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 
 /** Run one of the plugin's launchers with `input` on stdin; resolve to its stdout. */
-function run(script: string, args: string[], input: string, mode: string): Promise<string> {
+function run(
+  script: string,
+  args: string[],
+  input: string,
+  mode: string,
+  extra: Record<string, string> = {},
+): Promise<string> {
   return new Promise((resolve) => {
     let out = "";
     let child;
     try {
       child = spawn(join(SCRIPTS, script), args, {
-        env: { ...process.env, TE_PI_MODE: mode },
+        env: { ...process.env, TE_PI_MODE: mode, ...extra },
         stdio: ["pipe", "pipe", "ignore"],
       });
     } catch {
@@ -178,10 +184,14 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("te", {
-    description: "TokenEconomizer: status | microskills | config (what it learned here, what it did)",
+    description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
     handler: async (args, ctx) => {
       const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
-      const out = await run("te", ["--host", "pi", "--cwd", ctx.cwd, ...argv], "", ctx.mode);
+      // The session id lets `te status` say when this session is recorded under the repository
+      // it started in rather than the one `ctx.cwd` is in now.
+      const out = await run("te", ["--host", "pi", "--cwd", ctx.cwd, ...argv], "", ctx.mode, {
+        TE_SESSION_ID: ctx.sessionManager.getSessionId(),
+      });
       notify(ctx, out.trim() || "te: no output (is Python 3.10+ on PATH?)");
     },
   });

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from . import repos
 from .config import LiveConfig, load_config
 from .paths import RepoId, repo_identity, repo_state_dir, state_root
 from .store import Store
@@ -17,6 +18,7 @@ class LiveContext:
     store: Store            # this host's state for this repository
     config: LiveConfig
     env: dict
+    unsettled: tuple = None  # (cwd, session id) until `settle` has run
 
     @property
     def mech_dir(self):
@@ -32,14 +34,36 @@ class LiveContext:
         return self.host.headless(self.env)
 
     @classmethod
-    def build(cls, host, cwd, env=None):
+    def build(cls, host, cwd, env=None, session_id=None, settle=True):
+        """The context for `cwd`; with `session_id`, for the repository that session is pinned
+        to, wherever the agent has moved since. With `settle` (see there) it is ready to use;
+        a hook settles only once it knows it will act, so a call it ignores writes nothing."""
         env = dict(os.environ if env is None else env)
-        repo = repo_identity(cwd, env)
         root = state_root(env)
+        repo = repos.pinned(root, host.name, session_id) if session_id else None
+        unsettled = None
+        if repo is None:
+            repo = repo_identity(cwd, env)
+            unsettled = (cwd, session_id)
         base = repo_state_dir(repo, host.name, env)
-        store = Store(base)
-        config = load_config(root, repo_dir=os.path.dirname(base), env=env)
-        return cls(host=host, repo=repo, root=root, store=store, config=config, env=env)
+        ctx = cls(host=host, repo=repo, root=root, store=Store(base),
+                  config=load_config(root, repo_dir=os.path.dirname(base), env=env), env=env,
+                  unsettled=unsettled)
+        if settle:
+            ctx.settle()
+        return ctx
+
+    def settle(self):
+        """Carry over what this checkout's earlier keys hold, and pin the session to this
+        repository (`repos.settle`); once, and a no-op for a session already pinned."""
+        if self.unsettled is None:
+            return
+        cwd, sid = self.unsettled
+        self.unsettled = None
+        if repos.settle(self.root, self.host.name, self.repo, cwd, self.env, session_id=sid):
+            # A merge may have brought this repository its settings file.
+            self.config = load_config(self.root, repo_dir=os.path.dirname(self.store.base),
+                                      env=self.env)
 
     def spawn(self, argv, log_name):
         """Run `te <argv>` for this host and repository in a detached process, its output

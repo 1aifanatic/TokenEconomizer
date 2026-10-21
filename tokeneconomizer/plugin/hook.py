@@ -26,7 +26,8 @@ def run(payload, env, host_hint=None):
     from .context import LiveContext
     from .controller import LiveController
     host = hosts.detect(payload, env, hint=host_hint)
-    ctx = LiveContext.build(host, host.cwd(payload, env), env)
+    ctx = LiveContext.build(host, host.cwd(payload, env), env,
+                            session_id=host.session_id(payload) or None, settle=False)
     return LiveController(ctx, payload).handle()
 
 

@@ -1,10 +1,10 @@
 ---
-name: "tokeneconomizer-status"
+name: "status"
 description: >
   Show what TokenEconomizer has learned for this repository, what it has done, and what this repository's sessions cost. Use when the user asks about TokenEconomizer, its status, its savings or overhead, or what it learned here.
 ---
 
-# tokeneconomizer-status
+# TokenEconomizer: status
 
 Run this command in the repository's root directory:
 

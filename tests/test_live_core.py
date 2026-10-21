@@ -19,6 +19,8 @@ from tokeneconomizer.plugin.store import Store
 # ---- repository identity ---------------------------------------------------------------
 def _git_repo(root, remote=None):
     os.makedirs(os.path.join(root, ".git"), exist_ok=True)
+    with open(os.path.join(root, ".git", "HEAD"), "w") as fh:
+        fh.write("ref: refs/heads/main\n")
     cfg = "[core]\n\trepositoryformatversion = 0\n"
     if remote:
         cfg += f'[remote "origin"]\n\turl = {remote}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n'

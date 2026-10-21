@@ -1,10 +1,13 @@
 """Where live state lives, and which repository a session belongs to.
 
-State is keyed by REPOSITORY, not by directory: two worktrees of one clone, or a session started
-in a subdirectory, are the same stream of work and should share what was learned about it. The
-key is derived from the `origin` remote when there is one (so a re-clone keeps its history) and
-from the real path of the checkout otherwise. Reading the remote parses `.git/config` directly --
-a hook that shelled out to `git` would pay a subprocess on every tool call.
+State is keyed by REPOSITORY, not by directory: two clones or worktrees of one repository, or a
+session started in a subdirectory, are the same stream of work and should share what was
+learned about it. The key is derived from the `origin` remote when there is one (so a re-clone
+keeps its history), from the real path of the main checkout otherwise, and from the directory
+itself outside any checkout. Reading the remote parses `.git/config` directly -- a hook that
+shelled out to `git` would pay a subprocess on every tool call. Which repository a running
+session belongs to is decided once, at its first hook, and pinned (`repos`); state written under
+an earlier key is carried over by `repos` too.
 
 The state root is `$TOKENECONOMIZER_HOME`, else `~/.tokeneconomizer`. It is deliberately not a
 host's plugin data directory: the CLI runs from the agent's Bash tool, where those variables are
@@ -81,22 +84,58 @@ def ensure_launcher(env=None):
     return path
 
 
-def find_repo_root(start, env=None):
-    """The nearest directory at or above `start` that holds a `.git` entry, else None.
+def home_dir(env=None):
+    """The real path of the person's home directory ("" if there is none)."""
+    env = os.environ if env is None else env
+    home = env.get("HOME") or os.path.expanduser("~")
+    return os.path.realpath(home) if home and home != "~" else ""
 
-    `.git` may be a directory (a clone) or a file (a worktree or submodule), so existence is the
-    test, not `isdir`. The walk honours `GIT_CEILING_DIRECTORIES` as git does: it never climbs
-    into a listed directory, so a stray `.git` in a shared parent (`/tmp`, a versioned home
-    directory) need not swallow every session beneath it."""
+
+def _gitdir_of_file(dot):
+    """The directory a `.git` FILE points at (`gitdir: <path>`), or None."""
+    try:
+        with open(dot, encoding="utf-8") as fh:
+            line = fh.read(4096).strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = line.split(":", 1)[1].strip()
+    if not os.path.isabs(gitdir):
+        gitdir = os.path.normpath(os.path.join(os.path.dirname(dot), gitdir))
+    return gitdir
+
+
+def is_git_entry(dot):
+    """Does the `.git` entry at `dot` make its directory a checkout, as git itself would take it?
+
+    A directory counts when it holds `HEAD`; a file (a linked worktree, a submodule) when its
+    `gitdir:` line names a directory that exists. An empty `.git` directory -- left behind by a
+    tool, or by an undone `git init` -- is no repository to git, and so none here."""
+    if os.path.isdir(dot):
+        return os.path.isfile(os.path.join(dot, "HEAD"))
+    gitdir = _gitdir_of_file(dot)
+    return bool(gitdir) and os.path.isdir(gitdir)
+
+
+def find_repo_root(start, env=None):
+    """The nearest directory at or above `start` that is a git checkout (`is_git_entry`), else
+    None.
+
+    The walk honours `GIT_CEILING_DIRECTORIES` as git does -- it never climbs into a listed
+    directory -- and treats the home directory as one more ceiling for anything below it: a
+    versioned home directory is the repository of a session started in `~` itself, never of
+    every unversioned project underneath it."""
     env = os.environ if env is None else env
     ceilings = {os.path.abspath(c) for c in
                 (env.get("GIT_CEILING_DIRECTORIES") or "").split(os.pathsep) if c}
+    home = home_dir(env)
     cur = os.path.abspath(start or os.getcwd())
     while True:
-        if os.path.exists(os.path.join(cur, ".git")):
+        if is_git_entry(os.path.join(cur, ".git")):
             return cur
         parent = os.path.dirname(cur)
-        if parent == cur or parent in ceilings:
+        if parent == cur or parent in ceilings or (home and os.path.realpath(parent) == home):
             return None
         cur = parent
 
@@ -106,16 +145,9 @@ def _git_common_dir(root):
     dot = os.path.join(root, ".git")
     if os.path.isdir(dot):
         return dot
-    try:
-        with open(dot, encoding="utf-8") as fh:
-            line = fh.read().strip()
-    except OSError:
+    gitdir = _gitdir_of_file(dot)
+    if not gitdir:
         return None
-    if not line.startswith("gitdir:"):
-        return None
-    gitdir = line.split(":", 1)[1].strip()
-    if not os.path.isabs(gitdir):
-        gitdir = os.path.normpath(os.path.join(root, gitdir))
     # A worktree's gitdir is <main>/.git/worktrees/<name>; `commondir` points back at <main>/.git.
     try:
         with open(os.path.join(gitdir, "commondir"), encoding="utf-8") as fh:
@@ -167,24 +199,53 @@ def _slug(text):
     return re.sub(r"[^a-z0-9]+", "-", (text or "repo").lower()).strip("-")[:40] or "repo"
 
 
+def digest(canon):
+    return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:10]
+
+
+# How a repository was identified, as `RepoId.how` records it.
+BY_REMOTE, BY_PATH, BY_DIR = "remote", "path", "dir"
+
+
 @dataclass(frozen=True)
 class RepoId:
     root: str        # the checkout this session runs in
     key: str         # stable directory name for its state
     label: str       # human name, used in rendered manuals ("owner/repo" or the basename)
     remote: str      # normalized remote, "" when the checkout has none
+    how: str = ""    # BY_REMOTE, BY_PATH (a checkout with no remote) or BY_DIR (no checkout)
+
+
+def _main_checkout(root):
+    """The directory holding a checkout's shared `.git`: the checkout itself, or for a linked
+    worktree the clone it was made from. None when that git directory is not a `.git` (a bare
+    repository's worktree, `--separate-git-dir`)."""
+    common = _git_common_dir(root)
+    if common and os.path.basename(os.path.normpath(common)) == ".git":
+        return os.path.dirname(os.path.normpath(common))
+    return None
 
 
 def repo_identity(cwd, env=None):
-    """Identify the repository a session in `cwd` belongs to."""
-    root = find_repo_root(cwd, env) or os.path.abspath(cwd or os.getcwd())
-    has_git = os.path.exists(os.path.join(root, ".git"))
-    remote = normalize_remote(origin_url(root)) if has_git else ""
-    canon = remote or os.path.realpath(root)
-    label = "/".join(remote.split("/")[-2:]) if remote else os.path.basename(root.rstrip("/"))
-    digest = hashlib.sha1(canon.encode("utf-8")).hexdigest()[:10]
-    return RepoId(root=root, key=f"{_slug(os.path.basename(root.rstrip('/')))}-{digest}",
-                  label=label or "repo", remote=remote)
+    """Identify the repository a session in `cwd` belongs to.
+
+    One repository has one key however it is checked out: its normalized `origin` remote when
+    it has one (every clone, worktree and re-clone), else the real path of its main checkout (a
+    linked worktree shares its clone's), else -- outside any checkout -- the directory itself.
+    The key's readable part is the repository's name (the remote's last component, or the main
+    checkout's folder), not the folder one particular checkout sits in."""
+    found = find_repo_root(cwd, env)
+    root = found or os.path.abspath(cwd or os.getcwd())
+    remote = normalize_remote(origin_url(root)) if found else ""
+    if remote:
+        how, canon, name = BY_REMOTE, remote, remote.rstrip("/").rsplit("/", 1)[-1]
+        label = "/".join(remote.split("/")[-2:])
+    else:
+        main = (_main_checkout(root) or _git_common_dir(root) or root) if found else root
+        how, canon = (BY_PATH if found else BY_DIR), os.path.realpath(main)
+        name = label = os.path.basename(main.rstrip("/"))
+    return RepoId(root=root, key=f"{_slug(name)}-{digest(canon)}", label=label or "repo",
+                  remote=remote, how=how)
 
 
 def repo_state_dir(repo, host, env=None):

@@ -16,6 +16,12 @@
     te config unset KEY ...           back to the next source down (the global file, then default)
     te repomap [show | refresh]       the repository map (`repomap=on`): what is cached, or
                                       make it now
+    te repos                          every repository with state here: how it was identified,
+                                      its agents and sessions, the checkouts seen
+    te repos migrate                  send state recorded under earlier keys where it belongs
+                                      now (runs by itself, once, after an upgrade)
+    te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
+                                      repository's), for state whose checkouts are gone
     te doctor                         check the installation
     te --host copilot probe           real Copilot sessions in a throwaway repository: does a
                                       learned fact change what the model does, and what does the
@@ -31,25 +37,79 @@ import glob
 import json
 import os
 import sys
+import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, repomap, toolcheck
+from . import accounting, denylist, fold, hosts, paths, repomap, repos, toolcheck
 from .config import unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
 
 
-def _ctx(args, env=None):
+def _ctx(args, env=None, session_id=None):
     host = hosts.HOSTS[args.host]()
-    return LiveContext.build(host, args.cwd, env)
+    return LiveContext.build(host, args.cwd, env, session_id=session_id)
+
+
+def _unwritable(path):
+    """Why the plugin cannot write its state at `path`, or None when it can. A command that
+    changes something checks first: a sandboxed agent (Codex's default sandbox makes everything
+    outside the workspace read-only) must not get half a change -- a deny list written to the
+    repository's settings, and no record that the plugin added it, which `restore` needs."""
+    probe = os.path.join(path, f".write-test-{os.getpid()}")
+    try:
+        os.makedirs(path, exist_ok=True)
+        open(probe, "w").close()
+        os.remove(probe)
+        return None
+    except OSError as e:
+        return e.strerror or str(e)
+
+
+def _refuse_unwritable(path):
+    """Print why a change cannot be made here, and return the exit code; 0 when it can."""
+    why = _unwritable(path)
+    if why is None:
+        return 0
+    print(f"not changed: TokenEconomizer cannot write its state in {path} ({why}). Inside a "
+          f"sandboxed agent, run this command with permission to write outside the workspace "
+          f"(Codex asks you to approve it), or run it from a terminal as "
+          f"`~/.tokeneconomizer/bin/te {' '.join(sys.argv[1:]) or '...'}`.")
+    return 1
+
+
+def _session_ctx(args, session_id):
+    """The context of a recorded session: the repository it is pinned to, when that repository
+    holds its record (a fold handed off at SessionEnd), else the one `--cwd` names. Only a
+    session's own hooks pin it; this never does."""
+    ctx = _ctx(args)
+    if session_id and repos.pinned(ctx.root, ctx.host.name, session_id) is not None:
+        pinned = _ctx(args, session_id=session_id)
+        if os.path.exists(pinned.store.path("sessions", f"{session_id}.json")):
+            return pinned
+    return ctx
+
+
+def _session_note(ctx, env=None):
+    """A line when this command runs inside an agent session recorded under another repository
+    (the one it started in), else None."""
+    env = os.environ if env is None else env
+    sid = ctx.host.env_session_id(env)
+    pin = repos.pinned(ctx.root, ctx.host.name, sid) if sid else None
+    if pin is None or pin.key == ctx.repo.key:
+        return None
+    return (f"this {ctx.host.name} session started in {pin.root} and is recorded under "
+            f"{pin.label} (`te --cwd {pin.root} status`)")
 
 
 # ---- status / microskills ------------------------------------------------------------------
 def cmd_status(args):
     ctx = _ctx(args)
     cfg = ctx.config
-    out = {"repo": ctx.repo.label, "repo_root": ctx.repo.root, "host": ctx.host.name,
-           "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings}
+    out = {"repo": ctx.repo.label, "repo_root": ctx.repo.root, "repo_key": ctx.repo.key,
+           "identified_by": ctx.repo.how, "host": ctx.host.name,
+           "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings,
+           "session_note": _session_note(ctx)}
     inj = ctx.store.read("injection.json") or {}
     unt = ctx.store.read("untool.json") or {}
     env_tracker = loopguard.load_envelope(ctx.store, cfg.loopguard_aggr,
@@ -63,7 +123,8 @@ def cmd_status(args):
         "toolprune": {"mode": cfg.toolprune, "sessions": unt.get("sessions", 0),
                       "catalog_source": unt.get("catalog_source"),
                       "proposal": unt.get("proposal", []),
-                      "applied": denylist.applied(ctx.store)},
+                      "applied": denylist.applied_for(ctx.store, ctx.repo.root,
+                                                      ctx.host.name)},
         "loopguard": {"mode": cfg.loopguard, "envelope": env_tracker.envelope,
                       "ended_green_turns": len(env_tracker.resolved_turns)},
         "ledger": ledger})
@@ -71,6 +132,7 @@ def cmd_status(args):
         print(json.dumps(out, indent=2, default=str))
         return 0
     print(f"TokenEconomizer -- {out['repo']} ({ctx.host.name})")
+    print(f"  repository   {ctx.repo.root}, {repos.describe(ctx.repo)}")
     print(f"  state        {out['state']}")
     print(f"  config       microskills={cfg.microskills_effective} toolprune={cfg.toolprune} "
           f"loopguard={cfg.loopguard} repomap={cfg.repomap} mode={cfg.mode} paid={cfg.paid} "
@@ -83,6 +145,8 @@ def cmd_status(args):
                                     f"none yet ({why})"))
     for w in cfg.warnings:
         print(f"  warning      {w}")
+    if out["session_note"]:
+        print(f"  note         {out['session_note']}")
     print(f"  sessions     {ledger['sessions']} folded, "
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
@@ -127,8 +191,8 @@ def _toolprune_show(ctx, unt):
           f"{unt.get('catalog_source') or 'none yet'}")
     print(f"applied ({denylist.unit(host, plural=True)} this plugin added to "
           f"{denylist.settings_path(ctx.repo.root, host)}): "
-          f"{', '.join(denylist.applied(ctx.store)) or '-'}")
-    print(f"proposed: {', '.join(unt.get('proposal', [])) or '-'}")
+          f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
+    print(f"proposed: {', '.join(_proposal(ctx, unt)) or '-'}")
     if host == "codex":
         caps = unt.get("capabilities") or {}
         if caps:
@@ -167,6 +231,13 @@ def _toolprune_show(ctx, unt):
     return 0
 
 
+def _proposal(ctx, unt):
+    """The proposal, less what this checkout already applied: the clones of one repository share
+    its evidence, and one of them may have applied the list before another."""
+    mine = set(denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name))
+    return [t for t in unt.get("proposal", []) if t not in mine]
+
+
 def cmd_toolprune(args):
     ctx = _ctx(args)
     host = ctx.host.name
@@ -177,8 +248,10 @@ def cmd_toolprune(args):
     action = args.action
     if action == "show":
         return _toolprune_show(ctx, unt)
+    if action in ("apply", "restore") and _refuse_unwritable(ctx.store.base):
+        return 1
     if action == "apply":
-        tools = args.tools or unt.get("proposal", [])
+        tools = args.tools or _proposal(ctx, unt)
         if not tools:
             print("nothing to apply")
             return 0
@@ -201,7 +274,8 @@ def cmd_toolprune(args):
                 print("warning: Copilot reads a repository's .github/copilot settings only in a "
                       "trusted folder, and this one is not. Trust it (Copilot asks when you "
                       "start it here), or the change does nothing.")
-            left = toolcheck.verify_copilot(ctx.repo.root, denylist.applied(ctx.store))
+            left = toolcheck.verify_copilot(ctx.repo.root,
+                                            denylist.applied_for(ctx.store, ctx.repo.root, host))
             if left is not None:
                 print("checked with a local capture: " + ", ".join(
                     f"{k} {'removed' if not v else f'still loaded ({v} tools)'}"
@@ -211,7 +285,8 @@ def cmd_toolprune(args):
                 print("warning: this project is not trusted in Codex, which ignores a "
                       "project's .codex/config.toml until it is. Trust it (Codex asks when "
                       "you start it here), or the change does nothing.")
-            state = toolcheck.verify_codex(ctx.repo.root, denylist.applied(ctx.store))
+            state = toolcheck.verify_codex(ctx.repo.root,
+                                           denylist.applied_for(ctx.store, ctx.repo.root, host))
             if state:
                 print("codex features list: " + ", ".join(
                     f"{k}={'on' if v else 'off'}" for k, v in sorted(state.items())))
@@ -233,7 +308,8 @@ def cmd_toolprune(args):
         print(f"{len(tools)} tools recorded in {path}:\n  " + ", ".join(tools))
         return 0
     if action == "measure":
-        tools = args.tools or unt.get("proposal", []) or denylist.applied(ctx.store)
+        tools = args.tools or _proposal(ctx, unt) or denylist.applied_for(
+            ctx.store, ctx.repo.root, host)
         if not tools:
             print("no proposal to measure")
             return 1
@@ -313,6 +389,8 @@ def cmd_config(args):
         return 0
     path = (os.path.join(ctx.root, "config.json") if args.globally
             else os.path.join(os.path.dirname(ctx.store.base), "config.json"))
+    if _refuse_unwritable(os.path.dirname(path)):
+        return 1
     if args.action == "unset":
         try:
             cur = unset_config(path, [k.strip() for k in args.pairs])
@@ -347,7 +425,8 @@ def cmd_config(args):
 
 
 def cmd_fold(args):
-    ctx = _ctx(args)
+    # A session is folded into the repository it is pinned to, wherever `--cwd` points.
+    ctx = _session_ctx(args, (args.session or [None])[0])
     sids = args.session or fold.pending_sessions(ctx)
     for sid in sids:
         rec = fold.fold_session(ctx, sid)
@@ -359,7 +438,90 @@ def cmd_fold(args):
 def cmd_judge(args):
     """The detached half of the paid stuck judge (see plugin/judge.py); not for people."""
     from . import judge
-    judge.run_job(_ctx(args), args.session, args.job)
+    judge.run_job(_session_ctx(args, args.session), args.session, args.job)
+    return 0
+
+
+# ---- repos ----------------------------------------------------------------------------------
+def _when(ts):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
+
+
+def _print_moves(done):
+    """One line per move a migration made; returns how many there were."""
+    n = 0
+    for r in done or ():
+        for m in r.get("moves") or ():
+            n += 1
+            what = "all of its state" if r.get("into") == m["into"] else f"{m['moved']} session(s)"
+            print(f"  {r['key']} -> {m['into']} ({m['host']}): {what}"
+                  + (f", {m['refold']} to be folded there again" if m.get("refold") else ""))
+    return n
+
+
+def cmd_repos(args):
+    root = state_root()
+    if args.action in ("migrate", "merge") and _refuse_unwritable(root):
+        return 1
+    if args.action == "migrate":
+        done = repos.run_migration(root)
+        if done is None:
+            print("another migration holds the state root; try again in a minute")
+            return 1
+        if not args.quiet:
+            if not _print_moves(done):
+                print("nothing to move: every session is filed under the repository it ran in")
+        return 0
+    if args.action == "merge":
+        if not args.keys or len(args.keys) > 2:
+            print("usage: te repos merge KEY [INTO] (keys as `te repos` lists them)")
+            return 2
+        src = args.keys[0]
+        if not os.path.isdir(os.path.join(repos.repos_dir(root), src)):
+            print(f"no state directory {src!r} in {repos.repos_dir(root)}")
+            return 2
+        into = args.keys[1] if len(args.keys) > 1 else _ctx(args).repo
+        into_key = into if isinstance(into, str) else into.key
+        if into_key == src:
+            print(f"{src} is this repository's own state; name the one to merge into it")
+            return 2
+        res = repos.merge(root, src, into)
+        if res is None:
+            print("the state root or one of the two directories is busy; try again in a minute")
+            return 1
+        print(f"merged {src} into {into_key}: " + (", ".join(
+            f"{h} {c['moved']} session(s)" + (f" ({c['refold']} to be folded again)"
+                                             if c["refold"] else "")
+            for h, c in sorted(res.items())) or "no sessions"))
+        print(f"the old directory is kept under {os.path.join(root, 'merged')}")
+        if not isinstance(into, str):
+            repos.refold_moved([{"moves": [dict(c, host=h, cwd=into.root)
+                                           for h, c in res.items()]}])
+        return 0
+    current = _ctx(args).repo
+    rows, merged = repos.listing(root, current=current)
+    if args.json:
+        print(json.dumps({"repos": rows, "merged": merged}, indent=2, default=str))
+        return 0
+    if not rows:
+        print(f"no state yet in {repos.repos_dir(root)}")
+    for row in rows:
+        print(f"{row['label']}  [{row['key']}]" + ("  <- this directory" if row["current"]
+                                                  else ""))
+        print("  identified   " + (repos.how_words(row["how"], row["remote"]) if row["how"]
+                                   else "recorded by an earlier version"))
+        print("  sessions     " + (", ".join(f"{h} {n}" for h, n in row["agents"].items())
+                                   or "none") + f"; last {_when(row['last'])}")
+        if row["checkouts"]:
+            print("  checkouts    " + ", ".join(row["checkouts"]))
+        elif row["cwds"]:
+            print("  ran in       " + ", ".join(row["cwds"][:3])
+                  + (f" (+{len(row['cwds']) - 3})" if len(row["cwds"]) > 3 else ""))
+        for n in row["notes"]:
+            print(f"  note         {n}")
+    if merged:
+        print(f"\n{merged} earlier state director{'y' if merged == 1 else 'ies'} merged into "
+              f"the above, kept under {os.path.join(root, 'merged')}")
     return 0
 
 
@@ -423,6 +585,18 @@ def cmd_doctor(args):
         mine = [p for p in pkgs if "tokeneconomizer" in json.dumps(p).lower()]
         print(f"pi          package {'installed: ' + str(mine[0]) if mine else 'not in ' + settings}")
     ctx = _ctx(args)
+    print(f"repository  {ctx.repo.root}: {repos.describe(ctx.repo)}; state {ctx.repo.key}")
+    home_git = os.path.join(paths.home_dir(), ".git")
+    for path in repos.ignored_git_entries(args.cwd):
+        if os.path.realpath(path) != home_git:          # the home line below says it
+            print(f"repository  ignored {path}: not a git repository (no HEAD, or a dangling "
+                  f"gitdir)")
+    note = repos.home_git_note()
+    if note:
+        print(f"home        {note}")
+    if repos.needs_migration(root):
+        print("state       recorded by an earlier version and not yet migrated: `te repos "
+              "migrate` (runs by itself at the next session start)")
     py = repomap.find_python(ctx)
     print(f"repomap     {ctx.config.repomap}; " + (f"aider found ({py})" if py else
           "no Python with aider found (pip install aider-chat, or set repomap_python)"))
@@ -478,6 +652,12 @@ def build_parser():
     p.add_argument("--job", required=True)
     p.set_defaults(fn=cmd_judge)
     add("doctor").set_defaults(fn=cmd_doctor)
+    p = add("repos")
+    p.add_argument("action", nargs="?", default="list", choices=("list", "migrate", "merge"))
+    p.add_argument("keys", nargs="*")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(fn=cmd_repos)
     p = add("repomap")
     p.add_argument("action", nargs="?", default="show", choices=("show", "refresh"))
     p.set_defaults(fn=cmd_repomap)

@@ -13,11 +13,13 @@ behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 ## Before you start
 
-- [ ] Your agent installed and signed in, any way it supports (a subscription or an API key)
+- [ ] Your agent installed and signed in, any way it supports (a subscription or an API key), at a
+  version the commands were checked on ([Supported versions](../README.md#supported-versions))
 - [ ] Python 3.10 or newer on `PATH` (or set `TE_PYTHON=/path/to/python3.10+`)
 - [ ] Access to this repository on GitHub
 - [ ] Copilot CLI only: the repository's folder trusted by Copilot (it asks the first time you
-  start it there); Copilot ignores a folder's `.github/copilot` settings otherwise
+  start it there: choose **Yes, and remember this folder for future sessions**); Copilot ignores a
+  folder's `.github/copilot` settings otherwise
 
 No extra API key is needed. Plugins load when a session starts, so start a new session after
 installing. Claude Code, Codex and the Copilot CLI install from a clone of this repository:
@@ -69,8 +71,9 @@ The rules go into this repository's `.claude/settings.local.json`, which the plu
 git, and it never touches deny rules you wrote. `/tokeneconomizer:toolprune restore` undoes it.
 
 Each slash command is one model turn. The same commands are free from a terminal, as
-`~/.tokeneconomizer/bin/te <command>` run inside the repository ([Commands](#commands)). For one
-session without installing anything: `claude --plugin-dir /path/to/TokenEconomizer/plugin`.
+`~/.tokeneconomizer/bin/te --host claude <command>` run inside the repository
+([Commands](#commands)). For one session without installing anything:
+`claude --plugin-dir /path/to/TokenEconomizer/plugin`.
 
 **Update.** `git pull` in the clone, then start a new session (or `/reload-plugins`). Claude Code
 runs a plugin added from a local folder from that folder. If `/tokeneconomizer:status` still
@@ -93,16 +96,22 @@ codex plugin marketplace add /path/to/TokenEconomizer
 codex plugin add tokeneconomizer@tokeneconomizer
 ```
 
-**2. Approve its hooks.** Start `codex` in a repository. Codex asks whether to trust the project,
-then shows **Hooks need review**: choose **Trust all**. Hooks run from the next session on (the
-session in which you approve gets no session-start injection). To approve later: `/hooks`.
+**2. Approve its hooks.** Start `codex` in a repository. Codex asks whether to trust the folder
+(**Trust and continue**), then shows **Hooks need review**: choose **Trust all and continue**.
+Hooks run from the next session on (the session in which you approve gets no session-start
+injection), so quit with `/exit` and start `codex` again. To approve later: `/hooks`.
 
-**3. Check it.** Ask Codex *"what has TokenEconomizer learned here?"*, or name the skill:
-`$tokeneconomizer-status`. Codex has no plugin slash commands; the plugin's commands are Codex
-skills: `$tokeneconomizer-status`, `$tokeneconomizer-microskills`, `$tokeneconomizer-toolprune` and
-`$tokeneconomizer-config`, each also used when you just ask. From a terminal, inside the
-repository: `~/.tokeneconomizer/bin/te --host codex <command>` (the launcher appears after the
-first session).
+**3. Check it.** Type `$tokeneconomizer:status`. Codex has no plugin slash commands; the plugin's
+commands are Codex skills, named like the slash commands on the other agents (type
+`$tokeneconomizer` to pick one): `$tokeneconomizer:status`, `:microskills`, `:toolprune`,
+`:config` and `:repos`, each followed by its arguments (`$tokeneconomizer:config set
+loopguard=off`). Name the skill: a question in plain words (*"what has TokenEconomizer learned
+here?"*) may be answered from the plugin's files without running its command. A command that
+changes something (`config set` or `unset`, `toolprune apply` or `restore`, `repos migrate` or
+`merge`) writes the plugin's state in `~/.tokeneconomizer`, which Codex's sandbox keeps
+read-only, so Codex asks first: choose **Yes, proceed**. From a terminal, inside the repository:
+`~/.tokeneconomizer/bin/te --host codex <command>` (the launcher appears after the first
+session).
 
 **4. Work normally.** See [What to expect](#what-to-expect). Codex's deny list removes the
 sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only after it went
@@ -114,7 +123,10 @@ effect). The web, asking you questions and the bundled skills are never proposed
 
 In `codex exec`, Codex does not print hook messages, so the plugin's notices are not shown
 there; a loop guard redirect still reaches the model. Codex cannot stop a turn from a hook, so
-`loopguard=stop` acts as `nudge` on Codex.
+`loopguard=stop` acts as `nudge` on Codex. Quitting Codex's interactive mode (`/exit`) keeps the
+session open to `codex resume` and sends no session end, so the plugin learns from it at a later
+session start, once it has been quiet for ten minutes; `codex exec` sessions are learned from
+as they end.
 
 **Update.** `git pull` in the clone, then `codex plugin add tokeneconomizer@tokeneconomizer`
 again to refresh Codex's installed copy (your hook approval is kept).
@@ -236,7 +248,7 @@ pi install git:github.com/microsoft/TokenEconomizer
 `pi install /path/to/TokenEconomizer`.)
 
 **2. Check it.** Start a new Pi session and type `/te status`. The commands are `/te status`,
-`/te microskills` and `/te config …`; from a terminal, inside the repository,
+`/te microskills`, `/te config …` and `/te repos`; from a terminal, inside the repository,
 `~/.tokeneconomizer/bin/te --host pi <command>`. Tool pruning does not apply: Pi loads four
 tools. In print and JSON modes the plugin's notices go to stderr.
 
@@ -278,14 +290,17 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 | `config set KEY=VALUE … [--global]` | change settings for this repository (or every one); see [Settings](#settings) |
 | `config unset KEY … [--global]` | put a setting back to its default |
 | `repomap` / `repomap refresh` | the cached repository map / make it now (see [Repository map](#repository-map)) |
-| `doctor` | check Python, the state directory, the agents found and the error log |
+| `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
+| `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
+| `repos merge KEY [INTO]` | merge one repository's state into another's (default: this one), for state whose checkouts are gone |
+| `doctor` | check Python, the state directory, the agents found, how this directory was identified, and the error log |
 
 How to run them:
 
 | Agent | Inside the agent | From a terminal, in the repository |
 |---|---|---|
-| Claude Code | `/tokeneconomizer:<command>` | `~/.tokeneconomizer/bin/te <command>` |
-| Codex | ask, or `$tokeneconomizer-status` (`-microskills`, `-toolprune`, `-config`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
+| Claude Code | `/tokeneconomizer:<command>` | `~/.tokeneconomizer/bin/te --host claude <command>` |
+| Codex | `$tokeneconomizer:<command>` (`status`, `microskills`, `toolprune`, `config`, `repos`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 
@@ -296,8 +311,17 @@ agent that last worked in the repository.
 ## Settings
 
 Each of the three mechanisms can be turned on or off on its own, and each has numbers you can
-set by hand. Settings apply to the current repository, or to every repository with `--global`.
-The examples use Claude Code's form; on the other agents run the same `config` command their way.
+set by hand. Settings apply to the current repository, or to every repository with `--global`,
+and are shared by every agent working in it. The examples use Claude Code's form; the same
+`config` command on each agent is:
+
+| Agent | Set one value in this repository |
+|---|---|
+| Claude Code | `/tokeneconomizer:config set loopguard=off` |
+| Codex | `$tokeneconomizer:config set loopguard=off` |
+| Copilot CLI | `/tokeneconomizer:config set loopguard=off` (interactive mode) |
+| Pi | `/te config set loopguard=off` |
+| any agent, from a terminal | `~/.tokeneconomizer/bin/te config set loopguard=off` |
 
 **Turn a mechanism on or off:**
 
