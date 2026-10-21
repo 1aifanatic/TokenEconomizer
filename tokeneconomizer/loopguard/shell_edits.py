@@ -2,8 +2,9 @@
 
 `SpiralState` counts an edit only when an edit TOOL makes it (Edit/Write/str_replace). An agent
 that edits through Bash -- `sed -i`, `perl -pi`, a redirect or `tee` into a source file, an
-inline Python script that writes the file back, `patch`/`git apply` -- looked like one that had
-edited nothing, and a judge reading the digest was told no file had been edited when four had.
+inline Python script that writes the file back, `patch`/`git apply`, Codex's `apply_patch` fed a
+patch on stdin -- looked like one that had edited nothing, and a judge reading the digest was told
+no file had been edited when four had.
 `shell_edit_targets` reads those writes off the command, and `fold_shell_edits` counts them
 after the regular update, so the call still counts once.
 """
@@ -28,6 +29,9 @@ _PY_OPEN_VAR = re.compile(r"open\(\s*([A-Za-z_]\w*)\s*,\s*(['\"])([^'\"]*)\2")
 _PY_WRITE_PATH_LIT = re.compile(
     r"(?:pathlib\.)?Path\(\s*(['\"])([^'\"\n]+)\1\s*\)\.write_(?:text|bytes)\(")
 _PY_WRITE_PATH_VAR = re.compile(r"\b([A-Za-z_]\w*)\.write_(?:text|bytes)\(")
+# Codex's patch format, as `apply_patch <<'PATCH'` takes it on stdin (seen live on 0.163.0, the
+# edit and the test run in one command); `trace.codex` reads the same lines from a session log.
+_PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.M)
 
 
 def _not_scratch(path):
@@ -165,6 +169,8 @@ def shell_edit_targets(cmd):
                                     lambda t: bool(re.match(r"^-[a-zA-Z]*e$", t)))
         elif head == "tee":
             found += [t for t in tokens[1:] if not t.startswith("-") and _SOURCE_FILE.search(t)]
+        elif head == "apply_patch":
+            found += _PATCH_FILE.findall("\n".join(bodies + [" ".join(tokens[1:])])) or ["(patch)"]
         elif head == "patch" or (head == "git" and len(tokens) > 1 and tokens[1] == "apply"):
             found.append("(patch)")
         elif head == "git" and len(tokens) > 2 and tokens[1] in ("checkout", "restore"):

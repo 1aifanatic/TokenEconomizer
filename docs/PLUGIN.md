@@ -13,10 +13,10 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`; announces changed facts or a new deny-list proposal in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`; announces changed facts, tools the deny list newly left out, or a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
-| `PostToolUse` | Folds the call into the turn's guard; delivers a nudge as `additionalContext`, or stops the turn | loopguard |
-| `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here) | loopguard |
+| `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
+| `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
 | `Stop` | Closes the turn; a turn that *ended green* feeds the per-repository envelope | loopguard |
 | `SessionEnd` | Hands the session to a detached `te fold` and returns at once | microskills, toolprune, ledger |
 
@@ -27,7 +27,8 @@ flow — `SpiralState.update`, `assess_abort`, `is_stuck`, `nudge_text`, the cum
 one tool call at a time. None of the thresholds were re-tuned. Three things it adds:
 
 * It counts **edits made through the shell**: `sed -i`, `perl -pi`, a redirect or `tee` into a
-  source file, an inline Python script that writes a file back, `patch`/`git apply`. The loop
+  source file, an inline Python script that writes a file back, `patch`/`git apply`, Codex's
+  `apply_patch <<'PATCH'`. The loop
   state counts only edit tools, and agents that edit through Bash then looked as if they had
   edited nothing.
 * **The nudge always comes before the stop.** The benchmark ladder checks a hard backstop (a
@@ -52,11 +53,11 @@ Every hook fails open: any error becomes an empty output (no change) and a trace
 | Unit of work | one benchmark task | a **session** for micro-skills and tool pruning; a **prompt-turn** for the loop guard | In interactive use a person already splits work into short turns. A whole session folded as one trajectory would look stuck merely by being long |
 | Learning signal | the official grader's `resolved` | the envelope learns from turns that **ended green**: the agent stopped on its own, was not stopped by the guard, and no verification after its last edit failed | There is no grader. Micro-skills and evidence pruning never needed one |
 | Injection channel | a prefix on the task prompt | `SessionStart` `additionalContext` | Verified to reach the model (§3) |
-| Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list you approve**, written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. Tools are fixed at session start, and changing them mid-session would re-write the cached prompt prefix. Each agent's file can express a different unit (§3) |
+| Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list**, applied by default once the evidence forms it and announced at the next session start (`toolprune=propose` waits for approval instead), written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. Tools are fixed at session start, and changing them mid-session would re-write the cached prompt prefix. Each agent's file can express a different unit (§3) |
 | Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (loaded but unused for N sessions) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
 | Network | every arm, baseline included, carries an answer-key guard — a `PreToolUse` hook and an `/etc/hosts` block refuse the benchmarks' upstream sources — and drops the web tools | **no guard**: no `PreToolUse` hook (on Pi, no `tool_call` handler), no blocked command or host; the web tools stay | A benchmark's answer is a fetch away. A real session has no answer key, and the web is part of the work |
 | Nudge | kill the agent, resume it with a continuation prompt | a mid-turn reminder attached to the tool result | Different intervention, so its effect is not inherited from the experiments |
-| Abort | terminal, in autonomous runs | a `continue: false` stop only in **headless** sessions with `loopguard: stop`; in an interactive session, a one-line notice — the person is already the abort | The benchmark guard's own design note: "interactive callers should map it to a hand-off" |
+| Still stuck after the redirect | terminal abort, in autonomous runs | a one-line **notice** to the person, ending with how to stop the turn on that agent and in that mode (§3); the plugin never stops a turn, and `loopguard: stop` is read as `nudge` | Not every agent's hooks can stop a turn (Codex and Copilot ignore `continue: false`), and the person decides: the benchmark guard's own design note says "interactive callers should map it to a hand-off" |
 | Optimizer model | the agent's own model, so overhead could not look cheaper than its arm | the cheapest capable model on the user's own agent CLI (`paid_model`, default `haiku`), and only when `paid` is on | Every paid call is still charged to the session ledger |
 
 ## 3. Verified agent behaviour
@@ -72,7 +73,8 @@ and date it was verified on; §5 says what has not been exercised.
   not found in this environment", and the detached fold priced that session from its transcript.
 * `PostToolUse` `additionalContext` is followed **in the same turn** — no restart needed.
 * `PostToolUse` `{"continue": false}` halts the loop after the current tool (one of three
-  requested commands ran) and the session ends cleanly.
+  requested commands ran) and the session ends cleanly. (The plugin no longer uses it: it stops
+  no turn on any agent.)
 * A bare-name `permissions.deny` rule **removes the tool from the session's tool list**, the same
   list `--disallowed-tools` produces, whether the rule comes from `--settings` or from a
   project's `.claude/settings.local.json`. A plugin's own `settings.json` cannot carry deny rules
@@ -140,10 +142,10 @@ Hooks are **trust-gated**: skipped until approved in `/hooks` (stored as
 That gate, kebab-case event names and an argv-list handler are why `te_harness` once recorded
 that Codex "honours no PreToolUse hook"; with PascalCase events, a command string and trust,
 every hook fires. Not exercised, from the binary's schemas and the docs: `PostToolUse`
-`continue: false` does **not** stop a Codex turn mid-flight, so on Codex the guard's last rung
-is a notice, matching the Codex-native finalize policies, which never abort. Code Mode presents
-one `exec` tool with nested descriptions and defers MCP tools, so Codex pruning works on
-capability packages (below), not on single tool schemas.
+`continue: false` does **not** stop a Codex turn mid-flight, one reason the guard's last rung is
+a notice on every agent, matching the Codex-native finalize policies, which never abort. Code
+Mode presents one `exec` tool with nested descriptions and defers MCP tools, so Codex pruning
+works on capability packages (below), not on single tool schemas.
 
 **Codex pruning — verified on 0.153.1, 2026-10-07** (`codex debug prompt-input` renders a
 session's prompt input locally, with no model call; `codex features list` prints the effective
@@ -255,7 +257,7 @@ isolated `PI_CODING_AGENT_DIR`):
 * Pi has no hook protocol; `plugin/pi/tokeneconomizer.ts` speaks the dispatcher's on Pi's
   behalf — `session_start`, `before_agent_start`, `tool_result`, `agent_end` and
   `session_shutdown` each become one `te-hook --host pi` call — and applies the answers with
-  Pi's own levers: a system-prompt section, a steering message, `ctx.abort()`, a UI notice.
+  Pi's own levers: a system-prompt section, a steering message, a UI notice.
 * End to end: four synthetic Pi session files taught it that bare `pytest` is missing; in a real
   session the `<tokeneconomizer>` section appeared in the session's recorded system prompt, the
   model answered "Tests should be run with `python -m pytest …` because the `pytest` command is
@@ -301,7 +303,7 @@ this plugin's guide step by step (Claude Code 2.1.300, Codex 0.153.1, Copilot CL
 * The loop guard's redirect reached the model mid-turn on all four; on Pi a `steer` message, and
   with `loopguard=stop` a headless turn ended at the next stuck verdict (nudged at call 17,
   stopped at 35) — the first live check of both on Pi. On Codex and Copilot the second fire is
-  a notice.
+  a notice. (Since 2026-10-21 the second fire is a notice on every agent; see below.)
 * Paid side calls ran through each agent's own CLI (Copilot's only off BYOK, above) and were
   charged to the ledger, without recursing into the plugin.
 * Pi's real git install (a local git daemon standing in for GitHub): cloned, `npm install`ed,
@@ -342,6 +344,38 @@ ended and was folded and priced. What the run showed:
 * Pi announced `pi update --extensions` itself when the repository moved on, and `/te` answered
   in its terminal UI with no model call.
 
+**The loop guard on every agent and mode, 2026-10-21** (Claude Code 2.1.306, Codex 0.163.0,
+Copilot CLI 1.0.101, Pi 1.3.0; every model through OpenRouter): each agent ran a provoked loop
+(an exercise of twelve failing edit-and-test cycles, with a small seeded envelope and pinned
+thresholds), in its terminal UI and headless.
+
+* All four got the redirect and then, once, the still-stuck notice; none was stopped.
+* Where the notice appears: Claude Code, only in the detailed transcript (Ctrl+O), as
+  "PostToolUse:Bash says: …", and in `claude -p` only as a `hook_response` event of
+  `--output-format stream-json --verbose`; Codex, in the conversation ("↳ Hook · …"), and nowhere
+  under `codex exec`; Copilot, in the conversation and on stdout under `-p`; Pi, as a notification
+  and on stderr under `-p`. The redirect's own announcement showed only in Claude Code's detailed
+  transcript, on `copilot -p`'s stdout and on `pi -p`'s stderr.
+* How a person stops a turn, each checked on a running `sleep`: Claude Code, **Esc** (the command
+  is killed too); Codex, **Esc** interrupts the turn but its command runs on as a background
+  terminal until `/stop`; Copilot, **Esc** twice; Pi, **Esc**. Headless, Ctrl+C ends `claude -p`,
+  `codex exec` and `copilot -p` with their commands, and `pi -p` while its command, started
+  detached, runs on until it finishes. The notice ends with the agent's way (`hosts.stop_hint`).
+* Then, since Claude Code hid its own line, the plugin there also asks the model to repeat the
+  notice word for word (`hosts.relay`). Claude Haiku 5.5 opened its next message and its final
+  reply with it, in the terminal UI and under `claude -p`, whose text output then began with it.
+  On the way, found and fixed: Claude Code rejects an answer to a failed call that names
+  `PostToolUse` ("Hook returned incorrect event name: expected 'PostToolUseFailure' but got
+  'PostToolUse'") and drops it, so a redirect or notice that fell on a failed call, as in a
+  failing test run, was lost there; an answer now names the event it answers. Answering a failed
+  call, the hook's own line also showed under the call without Ctrl+O.
+* Telling headless from interactive: Claude Code's environment says so, and Pi's extension; Codex
+  only in its rollout's first record (`source: "exec"`); Copilot only in its own command line
+  (`copilot -p`), its payloads, environment and session log being the same in both modes.
+* Found and fixed: Codex 0.163.0 edits with `apply_patch <<'PATCH'` and runs the tests in the
+  same command, and the guard counted none of its twelve edits, so it never fired; and
+  `copilot -p` was told the interactive way to stop.
+
 ## 4. State and privacy
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
@@ -364,7 +398,9 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   every later hook, and the fold it hands off, uses the repository it started in -- where the
   agent files its own session log. `te status` run inside a session says so when the two differ.
 * **Deny lists stay per checkout.** The clones of a repository share its evidence and proposal,
-  but each has its own settings file, so `untool_applied.json` records what was added per file.
+  but each has its own settings file, so `untool_applied.json` records per file what was added,
+  and what the person gave back with `restore`: `toolprune: auto`, the default, never applies that
+  again (an explicit `toolprune apply NAME` does), as the evidence would keep proposing it.
 * **State from earlier keys is carried over.** Up to 0.1.0 a checkout's folder name was part of
   the key, any `.git` entry made a checkout, and a session was recorded wherever the agent was.
   The first time a checkout is seen (`index.json`) the state under its earlier keys is sent
@@ -401,13 +437,20 @@ not trust.
 
 * **Copilot CLI** — the real-model checks used one model (Claude Haiku 4.5, over BYOK). A
   per-tool deny list waits on Copilot gaining a persistent per-tool filter.
-* **The loop guard, live** — the stop rung has not run on a real spiral, and whether a
-  nudge changes a looping model's course is not established. The guard counts edits and
+* **The loop guard, live** — both rungs have run on a provoked loop on every agent (2026-10-21),
+  not on a real spiral, and whether a nudge changes a looping model's course is not established
+  (on Pi one run stopped after it, another went on). The guard counts edits and
   repeated failures, not understanding, so with a small learned envelope it can fire on a turn
   that has already found its cause and is working around it.
-* **Pi** — a live nudge and stop (steer message, `ctx.abort()`); tool pruning is not planned there,
-  since Pi declares only four tools by default.
+* **Pi** — tool pruning is not planned there, since Pi declares only four tools by default.
 * **Known gaps:**
+  * A test run whose exit code the model masks (`python3 -m unittest; echo "exit=$?"`, seen on
+    Copilot) reads as passing where the agent reports exit codes (Copilot, Codex, Pi), so a turn
+    of such runs counts as ended green and is never flagged.
+  * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
+    counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s
+    output only because the model repeats it, which a model may word differently or leave out;
+    the detailed transcript (Ctrl+O) always has it.
   * A turn that ran no recognised verification counts as ended green, so a failed turn without
     one can enter the envelope and loosen the guard for every later turn.
   * The free fact layer has no family for "this tool is absent here, with no working

@@ -1,16 +1,19 @@
 """The plugin's settings: which mechanisms act in real sessions, and how far each may go.
 
-The defaults are the conservative end of every switch:
+The defaults:
 
   * microskills = "envfacts" -- the LLM-free facts only. The paid proposer (`envfacts+distiller`,
                                 `distiller`) is opt-in, and refused unless `paid` is also true;
-  * toolprune   = "propose"  -- evidence is gathered and a deny list is proposed, but nothing is
-                                written to the agent's settings until the person approves it;
-                                "auto" applies proposals as they form;
-  * loopguard   = "nudge"    -- at most one mid-turn redirect per prompt-turn. "stop" also stops
-                                a turn that keeps failing after the redirect, in headless mode
-                                only; an interactive session gets a notice instead, because there
-                                a person is already watching;
+  * toolprune   = "auto"     -- a deny list is applied as soon as the evidence forms it, from
+                                the next session, and announced once at that session's start;
+                                `toolprune restore` gives it back. "propose" only proposes it,
+                                and writes nothing to the agent's settings until the person
+                                runs `toolprune apply`;
+  * loopguard   = "nudge"    -- at most one mid-turn redirect per prompt-turn; a turn still
+                                stuck after it gets a notice to the person, saying how to stop
+                                it. The plugin never stops a turn itself. "stop", which used to
+                                stop a headless turn on Claude Code and Pi, is still read, and
+                                acts as "nudge" with a warning;
   * paid        = False      -- no mechanism makes an LLM call of its own. Every paid call that is
                                 allowed is charged to the session's ledger;
   * shadow      = False      -- with True, every decision is computed and logged but none
@@ -24,7 +27,7 @@ person can tune by hand:
   * microskills_propose_every   -- sessions between paid proposer runs;
   * toolprune_evidence          -- unused sessions before a tool is proposed;
   * loopguard_aggr              -- the guard's threshold preset;
-  * loopguard_nudges            -- redirects per prompt-turn before it stops or notifies;
+  * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
                                    repository's history learned (LOOPGUARD_KEYS);
   * repomap, repomap_tokens, repomap_python, repomap_timeout -- the opt-in repository map.
@@ -53,7 +56,7 @@ MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
 # What `on` turns each mechanism to, and the words read as on / off.
-ON_VALUE = {"microskills": "envfacts", "toolprune": "propose", "loopguard": "nudge",
+ON_VALUE = {"microskills": "envfacts", "toolprune": "auto", "loopguard": "nudge",
             "repomap": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
@@ -119,7 +122,7 @@ class LiveConfig:
     microskills_max_facts: int = 4
     microskills_max_tokens: int = 150
     microskills_propose_every: int = 5
-    toolprune: str = "propose"
+    toolprune: str = "auto"
     toolprune_evidence: int = 5
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
@@ -272,6 +275,10 @@ def load_config(root, repo_dir=None, env=None):
                 cfg.warnings.append(f"{var}: not valid JSON")
     if str(env.get("TE_DISABLE", "")).strip().lower() in ("1", "true", "yes", "on"):
         cfg.enabled = False
+    if cfg.loopguard == "stop":
+        cfg.warnings.append("loopguard=stop acts as nudge: the plugin no longer stops a turn; a "
+                            "turn still stuck after the redirect gets a notice saying how to stop "
+                            "it (set loopguard=nudge to silence this)")
     if cfg.microskills != cfg.microskills_effective:
         cfg.warnings.append(f"microskills={cfg.microskills!r} makes paid calls but paid=false; "
                             f"running {cfg.microskills_effective!r}")

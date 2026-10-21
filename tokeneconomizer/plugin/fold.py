@@ -96,6 +96,7 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     stage.catalog_tools = set(st.get("catalog_tools", []))
     stage.catalog_desc = dict(st.get("catalog_desc") or {})
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
+    kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
     stage._exclude_tools = list(applied)        # the mask this session actually ran under
     # A tool that has since become protected (the web tools, from this version on) comes back:
     # remove the plugin's OWN deny rule for it. Only rules it recorded adding, never one the
@@ -128,12 +129,13 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
         # Copilot's only persistent lever is a whole MCP server (see `denylist`).
         servers = trace.copilot_mcp_servers(ctx.env)
         proposal = [s for s in denylist.copilot_server_proposal(
-            raw, stage.catalog_tools, stage.used_tools, servers) if s not in applied]
+            raw, stage.catalog_tools, stage.used_tools, servers)
+            if s not in applied and s not in kept]
         doc["servers"] = _server_summary(stage, servers)
     else:
         proposal = [t for t in denylist.filter_proposal(raw, stage.tool_unused_streaks,
                                                       ctx.config.toolprune_evidence)
-                    if t not in applied]
+                    if t not in applied and t not in kept]
     doc["proposal"] = proposal
     doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
     added = []
@@ -190,6 +192,7 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
     stage._warned_no_catalog = True
     stage.build_tools({"instance_id": session_id}, 0)
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
+    kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
     stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
     srow = {}
     stage.after_task({"instance_id": session_id}, {}, run_dir, srow)
@@ -198,7 +201,7 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
     loaded = state.get("loaded_exposures") or {}
     proposal = [c for c in denylist.CODEX_LIVE_CAPABILITIES
                 if c in (state.get("current_pruned") or ()) and c not in ever_used
-                and c not in applied
+                and c not in applied and c not in kept
                 and int(loaded.get(c, 0)) >= ctx.config.toolprune_evidence * (
                     live_adapter.HIGH_RISK_FACTOR if c in CODEX_HIGH_RISK else 1)]
     prior = ctx.store.read("untool.json") or {}

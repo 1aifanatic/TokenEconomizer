@@ -1,7 +1,7 @@
 ---
 name: "toolprune"
 description: >
-  Review, apply or undo TokenEconomizer's proposed list of Codex capabilities this repository never uses (written to the project's .codex/config.toml). Use when the user asks about TokenEconomizer's tool pruning or deny list, or asks to apply or restore it.
+  Review, undo or apply TokenEconomizer's deny list of Codex capabilities this repository never uses (written to the project's .codex/config.toml). Use when the user asks about TokenEconomizer's tool pruning or deny list, or asks to restore or apply it.
 ---
 
 # TokenEconomizer: toolprune

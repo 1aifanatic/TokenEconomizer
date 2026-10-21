@@ -4,8 +4,9 @@ Each tool call arrives as a separate hook process, so the guard's state is on di
 calls (`to_dict` / `TurnGuard(data=...)`). Per call it folds the result into a `SpiralState`,
 checks the cumulative backstop, and asks `rules.assess_abort` (gate -> optional paid judge ->
 envelope fallback) whether the turn is stuck; the first stuck verdict is answered with a
-redirect, a later one with a stop. After a redirect the per-segment state starts afresh, which is
-the agent's fair window to recover.
+redirect, a later one with a stop verdict (which the plugin delivers as a notice to the person,
+never as a stop). After a redirect the per-segment state starts afresh, which is the agent's fair
+window to recover.
 
   * The unit is a PROMPT-TURN (one user prompt to the agent's stop): in interactive use a person
     already splits work into short turns, and a whole session folded as one trajectory looks

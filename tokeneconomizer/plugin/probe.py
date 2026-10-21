@@ -106,7 +106,10 @@ def _session_env(state, trap):
                         "TE_SIDECALL", "TE_DISABLE", "TERM_PROGRAM")}
     # An installed copy of the plugin does not run beside the --plugin-dir one: Copilot loads
     # one plugin per name (verified: one SessionStart hook with both present).
-    env.update(TOKENECONOMIZER_HOME=state, PATH=trap + os.pathsep + env.get("PATH", ""))
+    # The probe applies the deny list itself, for one measured session, and restores it: its
+    # sessions must only propose one, as `toolprune=auto` would apply it for all the rest.
+    env.update(TOKENECONOMIZER_HOME=state, PATH=trap + os.pathsep + env.get("PATH", ""),
+               TE_TOOLPRUNE="propose")
     return env
 
 

@@ -23,9 +23,10 @@ session start, and the unit of removal is whatever that file can express:
 
 Rules common to all three:
 
-  * Only the person's approval (`te toolprune apply`), or `toolprune: auto`, writes the file,
-    and only from the NEXT session: tools are fixed at session start, and changing them
-    mid-session would rewrite the cached prompt prefix.
+  * `toolprune: auto` (the default) writes the file as soon as a proposal forms, and the next
+    session start says so; with `toolprune: propose` only the person's approval (`te toolprune
+    apply`) does. Either way it applies from the NEXT session: tools are fixed at session
+    start, and changing them mid-session would rewrite the cached prompt prefix.
   * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`,
     per settings file, since the clones of one repository share its state but not their
     settings); an entry the person wrote is never touched.
@@ -182,9 +183,34 @@ def applied_by_path(doc):
     return {}
 
 
-def write_applied(store, by_path):
+def kept_by_path(doc):
+    """{settings file: [entries the person gave back with `restore`]}: never applied again by
+    `toolprune: auto`, which would otherwise remove them at the next fold."""
+    kept = doc.get("kept")
+    return {_canon(p): list(t or []) for p, t in kept.items()} if isinstance(kept, dict) else {}
+
+
+def write_applied(store, by_path, kept=None):
+    doc = store.read(APPLIED) or {}
+    kept = kept_by_path(doc) if kept is None else kept
     store.write(APPLIED, {"by_path": {p: sorted(t) for p, t in by_path.items() if t},
+                          "kept": {p: sorted(t) for p, t in kept.items() if t},
                           "updated": time.time()})
+
+
+def kept_for(store, repo_root, host="claude"):
+    """What the person gave back in this checkout, which `auto` must leave alone."""
+    return list(kept_by_path(store.read(APPLIED) or {}).get(
+        _canon(settings_path(repo_root, host))) or [])
+
+
+def set_kept(store, repo_root, host, add=(), remove=()):
+    """Mark entries as given back by the person (`restore`), or no longer (`apply` by name)."""
+    doc = store.read(APPLIED) or {}
+    kept = kept_by_path(doc)
+    path = _canon(settings_path(repo_root, host))
+    kept[path] = sorted((set(kept.get(path) or []) | set(add)) - set(remove))
+    write_applied(store, applied_by_path(doc), kept)
 
 
 def applied(store, path=None):

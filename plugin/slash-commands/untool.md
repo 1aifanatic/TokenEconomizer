@@ -1,5 +1,5 @@
 ---
-description: Earlier name of /tokeneconomizer:toolprune - review or apply the proposed deny list
+description: Earlier name of /tokeneconomizer:toolprune - review the deny list, give tools back, or apply a proposal
 argument-hint: "[show | apply [TOOL ...] | restore [TOOL ...] | refresh-catalog | measure]"
 ---
 The arguments I typed after the command are: "$ARGUMENTS" (it shows the proposal when there are none).

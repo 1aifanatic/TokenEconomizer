@@ -284,7 +284,7 @@ COPILOT_FAILURE = {"hook_event_name": "PostToolUseFailure", "session_id": "10bbc
 
 def test_the_copilot_payloads_observed_live_are_read():
     c = hosts.detect(COPILOT_POST, {"COPILOT_PLUGIN_ROOT": "/p"})
-    assert c.name == "copilot" and not c.can_stop_mid_turn and c.stop("why") is None
+    assert c.name == "copilot"
     name, args, text, code = c.tool_call(COPILOT_POST)
     assert (name, args["description"], code) == ("Bash", "run it", 3)   # exit code from the text
     assert text.startswith("boom")
@@ -318,7 +318,6 @@ def test_claude_tool_results_and_outputs():
     assert "1 failed" in text and "Traceback" in text
     assert h.context("PostToolUse", "x") == {
         "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x"}}
-    assert h.stop("why") == {"continue": False, "stopReason": "why"}
     # the hook environment of a `claude -p` session, as observed on 2.1.285
     assert h.headless({"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
     assert not h.headless({"CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
@@ -338,9 +337,8 @@ def test_the_codex_posttooluse_payload_observed_live_is_read():
     assert host.tool_call(payload) == ("bash", {"command": "echo one"}, "one\n", None)
 
 
-def test_codex_tool_calls_normalize_and_never_stop():
+def test_codex_tool_calls_normalize():
     c = hosts.Codex()
-    assert c.stop("why") is None and not c.can_stop_mid_turn
     name, args, text, code = c.tool_call({
         "tool_name": "exec_command", "tool_input": {"command": ["bash", "-lc", "go test ./..."]},
         "tool_response": {"output": "FAIL", "exit_code": 1}})
@@ -447,7 +445,6 @@ def test_pi_usage_maps_directly_and_keeps_pis_own_cost(tmp_path):
 
 def test_the_pi_host_reads_what_the_extension_sends():
     h = hosts.HOSTS["pi"]()
-    assert h.can_stop_mid_turn and h.stop("why") == {"continue": False, "stopReason": "why"}
     name, args, text, code = h.tool_call({"tool_name": "bash", "tool_input": {"command": "go test"},
                                           "tool_response": {"content": "FAIL\nCommand exited with code 1",
                                                             "isError": True, "exit_code": 1}})
@@ -474,6 +471,11 @@ from tokeneconomizer import loopguard as guard  # noqa: E402
      ["a.py", "b.py"]),
     ("python - <<'E'\nfrom pathlib import Path\nPath('m/n.py').write_text('x')\nE", ["n.py"]),
     ("git apply /tmp/fix.diff", ["(patch)"]),
+    # Codex 0.163.0 edits like this, then tests, in ONE command (seen live)
+    ("apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: pkg/__init__.py\n@@\n-    x\n"
+     "+    y\n*** End Patch\nPATCH\npython3 -m unittest", ["__init__.py"]),
+    ("apply_patch <<'P'\n*** Begin Patch\n*** Add File: a/new.py\n+x\n*** Update File: b/old.py\n"
+     "*** End Patch\nP", ["new.py", "old.py"]),
     ("git checkout -- a.py b/c.py", ["a.py", "c.py"]),
     # not edits: output captures, scratch, reads, and operators inside quotes
     ("python -m pytest -q > /tmp/out.txt 2>&1; tail -5 /tmp/out.txt", []),
@@ -907,3 +909,28 @@ def test_a_runner_named_by_path_counts_as_a_verification(cmd):
                                  "vim tests/runtests.py.bak"])
 def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
     assert not guard.VERIFY_RE.search(cmd)
+
+
+def test_codex_exec_and_copilot_p_are_told_from_their_terminal_uis(tmp_path, monkeypatch):
+    """The still-stuck notice names the headless way to stop in `codex exec` and `copilot -p`.
+    Codex says how a session was started only in its rollout's first record; Copilot only in its
+    own command line (0.163.0, 1.0.101: the hook payloads and environments are the same)."""
+    exec_log, tui_log = tmp_path / "rollout-exec.jsonl", tmp_path / "rollout-tui.jsonl"
+    exec_log.write_text(json.dumps({"type": "session_meta", "payload": {
+        "originator": "codex_exec", "source": "exec"}}) + "\n")
+    tui_log.write_text(json.dumps({"type": "session_meta", "payload": {
+        "originator": "codex-tui", "source": "vscode"}}) + "\n")
+    c = hosts.Codex()
+    assert c.headless({}, str(exec_log)) and not c.headless({}, str(tui_log))
+    assert not c.headless({}, None) and not c.headless({}, str(tmp_path / "missing"))
+    cp = hosts.Copilot()
+    monkeypatch.setattr(hosts, "_ancestor_args", lambda: [
+        "/bin/sh /p/scripts/te-hook --host copilot",
+        "copilot -p Reply with the word ready. --model claude-haiku-4.5"])
+    assert cp.headless({})
+    monkeypatch.setattr(hosts, "_ancestor_args", lambda: ["copilot", "sh -c cd ~/proj && copilot"])
+    assert not cp.headless({})
+    monkeypatch.setattr(hosts, "_ancestor_args", lambda: ["copilot --prompt=fix it"])
+    assert cp.headless({})
+    assert cp.stop_hint(True) == "Press Ctrl+C to end the run."
+    assert cp.stop_hint(False) == "Press Esc twice to interrupt it."

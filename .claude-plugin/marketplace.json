@@ -8,7 +8,7 @@
     {
       "name": "tokeneconomizer",
       "source": "./plugin",
-      "description": "Micro-skills learned per repository, tool pruning through a deny list you approve, and a failure-loop guard."
+      "description": "Micro-skills learned per repository, tool pruning of tools a repository never uses (one command gives them back), and a failure-loop guard."
     }
   ]
 }

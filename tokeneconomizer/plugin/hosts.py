@@ -8,11 +8,10 @@ an adapter rather than a branch in a mechanism:
 
   * Turn identity. Claude Code stamps every event of a prompt-turn with `prompt_id`; Codex
     stamps `turn_id`.
-  * Stopping. Claude Code's `{"continue": false}` from PostToolUse halts the agent loop after the
-    current tool (verified on 2.1.286; the session stays usable). Codex's does NOT stop a turn
-    mid-flight -- it replaces the tool result and the model carries on -- so on Codex the guard's
-    last rung is a notice to the user, matching the Codex-native spiral policies, which never
-    abort by design.
+  * Stopping. The plugin never stops a turn: the guard's last rung, on every agent and in every
+    mode, is a notice telling the person how to (`stop_hint`). Claude Code's `{"continue":
+    false}` from PostToolUse would halt its loop (verified on 2.1.286), but Codex's replaces the
+    tool result and the model carries on, and Copilot's runs every call; the person decides.
   * Tool results. Claude Code's Bash `tool_response` is `{stdout, stderr, interrupted, ...}` with
     no exit code (verified); Codex's command items carry one, and it is used when present.
   * The session log. Claude Code's transcript is read as-is; Codex's rollout is rewritten into
@@ -28,8 +27,7 @@ endpoint (docs/PLUGIN.md §3):
   * Tool names are Claude's (`Bash`, `Read`); a shell result is `tool_result.
     text_result_for_llm` ending in `<shellId: N completed with exit code X>`, and a failed tool
     fires `PostToolUseFailure` with an `error` string.
-  * `continue: false` does not stop a turn (three of three calls ran), so, as on Codex, the
-    guard's last rung is a notice.
+  * `continue: false` does not stop a turn (three of three calls ran).
   * `systemMessage` is never shown. What the TUI does show is a stdout line
     `{"type": "progress", "message": ...}` printed BEFORE the hook's final JSON object, which
     still applies (verified on SessionStart, UserPromptSubmit and PostToolUse). So a Copilot
@@ -109,7 +107,11 @@ def merge_outputs(*outputs):
 
 class Host:
     name = "?"
-    can_stop_mid_turn = False
+    # How a person stops a turn, for the loop guard's notice: in the agent's own UI, and in a
+    # headless run (one prompt, so stopping the turn ends the run). Each agent's are verified
+    # in its own terminal UI and headless mode (2026-10-21).
+    interrupt = "Interrupt the agent to stop it."
+    end_run = "Press Ctrl+C to end the run."
     # Whether context returned from UserPromptSubmit reaches the model (verified per host).
     prompt_context = False
 
@@ -139,10 +141,22 @@ class Host:
     def notice(self, text):
         return {"systemMessage": text}
 
-    def stop(self, reason):
-        return None
+    def stop_hint(self, headless):
+        return self.end_run if headless else self.interrupt
 
-    def headless(self, env):
+    # Whether the loop guard's still-stuck notice must also go through the model, because the
+    # agent does not put hook messages where the person looks.
+    relays_notices = False
+
+    def relay(self, text):
+        """What the model is asked, so that it passes `text` on to the person, word for word.
+        The notice is the person's to act on: it does not change the model's task."""
+        return ("TokenEconomizer, a plugin the user runs, has a notice for them, and their main "
+                "view does not show plugin messages. Put this line, word for word, in your next "
+                f"message to the user, and again in your final reply:\n\n{text}\n\nIt is for "
+                "the user to act on; it does not change your task.")
+
+    def headless(self, env, transcript=None):
         return False
 
     def tool_call(self, p):
@@ -205,7 +219,10 @@ def _exit_code(resp):
 
 class ClaudeCode(Host):
     name = "claude"
-    can_stop_mid_turn = True
+    interrupt = "Press Esc to interrupt it."       # 2.1.306: the running command is killed too
+    # 2.1.306 shows a hook's `systemMessage` only in the detailed transcript (Ctrl+O), and
+    # `claude -p` prints it not at all; Claude's own reply is in the main view and in the output.
+    relays_notices = True
     prompt_context = True
 
     def turn_key(self, p):
@@ -215,10 +232,7 @@ class ClaudeCode(Host):
         # Claude Code exports its session id to the Bash tool's shell (seen on 2.1.304).
         return str(env.get("TE_SESSION_ID") or env.get("CLAUDE_CODE_SESSION_ID") or "")
 
-    def stop(self, reason):
-        return {"continue": False, "stopReason": reason}
-
-    def headless(self, env):
+    def headless(self, env, transcript=None):
         # Observed in a `claude -p` session's hook environment (2.1.285):
         # CLAUDE_CODE_SESSION_ATTENDED=0 and CLAUDE_CODE_ENTRYPOINT=sdk-cli. The attended flag
         # says what matters directly -- is a person watching -- so it wins when present.
@@ -240,7 +254,9 @@ _CODEX_SHELL = {"bash", "shell", "exec_command", "local_shell", "unified_exec",
 
 class Codex(Host):
     name = "codex"
-    can_stop_mid_turn = False
+    # 0.163.0: Esc interrupts the turn, but a command it started keeps running as a "background
+    # terminal" until `/stop`. (`codex exec` prints no hook messages, so its notice goes unseen.)
+    interrupt = "Press Esc to interrupt it, then /stop to end a command it left running."
 
     def turn_key(self, p):
         return str(p.get("turn_id") or "")
@@ -260,6 +276,17 @@ class Codex(Host):
             return "apply_patch", {"path": paths[0] if paths else "", "paths": paths}, text, code
         return name, args, text, code
 
+    def headless(self, env, transcript=None):
+        # The rollout's first record names its front end: `source: "exec"`, originator
+        # `codex_exec` under `codex exec`; `codex-tui` in the terminal UI (0.163.0). The hook's
+        # payload and environment are the same in both.
+        try:
+            with open(transcript or "", encoding="utf-8") as fh:
+                meta = (json.loads(fh.readline()) or {}).get("payload") or {}
+        except (OSError, ValueError, AttributeError):
+            return False
+        return meta.get("source") == "exec" or str(meta.get("originator", "")) == "codex_exec"
+
     def mechanism_trace(self, transcript_path, workdir):
         out = os.path.join(workdir, "codex_exec_trace.jsonl")
         n = trace.codex_rollout_to_exec(transcript_path, out)
@@ -275,7 +302,7 @@ class Pi(Host):
     Pi has no hook protocol of its own -- extensions are TypeScript functions on its event
     bus -- so the extension speaks THIS one on Pi's behalf: it calls the same dispatcher with
     a Claude-shaped payload per event and applies the answer with Pi's own levers (a system
-    prompt section, a steering message, `ctx.abort()`, a UI notice). What it sends:
+    prompt section, a steering message, a UI notice). What it sends:
 
       * `prompt_id`, which it numbers itself, for the turn identity Pi does not stamp;
       * `tool_response = {content, isError, exit_code}` -- Pi's bash result carries a real
@@ -283,16 +310,16 @@ class Pi(Host):
       * Pi's mode in `TE_PI_MODE` on the hook's environment: print / json / rpc are headless.
     """
     name = "pi"
-    can_stop_mid_turn = True
     prompt_context = True              # the extension appends it to the session's section
+    # 1.3.0: Esc aborts the turn and its command; Ctrl+C ends `pi -p`, but a command it started
+    # runs on (detached) until it finishes.
+    interrupt = "Press Esc to abort it."
+    end_run = "Press Ctrl+C to end the run; a command it started runs on until it finishes."
 
     def turn_key(self, p):
         return str(p.get("prompt_id") or "")
 
-    def stop(self, reason):
-        return {"continue": False, "stopReason": reason}
-
-    def headless(self, env):
+    def headless(self, env, transcript=None):
         return str(env.get("TE_PI_MODE", "")).strip() in ("print", "json", "rpc")
 
     def mechanism_trace(self, transcript_path, workdir):
@@ -312,7 +339,7 @@ def copilot_home(env=None):
 class Copilot(Host):
     """The GitHub Copilot CLI, through `plugin/.github/plugin/plugin.json` and its hook file."""
     name = "copilot"
-    can_stop_mid_turn = False
+    interrupt = "Press Esc twice to interrupt it."  # 1.0.101: "esc esc interrupt"
     prompt_context = True              # verified: top-level additionalContext
 
     def transcript(self, p):
@@ -329,6 +356,13 @@ class Copilot(Host):
 
     def notice(self, text):
         return {PROGRESS: [text]}
+
+    def headless(self, env, transcript=None):
+        # `copilot -p` hands its hooks the same payload, environment and session log as the
+        # terminal UI (1.0.101); only its command line differs, and the hook is its child. Asked
+        # only when a notice is written, so the `ps` calls cost nothing on an ordinary call.
+        return any(_PROMPT_FLAG.search(a) for a in _ancestor_args()
+                   if "copilot" in a.split(" ", 1)[0])
 
     def tool_call(self, p):
         args = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
@@ -355,6 +389,29 @@ class Copilot(Host):
             except OSError:
                 return
             time.sleep(0.25)
+
+
+_PROMPT_FLAG = re.compile(r"\s(?:-p|--prompt)(?:[\s=]|$)")
+
+
+def _ancestor_args(limit=4):
+    """The command lines of this process's nearest ancestors, nearest first."""
+    import subprocess
+    out, pid = [], os.getppid()
+    for _ in range(limit):
+        if pid <= 1:
+            break
+        try:
+            line = subprocess.run(["ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True,
+                                  text=True, timeout=2).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            break
+        ppid, _, args = line.partition(" ")
+        if not args:
+            break
+        out.append(args.strip())
+        pid = int(ppid) if ppid.strip().isdigit() else 0
+    return out
 
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "pi": Pi}

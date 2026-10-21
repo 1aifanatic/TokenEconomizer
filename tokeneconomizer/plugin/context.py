@@ -27,11 +27,16 @@ class LiveContext:
 
     @property
     def headless(self):
+        return self.is_headless()
+
+    def is_headless(self, transcript=None):
+        """Whether nobody is at the agent's own UI: `mode` when set, else what the agent shows
+        (its environment, its session log at `transcript`, its process)."""
         if self.config.mode == "headless":
             return True
         if self.config.mode == "interactive":
             return False
-        return self.host.headless(self.env)
+        return self.host.headless(self.env, transcript)
 
     @classmethod
     def build(cls, host, cwd, env=None, session_id=None, settle=True):

@@ -309,12 +309,15 @@ def _take_learned(src, dst, label):
 
 
 def _merge_applied(src, dst):
-    from .denylist import APPLIED, applied_by_path, write_applied
-    by = applied_by_path(dst.read(APPLIED) or {})
-    for path, tools in applied_by_path(src.read(APPLIED) or {}).items():
+    from .denylist import APPLIED, applied_by_path, kept_by_path, write_applied
+    d_doc, s_doc = dst.read(APPLIED) or {}, src.read(APPLIED) or {}
+    by, kept = applied_by_path(d_doc), kept_by_path(d_doc)
+    for path, tools in applied_by_path(s_doc).items():
         by[path] = sorted(set(by.get(path) or []) | set(tools))
-    if by:
-        write_applied(dst, by)
+    for path, tools in kept_by_path(s_doc).items():
+        kept[path] = sorted(set(kept.get(path) or []) | set(tools))
+    if by or kept:
+        write_applied(dst, by, kept)
 
 
 def _merge_envelope(src, dst):

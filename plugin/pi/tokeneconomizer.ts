@@ -12,8 +12,8 @@
  *                                             `tokeneconomizer` system-prompt section, on every
  *                                             prompt, because Pi diffs sections between runs and
  *                                             an omitted one would be recorded as removed
- *   tool_result         -> PostToolUse        the guard; a nudge is delivered as a steering
- *                                             message, a stop as ctx.abort()
+ *   tool_result         -> PostToolUse        the guard; a redirect is delivered as a steering
+ *                                             message, a still-stuck notice as a UI notice
  *   agent_end           -> Stop               closes the turn
  *   session_shutdown    -> SessionEnd         hands the session to a detached fold
  *
@@ -169,10 +169,6 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
       pi.sendMessage({ customType: SECTION, content: nudge, display: true }, { deliverAs: "steer" });
     }
     notify(ctx, out?.systemMessage);
-    if (out?.continue === false) {
-      notify(ctx, out?.stopReason);
-      ctx.abort();
-    }
   });
 
   pi.on("agent_end", async (_event, ctx) => {

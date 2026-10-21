@@ -5,7 +5,8 @@
                       with `repomap` on, refresh a stale map in the background
     UserPromptSubmit  open a prompt-turn for the loop guard; on a session's first prompt, add
                       the repository map (`repomap=on`)
-    PostToolUse       fold the call into the turn's guard; nudge, or stop, when it says so
+    PostToolUse       fold the call into the turn's guard; a redirect when it first says the
+                      turn is stuck, then a notice to the person saying how to stop it
     Stop              close the turn; an ended-green turn feeds the repository's envelope
     SessionEnd        hand the session to a detached `te fold`
 
@@ -98,6 +99,7 @@ class LiveController:
         s.setdefault("cwd", self.host.cwd(self.p, self.ctx.env))
         outputs = []
         seen = self.store.read("notices.json") or {}
+        seen_before = dict(seen)
 
         if self.cfg.microskills != "off":
             inj = self.store.read("injection.json") or {}
@@ -120,20 +122,9 @@ class LiveController:
                             f"(review with `{self._cmd('microskills')}`)."))
                         seen["injection"] = digest
 
-        if (self.cfg.toolprune == "propose" and denylist.supports(self.host.name)
+        if (self.cfg.toolprune != "off" and denylist.supports(self.host.name)
                 and not self.cfg.shadow):
-            # What this checkout already applied is no news here (another clone may not have).
-            mine = set(denylist.applied_for(self.store, self.ctx.repo.root, self.host.name))
-            prop = [t for t in (self.store.read("untool.json") or {}).get("proposal") or []
-                    if t not in mine]
-            key = ",".join(prop)
-            if prop and seen.get("untool") != key:
-                outputs.append(self.host.notice(
-                    f"TokenEconomizer: {len(prop)} {denylist.unit(self.host.name)}(s) went unused "
-                    f"in this repository's recent sessions ({', '.join(prop[:4])}"
-                    f"{'...' if len(prop) > 4 else ''}). Review with "
-                    f"`{self._cmd('toolprune')}`; nothing changes until you apply it."))
-                seen["untool"] = key
+            outputs.extend(self._toolprune_notices(seen))
 
         note = repos.migration_notice(self.ctx.root, self._cmd("repos"))
         if note and not self.cfg.shadow:
@@ -148,7 +139,7 @@ class LiveController:
                                                 "SessionStart", "cached"))
                 s["repomap_done"] = True
 
-        if outputs:
+        if seen != seen_before:
             self.store.write("notices.json", seen)
         self._save(s)
         repos.note_repo(self.ctx.root, self.ctx.repo)
@@ -156,6 +147,44 @@ class LiveController:
         repos.start_migration(self.ctx)
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
+
+    def _toolprune_notices(self, seen):
+        """The deny list's lines at session start, each said once: what `auto` removed from this
+        checkout's sessions (from this one on), and a proposal still waiting -- under `propose`,
+        or when `auto` could not write the settings file."""
+        out = []
+        cmd, unit = self._cmd("toolprune"), denylist.unit(self.host.name)
+        unt = self.store.read("untool.json") or {}
+        root = self.ctx.repo.root
+        mine = sorted(denylist.applied_for(self.store, root, self.host.name))
+
+        def few(items):
+            return ", ".join(items[:4]) + ("..." if len(items) > 4 else "")
+        if self.cfg.toolprune == "auto" and seen.get("untool_applied", "") != ",".join(mine):
+            if mine:
+                trusted = (denylist.codex_project_trusted(root) if self.host.name == "codex" else
+                           denylist.copilot_folder_trusted(root) if self.host.name == "copilot"
+                           else None)
+                out.append(self.host.notice(
+                    f"TokenEconomizer removed {len(mine)} {unit}(s) this repository's sessions "
+                    f"never used ({few(mine)}), from this session on. Review with `{cmd}`; "
+                    f"`{cmd} restore` gives them back."
+                    + (" (The agent reads that setting only in a trusted folder: trust this "
+                       "one.)" if trusted is False else "")))
+            seen["untool_applied"] = ",".join(mine)
+        # What this checkout already applied, or gave back, is no news here (another clone may
+        # not have).
+        kept = set(denylist.kept_for(self.store, root, self.host.name))
+        prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
+        if prop and seen.get("untool") != ",".join(prop):
+            refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
+            out.append(self.host.notice(
+                f"TokenEconomizer: {len(prop)} {unit}(s) went unused in this repository's recent "
+                f"sessions ({few(prop)}). Review with `{cmd}`; "
+                + (f"they could not be applied ({refused}), and `{cmd} apply` tries again."
+                   if refused else f"nothing changes until you run `{cmd} apply`.")))
+            seen["untool"] = ",".join(prop)
+        return out
 
     def _inject_map(self, s, seen, block, event, how):
         """The outputs that put the repository map in context (and say so, once per repository)."""
@@ -232,6 +261,10 @@ class LiveController:
     def post_tool(self):
         if self.cfg.loopguard == "off" or self.host.is_subagent(self.p):
             return {}
+        # The answer names the event it answers: Claude Code rejects a PostToolUseFailure answer
+        # labelled PostToolUse ("Hook returned incorrect event name", 2.1.306) and drops it whole,
+        # redirect and notice -- and a stuck turn's calls are mostly failures.
+        event = self.p.get("hook_event_name") or "PostToolUse"
         s = self._session()
         key = self.host.turn_key(self.p)
         data = s.get("turn")
@@ -257,25 +290,26 @@ class LiveController:
                 self._log("nudge", reason=reason, tool_calls=g.cum_turns, envelope=envelope)
                 if not self.cfg.shadow:
                     out = merge_outputs(
-                        self.host.context("PostToolUse", body),
+                        self.host.context(event, body),
                         self.host.notice(f"TokenEconomizer nudged this turn ({short}): the "
                                          f"same failure kept recurring."))
             elif action == "abort" and not g.abort_delivered:
+                # Still stuck after the redirect. The plugin never stops a turn itself -- the
+                # agents' hooks cannot all do it, and the person decides -- so the last rung is
+                # a notice that says how to stop it, the same on every agent and in every mode.
                 g.abort_delivered = True
                 s["aborts"] = int(s.get("aborts", 0)) + 1
-                can_stop = (self.cfg.loopguard == "stop" and self.ctx.headless
-                            and self.host.can_stop_mid_turn)
                 self._log("abort", reason=reason, tool_calls=g.cum_turns, envelope=envelope,
-                          delivered="stop" if can_stop else "notice")
+                          delivered="notice")
                 if not self.cfg.shadow:
-                    if can_stop:
-                        out = self.host.stop(
-                            f"TokenEconomizer stopped this turn: it kept repeating the same "
-                            f"failing steps after a redirect ({short}).")
-                    else:
-                        out = self.host.notice(
-                            f"TokenEconomizer: this turn still looks stuck after a redirect "
-                            f"({short}, {g.cum_turns} tool calls). Consider stepping in.")
+                    headless = self.ctx.is_headless(self.host.transcript(self.p))
+                    text = (f"TokenEconomizer: this turn still looks stuck after a redirect "
+                            f"({short}, {g.cum_turns} tool calls). {self.host.stop_hint(headless)}")
+                    out = self.host.notice(text)
+                    if self.host.relays_notices:
+                        # Where the agent keeps hook messages out of the person's view, the
+                        # model passes the notice on in its reply, which they do see.
+                        out = merge_outputs(out, self.host.context(event, self.host.relay(text)))
         s["turn"] = g.to_dict()
         self._save(s)
         return out

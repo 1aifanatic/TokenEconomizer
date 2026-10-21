@@ -16,7 +16,7 @@ import os
 
 import pytest
 
-from tokeneconomizer.plugin import denylist, hook, toolcheck
+from tokeneconomizer.plugin import denylist, hook, hosts, toolcheck
 from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
@@ -204,19 +204,67 @@ def test_warm_guard_nudges_then_only_notifies_in_an_interactive_session(env, rep
     assert all(o == {} for o in outs[nudge + 2 + later:])   # the notice is delivered once
 
 
-def test_a_headless_guard_stops_the_turn_on_claude_but_not_on_codex(env, repo):
-    headless = dict(env, TE_MODE="headless", TE_SPIRAL="guard")
+def _guard_turn(env, repo, sid, key, calls, host):
+    """One prompt-turn on `host`, each call in that agent's own payload shape."""
+    idk = "turn_id" if host == "codex" else "prompt_id"
+    base = {"session_id": sid, "transcript_path": "", "cwd": repo}
+    if host != "copilot":
+        base[idk] = key
+    rkey = "tool_result" if host == "copilot" else "tool_response"
+    call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="go"), host)
+    outs = [call(env, dict(base, hook_event_name="PostToolUse", tool_name=n, tool_input=i,
+                           **{rkey: r}), host) for n, i, r in calls]
+    call(env, dict(base, hook_event_name="Stop", stop_hook_active=False), host)
+    return outs
+
+
+def _stuck(host, n=40):
+    if host in ("claude", "codex"):
+        return stuck_calls(n, host if host == "codex" else None)
+    fail = "FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2"
+    if host == "pi":
+        return [("edit", {"path": "/r/pkg/a.py", "oldText": "x", "newText": "y"}, {"content": "ok"})
+                if k % 2 == 0 else ("bash", {"command": "pytest -q"},
+                                    {"content": fail, "isError": True, "exit_code": 1})
+                for k in range(n)]
+    return [("Edit", {"path": "/r/pkg/a.py"}, {"result_type": "success",
+                                                "text_result_for_llm": "ok"})
+            if k % 2 == 0 else ("Bash", {"command": "pytest -q"}, {
+                "result_type": "success",
+                "text_result_for_llm": fail + "\n<shellId: 0 completed with exit code 1>"})
+            for k in range(n)]
+
+
+@pytest.mark.parametrize("host", ["claude", "codex", "copilot", "pi"])
+@pytest.mark.parametrize("mode", ["interactive", "headless"])
+@pytest.mark.parametrize("setting", ["nudge", "stop"])
+def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
+        env, repo, host, mode, setting):
+    """One ladder everywhere: a redirect to the model, then one notice to the person with the
+    agent's way to stop the turn. The plugin never stops it -- `stop` is read as `nudge`."""
+    env = dict(env, TE_MODE=mode, TE_LOOPGUARD=setting)
+    green = [("Read", {"file_path": "/r/a.py"}, "ok")] * 8
     for k in range(5):
-        _turn(headless, repo, "s", f"g{k}", GREEN)
-    outs = _turn(headless, repo, "s", "stuck", stuck_calls(40))
-    assert any(o.get("continue") is False and "stopped this turn" in o["stopReason"]
-               for o in outs)
-    for k in range(5):
-        _turn(headless, repo, "c", f"g{k}", GREEN, host="codex")
-    outs = _turn(headless, repo, "c", "stuck", stuck_calls(40, "codex"), host="codex")
-    assert any("hookSpecificOutput" in o for o in outs)         # nudged
-    assert not any("continue" in o for o in outs)               # Codex cannot stop mid-turn
-    assert any("still looks stuck" in (o.get("systemMessage") or "") for o in outs)
+        _guard_turn(env, repo, "s", f"g{k}", green, host)
+    outs = _guard_turn(env, repo, "s", "stuck", _stuck(host), host)
+    ctx_key = (lambda o: o.get("additionalContext")) if host == "copilot" else (
+        lambda o: (o.get("hookSpecificOutput") or {}).get("additionalContext"))
+    shown = (lambda o: " ".join(o.get("progress") or [])) if host == "copilot" else (
+        lambda o: o.get("systemMessage") or "")
+    to_model = [ctx_key(o) for o in outs if ctx_key(o)]
+    stuck = [shown(o) for o in outs if "still looks stuck" in shown(o)]
+    assert len(stuck) == 1                                             # one notice
+    hint = hosts.HOSTS[host]().stop_hint(mode == "headless")
+    assert stuck[0].endswith(hint)
+    assert not any("continue" in o or "stopReason" in o for o in outs)  # never a stop
+    if host == "claude":
+        # Claude Code keeps hook messages out of the main view, so the notice also goes to the
+        # model, word for word, to pass on in its reply; the redirect comes first.
+        redirect, relay = to_model
+        assert "Process check (automated)" in redirect
+        assert stuck[0] in relay and "it does not change your task" in relay
+    else:
+        assert len(to_model) == 1                                      # the redirect alone
 
 
 def _fake_judges(monkeypatch, seen):
@@ -295,7 +343,9 @@ def _catalog(env, tools):
     json.dump({"tools": tools}, open(os.path.join(d, "catalog.json"), "w"))
 
 
-def test_unused_tools_are_proposed_but_nothing_changes_until_applied(env, repo, tmp_path):
+def test_with_propose_unused_tools_are_proposed_but_nothing_changes_until_applied(
+        env, repo, tmp_path):
+    env = dict(env, TE_TOOLPRUNE="propose")
     _catalog(env, ["Bash", "Read", "Edit", "Write", "AskUserQuestion", "Workflow",
                    "CronCreate", "ShareOnboardingGuide", "WebFetch"])
     for i in range(5):
@@ -313,6 +363,63 @@ def test_unused_tools_are_proposed_but_nothing_changes_until_applied(env, repo, 
     notice = call(env, {"hook_event_name": "SessionStart", "session_id": "n", "source": "startup",
                         "transcript_path": t, "cwd": repo})["systemMessage"]
     assert "3 tool(s) went unused" in notice and "/tokeneconomizer:toolprune" in notice
+    assert "nothing changes until you run `/tokeneconomizer:toolprune apply`" in notice
+
+
+def test_by_default_unused_tools_are_removed_from_the_next_session_and_it_says_so(
+        env, repo, tmp_path):
+    """`toolprune=auto` is the default: the fold that forms the proposal writes it, the next
+    session start says so once, and `restore` gives the tools back."""
+    _catalog(env, ["Bash", "Read", "Edit", "Write", "AskUserQuestion", "Workflow",
+                   "CronCreate", "ShareOnboardingGuide", "WebFetch"])
+    for i in range(5):
+        t = write_session(str(tmp_path / f"u{i}.jsonl"), [("look", [
+            ("Read", {"file_path": f"{repo}/a.py"}, "x", False),
+            ("Bash", {"command": "ls"}, "a.py", False)])])
+        run_session(env, repo, f"u{i}", t)
+    st = store_for(env, repo)
+    deny = json.load(open(denylist.settings_path(repo)))["permissions"]["deny"]
+    assert sorted(deny) == ["CronCreate", "ShareOnboardingGuide", "Workflow"]
+    assert st.read("untool.json")["proposal"] == []
+    t = str(tmp_path / "next.jsonl")
+    open(t, "w").close()
+
+    def start(sid):
+        return call(env, {"hook_event_name": "SessionStart", "session_id": sid,
+                          "source": "startup", "transcript_path": t, "cwd": repo})
+    notice = start("n1")["systemMessage"]
+    assert "removed 3 tool(s) this repository's sessions never used" in notice
+    assert "`/tokeneconomizer:toolprune restore` gives them back" in notice
+    assert "systemMessage" not in start("n2")                   # said once
+
+
+def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monkeypatch, capsys):
+    """Under the default `auto`, `restore` must stick: the evidence still says the tools go
+    unused, and the next fold would otherwise take them away again."""
+    from tokeneconomizer.plugin import cli
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    _catalog(env, ["Bash", "Read", "Workflow", "CronCreate"])
+
+    def sessions(prefix, n):
+        for i in range(n):
+            t = write_session(str(tmp_path / f"{prefix}{i}.jsonl"), [("look", [
+                ("Bash", {"command": "ls"}, "a.py", False)])])
+            run_session(env, repo, f"{prefix}{i}", t)
+    sessions("a", 5)
+    def deny():
+        return json.load(open(denylist.settings_path(repo))).get("permissions", {}).get("deny", [])
+    assert sorted(deny()) == ["CronCreate", "Workflow"]
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "restore"]) == 0
+    assert "kept from now on" in capsys.readouterr().out and deny() == []
+    sessions("b", 6)                                   # still unused, still kept
+    assert deny() == []
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "proposed: -" in out and "kept, as you gave them back" in out
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "apply", "Workflow"]) == 0
+    assert deny() == ["Workflow"]
+    assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
 
 
 def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(
@@ -486,18 +593,17 @@ def test_pi_learns_from_its_own_session_files_and_injects_at_the_next_start(env,
     assert rec["requests"] == 3 and rec["priced_by"] == "model"
 
 
-def test_a_headless_pi_turn_that_keeps_spinning_is_stopped(env, repo):
-    headless = dict(env, TE_PI_MODE="print", TE_SPIRAL="guard")
+def test_pi_print_mode_counts_as_headless_for_the_stop_hint(env, repo):
+    """Pi says its mode through the extension (`TE_PI_MODE`); a print-mode notice names the
+    headless way to stop."""
+    penv = dict(env, TE_PI_MODE="print")
     for k in range(5):
-        _turn(headless, repo, "p", f"g{k}", [("read", {"path": "/r/a.py"}, {"content": "ok"})] * 8,
-              host="pi")
-    fail = {"content": "FAILED tests/test_a.py::test_x - AssertionError\nCommand exited with code 1",
-            "isError": True, "exit_code": 1}
-    calls = [("edit", {"path": "/r/pkg/a.py", "oldText": "x", "newText": "y"}, {"content": "ok"})
-             if k % 2 == 0 else ("bash", {"command": "pytest -q"}, fail) for k in range(40)]
-    outs = _turn(headless, repo, "p", "stuck", calls, host="pi")
-    assert any("hookSpecificOutput" in o for o in outs)
-    assert any(o.get("continue") is False for o in outs)
+        _guard_turn(penv, repo, "p", f"g{k}",
+                    [("read", {"path": "/r/a.py"}, {"content": "ok"})] * 8, "pi")
+    outs = _guard_turn(penv, repo, "p", "stuck", _stuck("pi"), "pi")
+    notice = next(o["systemMessage"] for o in outs
+                  if "still looks stuck" in o.get("systemMessage", ""))
+    assert notice.endswith(hosts.HOSTS["pi"]().stop_hint(True))
 
 
 # ---- GitHub Copilot CLI, through the payloads it sends -------------------------------------
@@ -571,6 +677,7 @@ def _copilot_catalog(env, tools):
 
 
 def test_copilot_proposes_only_whole_unused_mcp_servers(env, repo, tmp_path, monkeypatch):
+    env = dict(env, TE_TOOLPRUNE="propose")
     _copilot_catalog(env, ["bash", "view", "sql", "fetch_copilot_cli_documentation"]
                      + GITHUB_TOOLS)
     for i in range(5):
@@ -586,6 +693,19 @@ def test_copilot_proposes_only_whole_unused_mcp_servers(env, repo, tmp_path, mon
     assert not os.path.exists(denylist.settings_path(repo, "copilot"))
     (notice,) = copilot_session(env, repo, tmp_path, "n", [], monkeypatch)["progress"]
     assert "1 MCP server(s) went unused" in notice and "/tokeneconomizer:toolprune" in notice
+
+
+def test_by_default_copilot_turns_off_the_unused_server_and_says_so(env, repo, tmp_path,
+                                                                       monkeypatch):
+    _copilot_catalog(env, ["bash", "view"] + GITHUB_TOOLS)
+    for i in range(5):
+        copilot_session(env, repo, tmp_path, f"u{i}", [
+            ("bash", {"command": "ls"}, "a.py\n<shellId: 0 completed with exit code 0>", True)],
+            monkeypatch)
+    settings = json.load(open(denylist.settings_path(repo, "copilot")))
+    assert settings["disabledMcpServers"] == ["github-mcp-server"]
+    (notice,) = copilot_session(env, repo, tmp_path, "n", [], monkeypatch)["progress"]
+    assert "removed 1 MCP server(s)" in notice and "toolprune restore" in notice
 
 
 def test_a_server_whose_tool_was_used_once_is_never_proposed(env, repo, tmp_path, monkeypatch):
@@ -639,6 +759,7 @@ def codex_rollout(path, repo, i, exec_inputs=()):
 
 
 def test_codex_proposes_capabilities_it_never_saw_used(env, repo, tmp_path):
+    env = dict(env, TE_TOOLPRUNE="propose")
     for i in range(5):
         uses = ["await tools.view_image({path: 'a.png'})"] if i == 2 else []
         t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, uses)
@@ -726,6 +847,44 @@ def test_a_committed_codex_config_is_never_edited(tmp_path, codex_accepts):
     with pytest.raises(RuntimeError, match="committed"):
         denylist.apply(str(r), ["goals"], Store(str(tmp_path / "st")), host="codex")
     assert (r / ".codex" / "config.toml").read_text() == 'model = "gpt-5.6-sol"\n'
+
+
+def _codex_sessions(env, repo, tmp_path, n=5):
+    for i in range(n):
+        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i)
+        run_session(env, repo, f"cx{i}", t, host="codex")
+
+
+def _codex_start(env, repo, tmp_path, sid):
+    t = codex_rollout(str(tmp_path / f"rollout-{sid}.jsonl"), repo, 99)
+    return call(env, {"hook_event_name": "SessionStart", "session_id": sid, "source": "startup",
+                      "transcript_path": t, "cwd": repo}, "codex")
+
+
+def test_by_default_codex_writes_the_unused_capabilities_off_and_says_so(env, repo, tmp_path,
+                                                                           codex_accepts):
+    _codex_sessions(env, repo, tmp_path)
+    text = open(denylist.settings_path(repo, "codex")).read()
+    assert "include_collaboration_mode_instructions = false" in text and "goals = false" in text
+    notice = _codex_start(env, repo, tmp_path, "next")["systemMessage"]
+    assert "removed 2 capability(s)" in notice and "toolprune restore" in notice
+
+
+def test_a_committed_codex_config_keeps_the_default_a_proposal_and_says_why(tmp_path, env,
+                                                                             codex_accepts):
+    import subprocess
+    r = tmp_path / "shared"
+    (r / ".codex").mkdir(parents=True)
+    (r / ".codex" / "config.toml").write_text('model = "gpt-5.6-sol"\n')
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    subprocess.run(git + ["-C", str(r), "add", ".codex/config.toml"], check=True)
+    subprocess.run(git + ["-C", str(r), "commit", "-qm", "team config"], check=True)
+    _codex_sessions(env, str(r), tmp_path)
+    assert (r / ".codex" / "config.toml").read_text() == 'model = "gpt-5.6-sol"\n'
+    notice = _codex_start(env, str(r), tmp_path, "next")["systemMessage"]
+    assert "2 capability(s) went unused" in notice and "could not be applied" in notice
+    assert "is committed in this repository" in notice
 
 
 def test_codex_never_overrides_a_key_the_user_set(tmp_path):
@@ -839,3 +998,28 @@ def test_a_loop_the_agent_reports_only_as_failures_is_nudged(env, repo):
                       "test_x - AssertionError: assert 1 == 2", True))
     outs = _claude_turn(env, repo, "s", "stuck", calls)
     assert any("hookSpecificOutput" in o for o in outs)
+
+
+def test_an_answer_to_a_failed_call_names_the_failure_event(env, repo):
+    """Claude Code reports a failing command as PostToolUseFailure and rejects an answer whose
+    `hookEventName` says PostToolUse ("Hook returned incorrect event name", 2.1.306), dropping
+    the redirect and the notice with it -- and a stuck turn's calls are mostly failures."""
+    green = [("Read", {"file_path": "/r/a.py"}, "ok")] * 8
+    for k in range(5):
+        _turn(env, repo, "s", f"g{k}", green)
+    base = {"session_id": "s", "transcript_path": "", "cwd": repo, "prompt_id": "stuck"}
+    call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="go"))
+    answered = []
+    for k in range(40):
+        if k % 2 == 0:
+            p = dict(base, hook_event_name="PostToolUse", tool_name="Edit", tool_response="ok",
+                     tool_input={"file_path": "/r/pkg/a.py", "old_string": "x", "new_string": "y"})
+        else:
+            p = dict(base, hook_event_name="PostToolUseFailure", tool_name="Bash",
+                     tool_input={"command": "pytest -q"},
+                     error="Exit code 1\nFAILED tests/test_a.py::test_x - AssertionError")
+        o = call(env, p)
+        if "hookSpecificOutput" in o:
+            answered.append((p["hook_event_name"], o["hookSpecificOutput"]["hookEventName"]))
+    assert answered and all(sent == named for sent, named in answered)
+    assert any(sent == "PostToolUseFailure" for sent, _ in answered)

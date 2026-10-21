@@ -165,7 +165,8 @@ def cmd_status(args):
     sp = out["loopguard"]
     env_s = f"{sp['envelope']:.0f} tool calls" if sp["envelope"] else "not learned yet"
     print(f"  loopguard    envelope {env_s} ({sp['ended_green_turns']} ended-green turns); "
-          f"{ledger['nudges']} nudge(s), {ledger['aborts']} stop(s) over {ledger['turns']} turns")
+          f"{ledger['nudges']} redirect(s), {ledger['aborts']} still-stuck notice(s) over "
+          f"{ledger['turns']} turns")
     return 0
 
 
@@ -193,6 +194,10 @@ def _toolprune_show(ctx, unt):
           f"{denylist.settings_path(ctx.repo.root, host)}): "
           f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
     print(f"proposed: {', '.join(_proposal(ctx, unt)) or '-'}")
+    kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
+    if kept:
+        print(f"kept, as you gave them back (`toolprune apply NAME` removes one again): "
+              f"{', '.join(kept)}")
     if host == "codex":
         caps = unt.get("capabilities") or {}
         if caps:
@@ -232,9 +237,10 @@ def _toolprune_show(ctx, unt):
 
 
 def _proposal(ctx, unt):
-    """The proposal, less what this checkout already applied: the clones of one repository share
-    its evidence, and one of them may have applied the list before another."""
+    """The proposal, less what this checkout already applied or gave back: the clones of one
+    repository share its evidence, and one of them may have applied the list before another."""
     mine = set(denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name))
+    mine |= set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))
     return [t for t in unt.get("proposal", []) if t not in mine]
 
 
@@ -266,6 +272,8 @@ def cmd_toolprune(args):
         except RuntimeError as e:
             print(f"not applied: {e}")
             return 1
+        # Named by the person: no longer one they gave back, whatever `restore` said before.
+        denylist.set_kept(ctx.store, ctx.repo.root, host, remove=tools)
         print(f"added: {', '.join(added) or '(already present)'}\n"
               f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the next "
               f"session.")
@@ -297,7 +305,12 @@ def cmd_toolprune(args):
         except RuntimeError as e:
             print(f"not restored: {e}")
             return 1
-        print(f"removed: {', '.join(removed) or '-'} (from the next session)")
+        # Given back by the person: `toolprune: auto` must not take them away again at the next
+        # fold, and a proposal does not ask for them again.
+        denylist.set_kept(ctx.store, ctx.repo.root, host, add=removed)
+        print(f"removed: {', '.join(removed) or '-'} (from the next session)"
+              + (f"; kept from now on (`toolprune apply {removed[0]}` removes one again)"
+                 if removed else ""))
         return 0
     if action == "refresh-catalog":
         if host == "codex":
@@ -417,10 +430,9 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
-    host = hosts.HOSTS[args.host]
-    if cur.get("loopguard") == "stop" and not host.can_stop_mid_turn:
-        print(f"note: {host.name} cannot stop a turn from a hook, so `stop` gives the redirect "
-              f"and then a notice there, as `nudge` does")
+    if cur.get("loopguard") == "stop":
+        print("note: `stop` acts as `nudge`: the plugin never stops a turn; a turn still stuck "
+              "after the redirect gets a notice saying how to stop it")
     return 0
 
 

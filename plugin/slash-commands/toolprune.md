@@ -1,5 +1,5 @@
 ---
-description: Review or apply TokenEconomizer's proposed deny list of tools this repository never uses
+description: Review the tools TokenEconomizer left out of this repository's sessions, give them back, or apply a waiting proposal
 argument-hint: "[show | apply [TOOL ...] | restore [TOOL ...] | refresh-catalog | measure]"
 ---
 The arguments I typed after the command are: "$ARGUMENTS" (it shows the proposal when there are none).

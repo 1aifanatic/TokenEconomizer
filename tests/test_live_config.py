@@ -17,7 +17,7 @@ from tests.test_live_hooks import (GREEN, _first, _turn, env, repo, run_session,
 
 
 # ---- parsing ------------------------------------------------------------------------------
-@pytest.mark.parametrize("key,on", [("microskills", "envfacts"), ("toolprune", "propose"),
+@pytest.mark.parametrize("key,on", [("microskills", "envfacts"), ("toolprune", "auto"),
                                     ("loopguard", "nudge")])
 def test_each_mechanism_takes_a_plain_on_and_off(key, on):
     cfg = LiveConfig()
@@ -192,3 +192,14 @@ def test_injection_off_and_a_tight_fact_cap_keep_the_context_clean(env, repo, tm
     run_session(tight, repo, "s5", trap_session(str(tmp_path / "s5.jsonl"), repo, 5))
     after = run_session(tight, repo, "s6", trap_session(str(tmp_path / "s6.jsonl"), repo, 6))
     assert "hookSpecificOutput" not in after
+
+
+def test_loopguard_stop_is_still_read_and_acts_as_nudge_with_a_warning(tmp_path):
+    """`stop` once stopped a headless turn on Claude Code and Pi; the plugin no longer stops a
+    turn on any agent, so an existing `stop` (or the old `spiral=guard`) keeps working as the
+    redirect-then-notice ladder, and says so."""
+    for env in ({"TE_LOOPGUARD": "stop"}, {"TE_SPIRAL": "guard"}):
+        cfg = load_config(str(tmp_path), env=env)
+        assert cfg.loopguard == "stop"
+        assert any("loopguard=stop acts as nudge" in w for w in cfg.warnings)
+    assert not load_config(str(tmp_path), env={"TE_LOOPGUARD": "nudge"}).warnings

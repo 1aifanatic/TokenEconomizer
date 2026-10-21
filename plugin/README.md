@@ -59,16 +59,27 @@ This records which tools a Claude Code session loads, with no model call. Do it 
 machine, and again after Claude Code updates. **Don't skip it:** without it the deny list sees
 only the few tools Claude Code defers, not the ones every session loads.
 
-**4. Work normally.** See [What to expect](#what-to-expect). When the deny list is ready, a
-session start says so; then:
+**4. Work normally.** See [What to expect](#what-to-expect). Once tools have gone unused for
+about five sessions, the plugin leaves them out of the next sessions without asking you, and the
+session start says so once:
 
 ```text
-/tokeneconomizer:toolprune            # the proposed tools and the evidence
-/tokeneconomizer:toolprune apply      # accept them, from your next session
+/tokeneconomizer:toolprune            # the tools it left out, and the evidence
+/tokeneconomizer:toolprune restore    # give them back, from your next session; they stay back
 ```
 
 The rules go into this repository's `.claude/settings.local.json`, which the plugin keeps out of
-git, and it never touches deny rules you wrote. `/tokeneconomizer:toolprune restore` undoes it.
+git, and it never touches deny rules you wrote. To approve each deny list yourself instead:
+`/tokeneconomizer:config set toolprune=propose`, then `/tokeneconomizer:toolprune apply`.
+
+**Where its messages appear.** Claude Code 2.1.306 shows the plugin's one-line messages (facts
+added, tools left out) only in its detailed transcript: press **Ctrl+O**, where they read
+`<event> says: TokenEconomizer: …`. A turn that still looks stuck is the exception:
+the plugin also asks Claude to repeat that line word for word, so it shows in Claude's reply,
+and under `claude -p` in its final reply. That is a request to the model, which may word it
+differently or leave it out; the detailed transcript always has it. To stop a turn, press
+**Esc**; under `claude -p`, Ctrl+C ends the run. With `--output-format stream-json --verbose`
+every message also arrives as a `hook_response` event.
 
 Each slash command is one model turn. The same commands are free from a terminal, as
 `~/.tokeneconomizer/bin/te --host claude <command>` run inside the repository
@@ -81,7 +92,7 @@ shows the old behaviour, run `claude plugin update tokeneconomizer@tokeneconomiz
 
 **Uninstall.**
 
-1. In each repository where you accepted a deny list: `/tokeneconomizer:toolprune restore`.
+1. In each repository where the plugin left tools out: `/tokeneconomizer:toolprune restore`.
 2. `claude plugin uninstall tokeneconomizer@tokeneconomizer`, then
    `claude plugin marketplace remove tokeneconomizer`.
 3. Optional: `rm -rf ~/.tokeneconomizer` to delete what it learned. (A line the plugin added to a
@@ -113,17 +124,21 @@ read-only, so Codex asks first: choose **Yes, proceed**. From a terminal, inside
 `~/.tokeneconomizer/bin/te --host codex <command>` (the launcher appears after the first
 session).
 
-**4. Work normally.** See [What to expect](#what-to-expect). Codex's deny list removes the
+**4. Work normally.** See [What to expect](#what-to-expect). Codex's deny list turns off the
 sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only after it went
 unused in every session where it was loaded; a package you used even once is kept. It is
 written to the project's `.codex/config.toml`, which Codex reads **only in a trusted project**
-(`toolprune apply` warns you otherwise, and runs `codex features list` to show the change took
-effect). The web, asking you questions and the bundled skills are never proposed.
-`toolprune measure` shows the difference with no model call.
+(the session start that announces it says so otherwise), and never into one your repository
+commits: that stays a proposal, and the session start says why. The web, asking you questions
+and the bundled skills are never turned off. `$tokeneconomizer:toolprune restore` gives the
+packages back, and `toolprune measure` shows the difference with no model call.
 
 In `codex exec`, Codex does not print hook messages, so the plugin's notices are not shown
-there; a loop guard redirect still reaches the model. Codex cannot stop a turn from a hook, so
-`loopguard=stop` acts as `nudge` on Codex. Quitting Codex's interactive mode (`/exit`) keeps the
+there; a loop guard redirect still reaches the model. In the terminal UI a turn that is still
+stuck after the redirect shows "↳ Hook · TokenEconomizer: … Press Esc to interrupt it, then /stop
+to end a command it left running": Esc interrupts the turn, but a command it started keeps
+running in the background until `/stop`. Under `codex exec`, Ctrl+C ends the run and its command.
+Quitting Codex's interactive mode (`/exit`) keeps the
 session open to `codex resume` and sends no session end, so the plugin learns from it at a later
 session start, once it has been quiet for ten minutes; `codex exec` sessions are learned from
 as they end.
@@ -133,7 +148,7 @@ again to refresh Codex's installed copy (your hook approval is kept).
 
 **Uninstall.**
 
-1. In each repository where you accepted a deny list:
+1. In each repository where the plugin turned packages off:
    `~/.tokeneconomizer/bin/te --host codex toolprune restore` (it leaves an empty `.codex/`).
 2. `codex plugin remove tokeneconomizer@tokeneconomizer`, then
    `codex plugin marketplace remove tokeneconomizer`.
@@ -175,21 +190,23 @@ commands work only in interactive mode; the plugin's notices also appear under `
 With no model call. Do it once on this machine, and again after Copilot updates.
 
 **4. Work normally.** See [What to expect](#what-to-expect). Copilot has no setting that removes a
-single built-in tool, only one that turns off a whole MCP server, so the deny list proposes a
+single built-in tool, only one that turns off a whole MCP server, so the deny list turns off a
 server only when **none** of its tools was used in about five sessions: one of yours from
 `~/.copilot/mcp-config.json`, or the built-in `github-mcp-server`, which loads only when you are
-signed in to GitHub. It is written to `.github/copilot/settings.local.json`. `toolprune measure`
-shows the difference with no model call.
+signed in to GitHub. It is written to `.github/copilot/settings.local.json`, and the next session
+start says so; `/tokeneconomizer:toolprune restore` turns the server back on. `toolprune
+measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
-launcher appears after the first session). Copilot cannot stop a turn from a hook, so
-`loopguard=stop` acts as `nudge` on Copilot.
+launcher appears after the first session). A turn that is still stuck after the loop guard's
+redirect shows "● TokenEconomizer: …" in the conversation (and on stdout under `copilot -p`); press
+**Esc** twice to interrupt it, or Ctrl+C to end a `copilot -p` run.
 
 **Update.** `git pull` in the clone; Copilot loads the plugin from it, so nothing else is needed.
 
 **Uninstall.**
 
-1. In each repository where you accepted a deny list: `/tokeneconomizer:toolprune restore`.
+1. In each repository where the plugin turned a server off: `/tokeneconomizer:toolprune restore`.
 2. `copilot plugin uninstall tokeneconomizer@tokeneconomizer`, then
    `copilot plugin marketplace remove tokeneconomizer`.
 3. Optional: `rm -rf ~/.tokeneconomizer`.
@@ -250,7 +267,9 @@ pi install git:github.com/microsoft/TokenEconomizer
 **2. Check it.** Start a new Pi session and type `/te status`. The commands are `/te status`,
 `/te microskills`, `/te config …` and `/te repos`; from a terminal, inside the repository,
 `~/.tokeneconomizer/bin/te --host pi <command>`. Tool pruning does not apply: Pi loads four
-tools. In print and JSON modes the plugin's notices go to stderr.
+tools. In print and JSON modes the plugin's notices go to stderr. A turn that is still stuck
+after the loop guard's redirect gets a notice: press **Esc** to abort it, or Ctrl+C to end a
+`pi -p` run (a command Pi started then runs on until it finishes).
 
 **3. Work normally.** See [What to expect](#what-to-expect).
 
@@ -265,13 +284,17 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
   confirming ones, among at least four where it applied), and is injected at every session start
   after that while the failure keeps occurring or keeps being prevented. A session start that
   adds facts says so once, in one line. `microskills` shows the facts injected and those forming.
-- **Deny list.** Proposed after about five sessions in which a tool, package or server went
-  unused. The session start after a new proposal forms says so once; nothing changes until you
-  apply it, and it takes effect from the next session. `toolprune restore` removes only what the
-  plugin added. A file the plugin creates is added to `.git/info/exclude`.
+- **Deny list.** Applied without asking you, after about five sessions in which a tool, package
+  or server went unused, from the next session on; that session's start says so once. `toolprune restore` gives
+  back what the plugin removed, and only that, and what you give back is never removed again
+  (`toolprune apply NAME` removes one again). With `toolprune=propose`, it is only proposed, the
+  session start says so, and nothing changes until you run `toolprune apply`. A file the plugin
+  creates is added to `.git/info/exclude`.
 - **Loop guard.** Quiet on normal turns. On a turn that keeps failing the same way well past this
-  repository's usual length, one redirect is attached to a tool result; after that, a notice (or,
-  with `loopguard=stop` on Claude Code and Pi, a stop of a headless turn).
+  repository's usual length, one redirect is attached to a tool result; if the turn is still stuck
+  after it, a one-line notice tells you how to stop it. The plugin never stops a turn itself.
+  Where the notice appears, and how to stop, on each agent and in each mode:
+  [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
 - **Cost.** `status` shows each session's tokens, priced after it ends, and the plugin's own
   overhead, which is zero unless you turn on the paid helpers.
 
@@ -281,9 +304,9 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 |---|---|
 | `status` | what it has learned in this repository, what it did, and what your sessions cost |
 | `microskills` | the facts it injects at session start, and those still forming |
-| `toolprune` | the proposed deny list and its evidence |
-| `toolprune apply [ITEM …]` | accept the proposal (or the named items); from the next session |
-| `toolprune restore [ITEM …]` | remove the plugin's entries |
+| `toolprune` | the deny list: what it left out, what it would leave out next, and the evidence |
+| `toolprune apply [ITEM …]` | apply a waiting proposal (with `toolprune=propose`), or the named items; from the next session |
+| `toolprune restore [ITEM …]` | give back the plugin's entries (all, or the named ones); they are not removed again |
 | `toolprune refresh-catalog` | record the tools a session loads (Claude Code, Copilot) |
 | `toolprune measure` | the request with and without the proposal |
 | `config` | the settings: what is on, and every value in effect |
@@ -335,14 +358,14 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills | `microskills` | `envfacts`: facts found without model calls | `off`; `envfacts+distiller`, `distiller` add a paid fact proposer (need `paid=true`) |
-| Tool pruning | `toolprune` | `propose`: proposed, applied only when you say so | `off`; `auto` applies a proposal as soon as it forms |
-| Loop guard | `loopguard` | `nudge`: one mid-turn redirect | `off`; `stop` also stops a headless turn that keeps failing after the redirect (Claude Code, Pi) |
+| Tool pruning | `toolprune` | `auto`: applied as soon as it forms, from the next session, and announced | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
+| Loop guard | `loopguard` | `nudge`: one mid-turn redirect, then a notice to you if the turn is still stuck | `off`; `stop` (which once stopped a headless turn on Claude Code and Pi) is read as `nudge`, with a warning |
 
 **Tune a mechanism:**
 
 ```text
 /tokeneconomizer:config set microskills_max_facts=2            # inject at most two facts
-/tokeneconomizer:config set toolprune_evidence=10              # wait ten sessions before proposing
+/tokeneconomizer:config set toolprune_evidence=10              # wait for ten unused sessions
 /tokeneconomizer:config set loopguard_nudges=2 loopguard.min_turns=30
 /tokeneconomizer:config unset loopguard.min_turns              # back to the default
 ```
@@ -352,9 +375,9 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `microskills_max_facts` | `4` | the most facts injected at session start |
 | `microskills_max_tokens` | `150` | the size of the injected block, in tokens (about 4 characters each) |
 | `microskills_propose_every` | `5` | sessions between runs of the paid fact proposer |
-| `toolprune_evidence` | `5` | sessions a tool must go unused before it is proposed (three times as long for a few higher-risk tools; the web is never proposed) |
+| `toolprune_evidence` | `5` | sessions a tool must go unused before it is left out (three times as long for a few higher-risk tools; the web is never proposed) |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
-| `loopguard_nudges` | `1` | redirects per prompt-turn before the guard only notifies (or, with `loopguard=stop`, stops) |
+| `loopguard_nudges` | `1` | redirects per prompt-turn before the guard only notifies you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |
 
 The guard calls a turn stuck when it keeps editing the same files and hitting the same
@@ -373,7 +396,7 @@ wins over both. Defaults at each preset:
 | `envelope_pct` | 90 | 90 | 90 | percentile of the repository's passing turns the envelope starts from |
 | `envelope_margin` | 1.5 | 1.25 | 1.0 | multiplier on that percentile |
 | `envelope_min_samples` | 7 | 5 | 3 | passing turns needed before the envelope is used |
-| `backstop_mult` | 3.5 | 2.5 | 1.8 | past this multiple of the envelope, a stuck turn is redirected, then stopped or flagged |
+| `backstop_mult` | 3.5 | 2.5 | 1.8 | past this multiple of the envelope, a stuck turn is redirected, then flagged to you |
 | `judge_confidence` | 0.85 | 0.7 | 0.55 | with `paid=true`: how sure the model judge must be |
 | `gate_min_turns` | 24 | 18 | 12 | with `paid=true`: tool calls before the judge is asked |
 | `gate_error_outputs` | 8 | 8 | 8 | with `paid=true`: failing results that ask the judge early |
@@ -406,10 +429,10 @@ deny list at the next session start. A new fact-size cap shows once the next ses
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges`, `spiral.<name>` and
-variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; all of them are still read (`spiral=guard`
-as `loopguard=stop`), and a new name set alongside its old one wins. `config set` writes the new
-name. The earlier commands `te facts` and `te untool`, and `/tokeneconomizer:facts` and
-`/tokeneconomizer:untool`, still work.
+variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; all of them are still read (`spiral=guard` as
+`loopguard=stop`, which now works as `nudge`), and a new name set alongside its old one wins.
+`config set` writes the new name. The earlier commands `te facts` and `te untool`, and
+`/tokeneconomizer:facts` and `/tokeneconomizer:untool`, still work.
 
 ## Repository map
 
@@ -474,7 +497,7 @@ way, and only when you run it.
 | a command prints an import error, or the hooks seem to do nothing | run `~/.tokeneconomizer/bin/te doctor` (or `plugin/scripts/te doctor` in the clone) and read its errors.log lines |
 | errors.log says the package "was not found for the plugin" | the clone the plugin was installed from moved or is gone: add it again, or use the [self-contained install](#codex) |
 | `python 3.x (needs >= 3.10)` | install Python 3.10+ or set `TE_PYTHON` to one |
-| the deny list proposes nothing after many sessions | run `toolprune refresh-catalog` (Claude Code, Copilot) |
+| the deny list leaves nothing out after many sessions | run `toolprune refresh-catalog` (Claude Code, Copilot) |
 | a Codex deny list was applied but nothing changed | trust the project in Codex; `~/.tokeneconomizer/bin/te --host codex doctor` says whether it is trusted |
 | errors.log has `sidecall copilot: no reply` | the paid helpers cannot use a Copilot BYOK provider ([Copilot CLI](#copilot-cli)); turn `paid` off |
 | `te` shows another agent's state | add `--host claude`, `codex`, `copilot` or `pi` |
