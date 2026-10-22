@@ -327,6 +327,11 @@ How to run them:
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
 
+Inside an agent, each command is one model turn; from a terminal it costs nothing. Codex asks
+before a command that changes something (`config set`, `toolprune restore`, ...), since it
+writes outside Codex's sandbox: choose **Yes, proceed**. The Copilot CLI runs these commands in
+its interactive mode only and asks before each: choose **Yes**.
+
 The launcher in `~/.tokeneconomizer/bin` is written by the first session; before that, use
 `/path/to/TokenEconomizer/plugin/scripts/te`. From a plain terminal, `--host` defaults to the
 agent that last worked in the repository.
