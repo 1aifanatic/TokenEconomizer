@@ -14,7 +14,7 @@ behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 ## Before you start
 
 - [ ] Your agent installed and signed in, any way it supports (a subscription or an API key), at a
-  version the commands were checked on ([Supported versions](../README.md#supported-versions))
+  supported version ([Supported versions](../README.md#supported-versions))
 - [ ] Python 3.10 or newer on `PATH` (or set `TE_PYTHON=/path/to/python3.10+`)
 - [ ] Access to this repository on GitHub
 - [ ] Copilot CLI only: the repository's folder trusted by Copilot (it asks the first time you
@@ -60,8 +60,9 @@ machine, and again after Claude Code updates. **Don't skip it:** without it the 
 only the few tools Claude Code defers, not the ones every session loads.
 
 **4. Work normally.** See [What to expect](#what-to-expect). Once tools have gone unused for
-about five sessions, the plugin leaves them out of the next sessions without asking you, and the
-session start says so once:
+about five sessions, the plugin leaves them out of the next sessions without asking you (it
+writes the list once your sessions here have been idle for an hour), and the session start says
+so once:
 
 ```text
 /tokeneconomizer:toolprune            # the tools it left out, and the evidence
@@ -72,7 +73,7 @@ The rules go into this repository's `.claude/settings.local.json`, which the plu
 git, and it never touches deny rules you wrote. To approve each deny list yourself instead:
 `/tokeneconomizer:config set toolprune=propose`, then `/tokeneconomizer:toolprune apply`.
 
-**Where its messages appear.** Claude Code 2.1.306 shows the plugin's one-line messages (facts
+**Where its messages appear.** Claude Code shows the plugin's one-line messages (facts
 added, tools left out) only in its detailed transcript: press **Ctrl+O**, where they read
 `<event> says: TokenEconomizer: …`. A turn that still looks stuck is the exception:
 the plugin also asks Claude to repeat that line word for word, so it shows in Claude's reply,
@@ -262,7 +263,9 @@ pi install git:github.com/microsoft/TokenEconomizer
 ```
 
 (Over SSH: `pi install git:git@github.com:microsoft/TokenEconomizer`. From a clone:
-`pi install /path/to/TokenEconomizer`.)
+`pi install /path/to/TokenEconomizer`.) On Pi 0.99.x, install nothing: clone the repository and
+start each session with `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`,
+using your clone's full path; `git pull` in the clone updates it.
 
 **2. Check it.** Start a new Pi session and type `/te status`. The commands are `/te status`,
 `/te microskills`, `/te config …` and `/te repos`; from a terminal, inside the repository,
@@ -283,13 +286,18 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 - **Facts.** A fact forms once the same environment failure has come up in a few sessions (three
   confirming ones, among at least four where it applied), and is injected at every session start
   after that while the failure keeps occurring or keeps being prevented. A session start that
-  adds facts says so once, in one line. `microskills` shows the facts injected and those forming.
+  adds facts says so once, in one line. A resumed session keeps the facts it started with, word
+  for word, so its cached prompt still matches. `microskills` shows the facts injected and those
+  forming.
 - **Deny list.** Applied without asking you, after about five sessions in which a tool, package
-  or server went unused, from the next session on; that session's start says so once. `toolprune restore` gives
-  back what the plugin removed, and only that, and what you give back is never removed again
-  (`toolprune apply NAME` removes one again). With `toolprune=propose`, it is only proposed, the
-  session start says so, and nothing changes until you run `toolprune apply`. A file the plugin
-  creates is added to `.git/info/exclude`.
+  or server went unused, from the next session on; that session's start says so once. It is
+  written once the repository's sessions have been idle for an hour: a conversation resumed
+  after its tools change writes its whole history to the prompt cache again instead of reading
+  it, and after an idle hour that cache has expired anyway. `toolprune` shows a list still
+  waiting. `toolprune restore` gives back what the plugin removed, and only that, and what you
+  give back is never removed again (`toolprune apply NAME` removes one again). With
+  `toolprune=propose`, it is only proposed, the session start says so, and nothing changes
+  until you run `toolprune apply`. A file the plugin creates is added to `.git/info/exclude`.
 - **Loop guard.** Quiet on normal turns. On a turn that keeps failing the same way well past this
   repository's usual length, one redirect is attached to a tool result; if the turn is still stuck
   after it, a one-line notice tells you how to stop it. The plugin never stops a turn itself.
@@ -363,8 +371,8 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills | `microskills` | `envfacts`: facts found without model calls | `off`; `envfacts+distiller`, `distiller` add a paid fact proposer (need `paid=true`) |
-| Tool pruning | `toolprune` | `auto`: applied as soon as it forms, from the next session, and announced | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
-| Loop guard | `loopguard` | `nudge`: one mid-turn redirect, then a notice to you if the turn is still stuck | `off`; `stop` (which once stopped a headless turn on Claude Code and Pi) is read as `nudge`, with a warning |
+| Tool pruning | `toolprune` | `auto`: applied once it forms and your sessions have been idle an hour, from the next session, and announced | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
+| Loop guard | `loopguard` | `nudge`: one mid-turn redirect, then a notice to you if the turn is still stuck | `off`; `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**
 
@@ -381,6 +389,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `microskills_max_tokens` | `150` | the size of the injected block, in tokens (about 4 characters each) |
 | `microskills_propose_every` | `5` | sessions between runs of the paid fact proposer |
 | `toolprune_evidence` | `5` | sessions a tool must go unused before it is left out (three times as long for a few higher-risk tools; the web is never proposed) |
+| `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it; `0` writes at once |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
 | `loopguard_nudges` | `1` | redirects per prompt-turn before the guard only notifies you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |
@@ -434,8 +443,8 @@ deny list at the next session start. A new fact-size cap shows once the next ses
 
 **Earlier names.** Before the mechanisms were renamed they were `inject`, `untool` and `spiral`,
 with settings such as `inject_max_facts`, `untool_evidence`, `spiral_nudges`, `spiral.<name>` and
-variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; all of them are still read (`spiral=guard` as
-`loopguard=stop`, which now works as `nudge`), and a new name set alongside its old one wins.
+variables `TE_INJECT`, `TE_UNTOOL`, `TE_SPIRAL`, ...; all of them are still read (`spiral=guard`
+as `loopguard=stop`, which works as `nudge`), and a new name set alongside its old one wins.
 `config set` writes the new name. The earlier commands `te facts` and `te untool`, and
 `/tokeneconomizer:facts` and `/tokeneconomizer:untool`, still work.
 

@@ -104,14 +104,22 @@ class LiveController:
         if self.cfg.microskills != "off":
             inj = self.store.read("injection.json") or {}
             text = inj.get("rendered") or ""
-            # A resumed or forked conversation already carries what the first start injected;
-            # a cleared or compacted one has lost it. ("new" is Copilot's word for "startup".)
-            if text and source in ("startup", "new", "clear", "compact"):
+            # A resumed or forked conversation already carries what the first start injected,
+            # where the agent replays it; a cleared or compacted one has lost it. ("new" is
+            # Copilot's word for "startup".)
+            fresh = source in ("startup", "new", "clear", "compact")
+            if not fresh and not self.host.keeps_start_context:
+                # The agent rebuilt the conversation without what its first start added: the
+                # same text again puts it back as it was (and as its prompt cache has it), so a
+                # session that started without facts gets none either.
+                text = s.get("injected_text", text if s.get("injected_chars") else "")
+            if text and (fresh or not self.host.keeps_start_context):
                 n_facts = sum(1 for ln in text.splitlines() if ln.startswith("- "))
                 self._log("inject", chars=len(text), facts=n_facts, source=source)
                 if not self.cfg.shadow:
                     outputs.append(self.host.context("SessionStart", text))
                     s["injected_chars"] = len(text)
+                    s["injected_text"] = text
                     if "rendered_ids" in inj:     # which facts, for this session's fold
                         s["injected_ids"] = list(inj["rendered_ids"])
                     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
@@ -176,8 +184,12 @@ class LiveController:
         # not have).
         kept = set(denylist.kept_for(self.store, root, self.host.name))
         prop = [t for t in unt.get("proposal") or [] if t not in mine and t not in kept]
+        refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
+        # Under `auto`, a list waiting for the repository to go quiet is no news yet: the
+        # session start after it is written says so (above). Only a refusal is.
+        if self.cfg.toolprune == "auto" and not refused:
+            prop = []
         if prop and seen.get("untool") != ",".join(prop):
-            refused = unt.get("auto_apply_refused") if self.cfg.toolprune == "auto" else None
             out.append(self.host.notice(
                 f"TokenEconomizer: {len(prop)} {unit}(s) went unused in this repository's recent "
                 f"sessions ({few(prop)}). Review with `{cmd}`; "

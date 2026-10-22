@@ -45,6 +45,8 @@ def env(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     return {"TOKENECONOMIZER_HOME": str(tmp_path / "te"), "TE_FOLD_SYNC": "1",
+            # A deny list is written at the fold here; the wait before it has its own tests.
+            "TE_TOOLPRUNE_QUIET_MINUTES": "0",
             "GIT_CEILING_DIRECTORIES": str(tmp_path), "HOME": str(home),
             "PATH": os.environ.get("PATH", "")}
 

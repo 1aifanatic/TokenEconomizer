@@ -148,6 +148,10 @@ class Host:
     # agent does not put hook messages where the person looks.
     relays_notices = False
 
+    # Whether a resumed conversation still carries the context its first SessionStart added, so
+    # the plugin need not add it again (Claude Code 2.1.307 and Codex 0.163.0 replay it).
+    keeps_start_context = True
+
     def relay(self, text):
         """What the model is asked, so that it passes `text` on to the person, word for word.
         The notice is the person's to act on: it does not change the model's task."""
@@ -341,6 +345,9 @@ class Copilot(Host):
     name = "copilot"
     interrupt = "Press Esc twice to interrupt it."  # 1.0.101: "esc esc interrupt"
     prompt_context = True              # verified: top-level additionalContext
+    # 1.0.102 rebuilds a resumed conversation's first message without it, dropping the facts
+    # and missing the prompt cache; the same text given again rebuilds it as it was.
+    keeps_start_context = False
 
     def transcript(self, p):
         # Only Stop carries `transcript_path`; the log's location is fixed by the session id.

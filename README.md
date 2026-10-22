@@ -66,27 +66,6 @@ security-auditing benchmarks where every task is a new repository (6–20% lower
 numbers, and nine annotated runs; [`experiments/`](experiments/README.md) reruns the SWE-Bench and
 Web-Bench experiments.
 
-<details>
-<summary>The numbers in the figure</summary>
-
-| Agent · model | Cost vs default | Pass@1, default | Pass@1, TokenEconomizer |
-|---|---|---|---|
-| Claude Code · Sonnet 5 | −23.6% ± 1.8 | 74.7 ± 1.3 | 76.0 ± 1.2 |
-| Claude Code · Opus 4.8 | −30.9% ± 2.1 | 74.0 ± 0.6 | 73.0 ± 0.6 |
-| Codex · GPT-5.6 Terra | −24.7% ± 1.2 | 73.8 ± 1.0 | 74.7 ± 1.0 |
-| Codex · GPT-5.6 Sol | −26.1% ± 2.1 | 80.1 ± 0.8 | 81.7 ± 0.7 |
-| Copilot CLI · Sonnet 5 | −18.4% ± 1.5 | 75.0 ± 1.5 | 77.6 ± 1.3 |
-
-Mean ± standard deviation, from the paper's Table 1;
-[`docs/assets/results_overview.py`](docs/assets/results_overview.py) draws the figure from them.
-
-</details>
-
-These are the paper's runs, in its experimental setting. The plugin keeps the mechanisms but
-acts where a person is in the loop: by default it makes no model calls of its own, it redirects
-a stuck turn instead of restarting the agent, and it never stops a turn. See
-[what changes, and why](docs/PLUGIN.md#2-what-changes-relative-to-the-experimental-setting).
-
 ## How it works
 
 Coding agents are built for task success, not for what a task costs, and every turn re-bills
@@ -180,15 +159,20 @@ Uninstalling, Copilot with your own model key, and troubleshooting are in
 
 ### Supported versions
 
-| Agent | Checked on | Older versions |
+| Agent | Supported | Older versions |
 |---|---|---|
-| Claude Code | 2.1.306, 2.1.300 | not supported |
-| Codex | 0.163.0, 0.153.1 | not supported |
-| Copilot CLI | 1.0.101, 1.0.83 | not supported |
-| Pi | 1.3.0, 1.2.0 | 0.99.x, with one change |
+| Claude Code | 2.1.300 to 2.1.307 | not supported |
+| Codex | 0.153.1 to 0.163.0 | not supported |
+| Copilot CLI | 1.0.83 to 1.0.102 | not supported |
+| Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 
-Before 0.141.0, Codex does not run plugin hooks at all. On Pi 0.99.x, skip `pi install` and
-start each session with `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`.
+The commands above were checked on both ends of each range; later versions have not been
+checked.
+
+- **Codex before 0.141.0** does not run plugin hooks at all.
+- **Pi 0.99.x**: instead of `pi install`, clone the repository and start each session with
+  `pi --extension /path/to/TokenEconomizer/plugin/pi/tokeneconomizer.ts`, using your clone's
+  full path; `git pull` in the clone updates it.
 
 ### Everyday commands
 
@@ -221,7 +205,10 @@ The three mechanisms are `microskills`, `toolprune` and `loopguard`; each takes 
 and each has numbers you can tune with the same `config set` command (in Claude Code's form here).
 Tool pruning is `auto` by default: once a tool has gone unused for `toolprune_evidence` sessions
 in a row (five), the plugin adds it to the deny list without asking, and it is left out from the
-next session on. With `toolprune=propose` the plugin only proposes the list, and nothing changes
+next session on. It writes the list once your sessions in the repository have been idle for an
+hour (`toolprune_quiet_minutes`): a conversation resumed after its tools change writes its whole
+history to the prompt cache again instead of reading it, and after an idle hour that cache has
+expired anyway. With `toolprune=propose` the plugin only proposes the list, and nothing changes
 until you run `toolprune apply`.
 
 ```text

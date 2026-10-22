@@ -2,10 +2,10 @@
 
 Each test drives a whole stretch of a repository's life -- sessions starting, prompt-turns, tool
 calls, sessions ending and being folded -- and pins one property the live layer must have:
-learned facts reach the next session's context, the spiral guard is silent until it has learned
-the repository and then nudges before it stops, an untool proposal changes nothing until it is
-applied and touches only its own deny rules, every session is folded exactly once, and nothing
-here can break the agent's session.
+learned facts reach the next session's context, the loop guard is silent until it has learned
+the repository and then redirects before it tells the person, a deny list is written only once
+the repository's sessions are idle and touches only its own deny rules, every session is folded
+exactly once, and nothing here can break the agent's session.
 
 Folds run inline (`TE_FOLD_SYNC=1`); in the plugin they are detached processes.
 """
@@ -13,10 +13,12 @@ import glob
 import io
 import json
 import os
+import time
 
 import pytest
 
-from tokeneconomizer.plugin import denylist, hook, hosts, toolcheck
+from tokeneconomizer.plugin import denylist, fold, hook, hosts, toolcheck
+from tokeneconomizer.plugin.context import LiveContext
 from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
@@ -25,6 +27,8 @@ from tokeneconomizer.plugin.store import Store
 @pytest.fixture
 def env(tmp_path):
     return {"TOKENECONOMIZER_HOME": str(tmp_path / "home"), "TE_FOLD_SYNC": "1",
+            # A deny list is written at the fold here; the wait before it has its own tests.
+            "TE_TOOLPRUNE_QUIET_MINUTES": "0",
             "GIT_CEILING_DIRECTORIES": str(tmp_path), "PATH": os.environ.get("PATH", "")}
 
 
@@ -147,6 +151,29 @@ def test_resume_does_not_inject_again_and_shadow_never_injects(env, repo, tmp_pa
                          "transcript_path": t, "cwd": repo}) == {}
     events = store_for(env, repo).read_lines("events.jsonl")
     assert any(e["kind"] == "inject" and e["shadow"] for e in events)
+
+
+def test_a_resumed_copilot_session_gets_back_the_facts_it_started_with(env, repo, tmp_path,
+                                                                       monkeypatch):
+    """Copilot 1.0.102 rebuilds a resumed conversation's first message without what SessionStart
+    added: the facts are gone, and that message no longer matches the prompt cache. The text the
+    session started with, given again, rebuilds it as it was; a session that started without
+    facts gets none, and a new session gets the facts as they are now."""
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot-home"))
+    st = store_for(env, repo, host="copilot")
+    st.write("injection.json", {"rendered": "Facts:\n- one\n- two", "rendered_ids": ["a", "b"]})
+
+    def start(sid, source):
+        return json.dumps(call(env, {"hook_event_name": "SessionStart", "session_id": sid,
+                                     "source": source, "cwd": repo}, "copilot"))
+    assert "- two" in start("c1", "new")
+    st.write("injection.json", {"rendered": "Facts:\n- one", "rendered_ids": ["a"]})
+    assert "- two" in start("c1", "resume")                    # as it started, not as now
+    assert "- two" not in start("c2", "new") and "- one" in start("c3", "new")
+    st.write("injection.json", {"rendered": "", "rendered_ids": []})
+    start("c4", "new")
+    st.write("injection.json", {"rendered": "Facts:\n- one", "rendered_ids": ["a"]})
+    assert "- one" not in start("c4", "resume")                # started without facts
 
 
 # ---- the spiral guard --------------------------------------------------------------------
@@ -420,6 +447,117 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "apply", "Workflow"]) == 0
     assert deny() == ["Workflow"]
     assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
+
+
+def _pending_repo(env, repo, tmp_path, quiet="60"):
+    """Five sessions that leave three tools unused, under the default wait before writing."""
+    env = dict(env, TE_TOOLPRUNE_QUIET_MINUTES=quiet)
+    _catalog(env, ["Bash", "Read", "Edit", "Write", "AskUserQuestion", "Workflow",
+                   "CronCreate", "ShareOnboardingGuide", "WebFetch"])
+    for i in range(5):
+        t = write_session(str(tmp_path / f"u{i}.jsonl"), [("look", [
+            ("Read", {"file_path": f"{repo}/a.py"}, "x", False),
+            ("Bash", {"command": "ls"}, "a.py", False)])])
+        run_session(env, repo, f"u{i}", t)
+    return env, LiveContext.build(hosts.ClaudeCode(), repo, env)
+
+
+def _deny(repo):
+    path = denylist.settings_path(repo)
+    return sorted(json.load(open(path))["permissions"]["deny"]) if os.path.exists(path) else []
+
+
+def test_by_default_a_deny_list_waits_until_the_repositorys_sessions_have_been_idle(
+        env, repo, tmp_path, monkeypatch, capsys):
+    """A conversation resumed after its tools changed re-writes its whole history to the prompt
+    cache (Claude Code 2.1.307), so `auto` writes a new list only once every session has been
+    idle longer than a cache lives -- silently until then, and announced once written."""
+    from tokeneconomizer.plugin import cli
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    assert _deny(repo) == []
+    pend = ctx.store.read("untool.json")["auto_pending"]
+    assert sorted(pend["items"]) == ["CronCreate", "ShareOnboardingGuide", "Workflow"]
+    t = str(tmp_path / "next.jsonl")
+    open(t, "w").close()
+
+    def start(sid):
+        return call(env, {"hook_event_name": "SessionStart", "session_id": sid,
+                          "source": "startup", "transcript_path": t, "cwd": repo})
+    assert "went unused" not in start("n1").get("systemMessage", "")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "show"]) == 0
+    assert "pending: written once this repository's sessions have been idle 60 minutes" in (
+        capsys.readouterr().out)
+    now = time.time()
+    wait = fold.apply_pending(ctx, now=now + 600)                   # ten idle minutes: not yet
+    assert 2900 < wait <= 3000 and _deny(repo) == []
+    assert fold.apply_pending(ctx, now=now + 3700) is None           # an idle hour: written
+    assert _deny(repo) == ["CronCreate", "ShareOnboardingGuide", "Workflow"]
+    assert "auto_pending" not in ctx.store.read("untool.json")
+    assert "removed 3 tool(s)" in start("n2")["systemMessage"]
+
+
+def test_a_session_still_writing_its_log_keeps_the_deny_list_waiting(env, repo, tmp_path):
+    """Activity is a hook call or a line in the session's own log: a session can go an hour
+    without a hook (one long answer, or the loop guard off) and still have a warm cache."""
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    old = time.time() - 7200
+    logs = glob.glob(str(tmp_path / "u*.jsonl"))
+    for f in glob.glob(ctx.store.path("sessions", "*.json")) + logs:
+        os.utime(f, (old, old))
+    os.utime(str(tmp_path / "u4.jsonl"))          # no hook for two hours, but its log moved now
+    assert fold.apply_pending(ctx) > 3500 and _deny(repo) == []
+    os.utime(str(tmp_path / "u4.jsonl"), (old, old))
+    assert fold.apply_pending(ctx) is None and len(_deny(repo)) == 3
+
+
+def test_a_deny_list_that_waited_a_day_is_written_even_if_sessions_never_pause(
+        env, repo, tmp_path):
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    st = ctx.store.read("untool.json")
+    st["auto_pending"]["since"] = time.time() - fold.PENDING_MAX_S - 1
+    ctx.store.write("untool.json", st)
+    assert fold.apply_pending(ctx) is None and len(_deny(repo)) == 3
+
+
+def test_a_pending_deny_list_leaves_out_what_was_given_back_meanwhile(env, repo, tmp_path):
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    denylist.set_kept(ctx.store, repo, "claude", add=["Workflow"])        # `restore`d earlier
+    assert fold.apply_pending(ctx, now=time.time() + 3700) is None
+    assert _deny(repo) == ["CronCreate", "ShareOnboardingGuide"]
+
+
+def test_a_pending_deny_list_is_dropped_once_toolprune_is_no_longer_auto(env, repo, tmp_path):
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    ctx = LiveContext.build(hosts.ClaudeCode(), repo, dict(env, TE_TOOLPRUNE="propose"))
+    assert fold.apply_pending(ctx, now=time.time() + 3700) is None
+    unt = ctx.store.read("untool.json")
+    assert _deny(repo) == [] and "auto_pending" not in unt and len(unt["proposal"]) == 3
+
+
+def test_the_fold_leaves_one_detached_waiter_and_a_second_one_leaves(
+        env, repo, tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import cli
+    env, ctx = _pending_repo(env, repo, tmp_path)
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append(argv))
+    detached = LiveContext.build(hosts.ClaudeCode(), repo,
+                                 {k: v for k, v in env.items() if k != "TE_FOLD_SYNC"})
+    assert fold.schedule_pending(detached) > 0
+    assert spawned == [["toolprune", "apply-pending"]]
+
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError(s)))
+    beat = ctx.store.path("toolprune-waiter")
+    open(beat, "w").close()                                          # another waiter is alive
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "apply-pending"]) == 0
+    assert _deny(repo) == [] and os.path.exists(beat)
+    os.remove(beat)
+    monkeypatch.setenv("TE_TOOLPRUNE_QUIET_MINUTES", "0")            # quiet enough at once
+    assert cli.main(["--host", "claude", "--cwd", repo, "toolprune", "apply-pending"]) == 0
+    assert len(_deny(repo)) == 3 and not os.path.exists(beat)
 
 
 def test_the_web_is_never_proposed_and_an_old_deny_rule_for_it_is_given_back(

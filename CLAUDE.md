@@ -39,9 +39,9 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
 - No run outputs in the repository: transcripts, rows, streams, figures rendered from runs and
   tables derived from them stay out of git (`.gitignore`). The one exception is the paper's
   headline results in `README.md` (the line under the badges, the Results section and
-  `docs/assets/results_overview.*`): quoted from the paper's Table 1 and attributed to it, with
-  the plugin's differences from the experimental setting linked. Change them only with the
-  paper, and redraw the figure with `python docs/assets/results_overview.py`.
+  `docs/assets/results_overview.*`): quoted from the paper's Table 1 and attributed to it.
+  Change them only with the paper, and redraw the figure with
+  `python docs/assets/results_overview.py`.
 - The plugin's own text (`plugin/`, its manifests, slash commands and skills, and what the
   hooks print) makes no claims of effect.
 - Tests: `python -m pytest tests experiments/tests`. A change to what the plugin learns or

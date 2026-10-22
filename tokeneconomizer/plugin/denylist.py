@@ -23,10 +23,13 @@ session start, and the unit of removal is whatever that file can express:
 
 Rules common to all three:
 
-  * `toolprune: auto` (the default) writes the file as soon as a proposal forms, and the next
+  * `toolprune: auto` (the default) writes the file once a proposal forms and the repository's
+    sessions have been idle for `toolprune_quiet_minutes` (`fold.apply_pending`), and the next
     session start says so; with `toolprune: propose` only the person's approval (`te toolprune
-    apply`) does. Either way it applies from the NEXT session: tools are fixed at session
-    start, and changing them mid-session would rewrite the cached prompt prefix.
+    apply`) does. Either way it applies from the NEXT session. Verified on Claude Code 2.1.307,
+    Codex 0.163.0 and Copilot 1.0.102 (docs/PLUGIN.md §3): a running session keeps the tools
+    it started with; a conversation resumed after the change sends the new tools, which
+    re-writes its whole history to the prompt cache -- hence the wait.
   * The writer adds and removes exactly the entries it recorded adding (`untool_applied.json`,
     per settings file, since the clones of one repository share its state but not their
     settings); an entry the person wrote is never touched.

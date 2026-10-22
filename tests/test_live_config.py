@@ -203,3 +203,13 @@ def test_loopguard_stop_is_still_read_and_acts_as_nudge_with_a_warning(tmp_path)
         assert cfg.loopguard == "stop"
         assert any("loopguard=stop acts as nudge" in w for w in cfg.warnings)
     assert not load_config(str(tmp_path), env={"TE_LOOPGUARD": "nudge"}).warnings
+
+
+def test_the_quiet_window_before_a_deny_list_is_written_may_be_zero():
+    cfg = LiveConfig()
+    assert cfg.toolprune_quiet_minutes == 60
+    assert cfg.set("toolprune_quiet_minutes", "0") and cfg.toolprune_quiet_minutes == 0
+    assert not cfg.set("toolprune_quiet_minutes", "-5")
+    assert not cfg.set("toolprune_evidence", "0")             # other numbers still start at 1
+    assert load_config("/nonexistent", env={"TE_TOOLPRUNE_QUIET_MINUTES": "15"}
+                       ).toolprune_quiet_minutes == 15

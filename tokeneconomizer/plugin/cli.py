@@ -9,6 +9,8 @@
     te toolprune restore [ITEM ...]   remove entries this plugin added
     te toolprune refresh-catalog      record the tool list a fresh session loads (Claude, Copilot)
     te toolprune measure              measure the request with and without the proposal
+    te toolprune apply-pending        write a pending `auto` deny list once the repository has
+                                      been idle long enough (the fold starts it, detached)
     te config show                    each mechanism on or off, its settings, the guard's thresholds
     te config set KEY=VALUE ...       e.g. `loopguard=off`, `microskills=on`,
                                       `loopguard.min_turns=12` (this repository; `--global` for
@@ -194,6 +196,12 @@ def _toolprune_show(ctx, unt):
           f"{denylist.settings_path(ctx.repo.root, host)}): "
           f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
     print(f"proposed: {', '.join(_proposal(ctx, unt)) or '-'}")
+    pending = [t for t in (unt.get("auto_pending") or {}).get("items") or []
+               if t in _proposal(ctx, unt)]
+    if pending and ctx.config.toolprune == "auto":
+        print(f"pending: written once this repository's sessions have been idle "
+              f"{ctx.config.toolprune_quiet_minutes} minutes, so that no conversation you "
+              f"resume re-reads its cached prompt (`toolprune apply` writes it now)")
     kept = denylist.kept_for(ctx.store, ctx.repo.root, host)
     if kept:
         print(f"kept, as you gave them back (`toolprune apply NAME` removes one again): "
@@ -234,6 +242,36 @@ def _toolprune_show(ctx, unt):
                   + ("deferred and observed" if host == "claude" else "observed")
                   + " tools are known, which leaves the always-loaded tools out of the evidence.")
     return 0
+
+
+def _wait_and_apply(args):
+    """`toolprune apply-pending`, which the fold leaves running, detached: wait until the pending
+    `auto` deny list can be written without costing a warm prompt cache (`fold.apply_pending`),
+    looking again as sessions come and go, then write it. One waiter per repository and agent:
+    a second finds the first one's heartbeat fresh and leaves."""
+    ctx = _ctx(args)
+    beat = ctx.store.path("toolprune-waiter")
+    try:
+        if time.time() - os.path.getmtime(beat) < 2 * fold.WAITER_POLL_S:
+            return 0
+    except OSError:
+        pass
+    ctx.store.ensure()
+    with open(beat, "w") as fh:
+        fh.write(str(os.getpid()))
+    try:
+        while True:
+            wait = fold.apply_pending(ctx)
+            if wait is None:
+                return 0
+            time.sleep(min(max(wait, 1.0), fold.WAITER_POLL_S))
+            os.utime(beat)
+            ctx = _ctx(args)            # the settings may have changed meanwhile
+    finally:
+        try:
+            os.remove(beat)
+        except OSError:
+            pass
 
 
 def _proposal(ctx, unt):
@@ -312,6 +350,8 @@ def cmd_toolprune(args):
               + (f"; kept from now on (`toolprune apply {removed[0]}` removes one again)"
                  if removed else ""))
         return 0
+    if action == "apply-pending":
+        return _wait_and_apply(args)
     if action == "refresh-catalog":
         if host == "codex":
             print("Codex needs no catalog: its removable capabilities are a fixed set "
@@ -383,7 +423,8 @@ def _config_view(cfg):
                         "microskills_propose_every": d.pop("microskills_propose_every")},
         "toolprune": {"state": "off" if cfg.toolprune == "off" else "on",
                       "toolprune": d.pop("toolprune"),
-                      "toolprune_evidence": d.pop("toolprune_evidence")},
+                      "toolprune_evidence": d.pop("toolprune_evidence"),
+                      "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes")},
         "loopguard": {
             "state": "off" if cfg.loopguard == "off" else "on",
             "loopguard": d.pop("loopguard"), "loopguard_aggr": d.pop("loopguard_aggr"),
@@ -647,7 +688,8 @@ def build_parser():
     add("microskills", "facts").set_defaults(fn=cmd_microskills)
     p = add("toolprune", "untool")
     p.add_argument("action", nargs="?", default="show",
-                   choices=("show", "apply", "restore", "refresh-catalog", "measure"))
+                   choices=("show", "apply", "restore", "refresh-catalog", "measure",
+                            "apply-pending"))
     p.add_argument("tools", nargs="*")
     p.set_defaults(fn=cmd_toolprune)
     p = add("config")

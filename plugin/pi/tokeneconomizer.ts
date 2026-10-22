@@ -7,7 +7,8 @@
  * JSON out), and the answer is applied with Pi's own levers. All of the mechanism logic lives
  * in the dispatcher; this file only translates.
  *
- *   session_start       -> SessionStart       the learned manual, kept for the session
+ *   session_start       -> SessionStart       the learned manual, kept for the session (a
+ *                                             resumed one keeps the manual it carries)
  *   before_agent_start  -> UserPromptSubmit   opens a prompt-turn; the manual is set as the
  *                                             `tokeneconomizer` system-prompt section, on every
  *                                             prompt, because Pi diffs sections between runs and
@@ -97,14 +98,39 @@ function notify(ctx: ExtensionContext, text: unknown) {
 }
 
 const SOURCE: Record<string, string> = {
-  // A new conversation starts empty; a resumed, forked or reloaded one already carries the
-  // section it was given, in its own system-message history.
+  // For a conversation that starts empty. One that already holds messages is a resumption,
+  // whatever the reason says (`carriedSection`).
   startup: "startup",
   new: "clear",
   resume: "resume",
   fork: "resume",
   reload: "resume",
 };
+
+/** The section a conversation that already holds messages carries. Pi replays its system
+ * entries -- each patches `sections` by name, `null` removing one, and a compaction restates
+ * them all -- into the leading system message of every request, so such a conversation must
+ * be given the same text again: leaving it out records it as removed, and the facts are gone;
+ * new facts would change the system message. Either way the whole conversation would be
+ * re-read at the uncached price. Pi says "startup", not "resume", for a conversation opened
+ * with `pi -c` or `--session`, so the messages decide (both verified on Pi 1.3.0). */
+export function carriedSection(entries: any[]): string {
+  let text = "";
+  for (const entry of entries) {
+    if (entry?.type === "compaction" && entry.systemMessage?.sections) {
+      text = entry.systemMessage.sections[SECTION] ?? "";
+    } else if (entry?.type === "message" && entry.message?.role === "system"
+               && entry.message.sections && SECTION in entry.message.sections) {
+      text = entry.message.sections[SECTION] ?? "";
+    }
+  }
+  // Pi stores a section as it renders it, `<name>\n...\n</name>`, and wraps what it is given.
+  const open = `<${SECTION}>\n`;
+  const close = `\n</${SECTION}>`;
+  return text.startsWith(open) && text.endsWith(close)
+    ? text.slice(open.length, text.length - close.length)
+    : text;
+}
 
 export default function tokeneconomizer(pi: ExtensionAPI) {
   let manual = "";
@@ -119,11 +145,11 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     prompts = 0;
-    const out = await hook(
-      { ...base(ctx), hook_event_name: "SessionStart", source: SOURCE[event.reason] ?? "startup" },
-      ctx.mode,
-    );
-    manual = out?.hookSpecificOutput?.additionalContext ?? "";
+    const entries = (ctx.sessionManager.getBranch?.() ?? []) as any[];
+    const carried = entries.some((e) => e?.type === "message");
+    const source = carried ? "resume" : SOURCE[event.reason] ?? "startup";
+    const out = await hook({ ...base(ctx), hook_event_name: "SessionStart", source }, ctx.mode);
+    manual = carried ? carriedSection(entries) : out?.hookSpecificOutput?.additionalContext ?? "";
     notify(ctx, out?.systemMessage);
   });
 

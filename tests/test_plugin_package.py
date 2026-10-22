@@ -9,6 +9,7 @@ it -- which is what a marketplace install, copying only the plugin directory, ac
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -248,6 +249,40 @@ def test_the_package_is_stdlib_only_and_never_touches_the_benchmark_harness():
                 # tomllib: standard library from 3.11, imported behind an ImportError guard
                 assert root in sys.stdlib_module_names or root in (
                     "tokeneconomizer", "tomllib"), f"{path} imports non-stdlib {mod}"
+
+
+def test_a_resumed_pi_conversation_keeps_the_section_it_carries():
+    """Pi rebuilds a conversation's system message from its system entries, so a resumed one is
+    given back the facts section it carries, byte for byte: unwrapped from the `<name>` tags Pi
+    stores it in (Pi wraps it again), gone once a patch removed it, and as a compaction restated
+    it. Run through Node, which loads the extension's TypeScript directly."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
+    script = """
+const { carriedSection } = await import(process.argv[1]);
+const sys = (sections) => ({ type: "message", message: { role: "system", sections } });
+const compact = (sections) => ({ type: "compaction", systemMessage: { sections } });
+const user = { type: "message", message: { role: "user" } };
+const facts = sys({ tokeneconomizer: "<tokeneconomizer>\\nFacts:\\n- one\\n</tokeneconomizer>" });
+console.log(JSON.stringify([
+  carriedSection([]),
+  carriedSection([facts, user]),
+  carriedSection([facts, sys({ cwd: "<cwd>\\n/x\\n</cwd>" })]),
+  carriedSection([facts, sys({ tokeneconomizer: null })]),
+  carriedSection([facts, compact({ cwd: "c" })]),
+  carriedSection([compact(facts.message.sections)]),
+]));
+"""
+    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
+                          "--input-type=module", "-e", script, ext],
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    facts = "Facts:\n- one"
+    assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
 
 
 def test_the_plugin_directory_is_also_a_pi_package():

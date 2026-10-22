@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`; announces changed facts, tools the deny list newly left out, or a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -53,7 +53,7 @@ Every hook fails open: any error becomes an empty output (no change) and a trace
 | Unit of work | one benchmark task | a **session** for micro-skills and tool pruning; a **prompt-turn** for the loop guard | In interactive use a person already splits work into short turns. A whole session folded as one trajectory would look stuck merely by being long |
 | Learning signal | the official grader's `resolved` | the envelope learns from turns that **ended green**: the agent stopped on its own, was not stopped by the guard, and no verification after its last edit failed | There is no grader. Micro-skills and evidence pruning never needed one |
 | Injection channel | a prefix on the task prompt | `SessionStart` `additionalContext` | Verified to reach the model (§3) |
-| Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list**, applied by default once the evidence forms it and announced at the next session start (`toolprune=propose` waits for approval instead), written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. Tools are fixed at session start, and changing them mid-session would re-write the cached prompt prefix. Each agent's file can express a different unit (§3) |
+| Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list**, applied by default once the evidence forms it and the repository's sessions have been idle longer than a prompt cache lives (§3), and announced at the next session start (`toolprune=propose` waits for approval instead), written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. A session keeps the tools it started with, but a conversation resumed after a change sends the new ones, re-writing its cached prefix, hence the idle wait. Each agent's file can express a different unit (§3) |
 | Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (loaded but unused for N sessions) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
 | Network | every arm, baseline included, carries an answer-key guard — a `PreToolUse` hook and an `/etc/hosts` block refuse the benchmarks' upstream sources — and drops the web tools | **no guard**: no `PreToolUse` hook (on Pi, no `tool_call` handler), no blocked command or host; the web tools stay | A benchmark's answer is a fetch away. A real session has no answer key, and the web is part of the work |
 | Nudge | kill the agent, resume it with a continuation prompt | a mid-turn reminder attached to the tool result | Different intervention, so its effect is not inherited from the experiments |
@@ -375,6 +375,48 @@ thresholds), in its terminal UI and headless.
 * Found and fixed: Codex 0.163.0 edits with `apply_patch <<'PATCH'` and runs the tests in the
   same command, and the guard counted none of its twelve edits, so it never fired; and
   `copilot -p` was told the interactive way to stop.
+
+**Prompt caching, 2026-10-21.** A prompt cache matches a request's prefix: the tools, the
+system prompt, then the conversation in order. What the plugin changes must leave a cached
+prefix alone. Checked on Claude Code 2.1.307 against a local fake Messages API (no model calls),
+and on Codex 0.163.0, Copilot CLI 1.0.102 and Pi 1.3.0 through a logging proxy in front of
+OpenRouter (cache breakpoints, which move every turn, left out of the comparison).
+
+* A deny list present at session start takes its tools out of the request: Claude Code 12 tools
+  to 11, Codex 9 to 4 (goals, multi-agent, view_image), Copilot 21 to 19 (an MCP server's two).
+* A running session keeps its tools, on all three. A deny list written mid-turn (while the
+  model's `sleep` ran) or between interactive turns by another process, as another session's
+  fold would, left every later request's tools byte-identical and its history extending the
+  last. Claude Code even reloaded the rule (`/permissions` listed it) and kept the tool; nor
+  does a rule a `SessionStart` hook writes reach that session's first request.
+* A resumed conversation does not keep them, on all three: `claude --continue`, `codex exec
+  resume --last` and `copilot --continue` sent the old history with exactly the new tool list,
+  so a conversation resumed while its cache is warm writes its whole history to the cache again
+  instead of reading it. The fold runs just after a session ends, when its cache is warmest and
+  resuming it likeliest, so `auto` now holds a new list as pending, and a detached
+  `te toolprune apply-pending` writes it once every session of the repository has been idle for
+  `toolprune_quiet_minutes` (60; a hook call or a write to the session's own log counts as
+  activity), or once it has waited a day. End to end on Claude Code, the window set to one
+  minute: the list waited through a second session, was written one idle minute after it, and
+  the next session sent 8 tools instead of 12.
+* Within a session the facts and the guard keep the prefix on every agent: the facts block is
+  rendered at fold time and given once (on Pi, the same system-prompt section on every prompt),
+  and a redirect or notice comes after a tool result. Facts changed on disk mid-session leave a
+  running session alone.
+* A resumed conversation must carry the facts it started with, byte for byte. Claude Code and
+  Codex replay them from their own logs (Claude Code changes the message from a block list to a
+  string of the same text). Two did not, and both are fixed:
+  * Copilot rebuilds a resumed conversation's first message without what `SessionStart` added:
+    the facts were gone and that message missed the cache. The plugin now records the text a
+    session started with and gives it again on a Copilot resume, which rebuilds the message
+    exactly; a session that started without facts gets none.
+  * Pi rebuilds its system message from the conversation's own entries, and the extension left
+    its section out on a resume, which Pi recorded as removed. Pi also reports `pi -c` and
+    `--session` as `startup`, not `resume`, and stores a section wrapped in `<name>` tags. The
+    extension now decides by whether the branch already holds messages, and gives such a
+    conversation back the section it carries, unwrapped (`carriedSection`): two resumes after a
+    fact was retired on disk kept the original system message, and a new session took the
+    current facts.
 
 ## 4. State and privacy
 

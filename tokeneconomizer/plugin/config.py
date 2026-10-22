@@ -4,8 +4,9 @@ The defaults:
 
   * microskills = "envfacts" -- the LLM-free facts only. The paid proposer (`envfacts+distiller`,
                                 `distiller`) is opt-in, and refused unless `paid` is also true;
-  * toolprune   = "auto"     -- a deny list is applied as soon as the evidence forms it, from
-                                the next session, and announced once at that session's start;
+  * toolprune   = "auto"     -- a deny list is applied once the evidence forms it and the
+                                repository's sessions have been idle (toolprune_quiet_minutes),
+                                from the next session, and announced once at that session's start;
                                 `toolprune restore` gives it back. "propose" only proposes it,
                                 and writes nothing to the agent's settings until the person
                                 runs `toolprune apply`;
@@ -26,6 +27,9 @@ person can tune by hand:
   * microskills_max_facts, microskills_max_tokens -- caps on the injected block;
   * microskills_propose_every   -- sessions between paid proposer runs;
   * toolprune_evidence          -- unused sessions before a tool is proposed;
+  * toolprune_quiet_minutes     -- how long every session of the repository must have been idle
+                                   before `auto` writes a deny list (0: at once), so that no
+                                   conversation resumed with a warm prompt cache loses it;
   * loopguard_aggr              -- the guard's threshold preset;
   * loopguard_nudges            -- redirects per prompt-turn before the guard only notifies;
   * loopguard.<name>            -- one guard threshold, pinned over the preset and over what the
@@ -124,6 +128,7 @@ class LiveConfig:
     microskills_propose_every: int = 5
     toolprune: str = "auto"
     toolprune_evidence: int = 5
+    toolprune_quiet_minutes: int = 60
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
     loopguard_nudges: int = 1
@@ -141,6 +146,8 @@ class LiveConfig:
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
                 "vocabulary": ("auto", "python-git", "node-web")}
+    # The smallest value a number setting takes, where it is not 1.
+    _MIN = {"toolprune_quiet_minutes": 0}
 
     def as_dict(self):
         d = asdict(self)
@@ -177,8 +184,9 @@ class LiveConfig:
                     "1", "true", "yes", "on")
             elif isinstance(cur, int):
                 v = int(value)
-                if v < 1:
-                    raise ValueError("must be >= 1")
+                lo = self._MIN.get(key, 1)
+                if v < lo:
+                    raise ValueError(f"must be >= {lo}")
             else:
                 v = str(value).strip()
         except (TypeError, ValueError) as e:
@@ -234,6 +242,7 @@ _ENV = {"TE_MODE": "mode", "TE_PAID": "paid", "TE_SHADOW": "shadow",
         "TE_MICROSKILLS_MAX_TOKENS": "microskills_max_tokens",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
         "TE_TOOLPRUNE": "toolprune", "TE_TOOLPRUNE_EVIDENCE": "toolprune_evidence",
+        "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",

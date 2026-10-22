@@ -39,6 +39,18 @@ STALE_S = 600           # an unfolded session whose transcript is quiet this lon
 # session, or, if it died, the session stays pending and the next SessionStart folds it.
 FOLD_LOCK_WAIT_S = sidecall.TIMEOUT_S + 60
 
+# A deny list changes the tools a session sends, and the tools open the cached prompt prefix.
+# A running session keeps the tools it started with, but a conversation resumed after the change
+# sends the new ones, so its whole history is written to the prompt cache again instead of read
+# from it (both verified on Claude Code 2.1.307, Codex 0.163.0 and Copilot 1.0.102). The fold
+# runs just after a session ends, when that session's cache is warmest and resuming it is
+# likeliest, so `auto` holds a new list as pending and writes it only once every session of the
+# repository has been idle longer than a prompt cache lives (`toolprune_quiet_minutes`): then a
+# resumed or new session finds the cache cold anyway. A list that has waited a day is written
+# regardless, so a repository whose sessions never pause still gets it.
+PENDING_MAX_S = 24 * 3600
+WAITER_POLL_S = 600     # how often the waiter looks again, and so how fresh its heartbeat is
+
 
 def _run_dir(workdir, trace_path):
     run = os.path.join(workdir, "run")
@@ -138,17 +150,13 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
                     if t not in applied and t not in kept]
     doc["proposal"] = proposal
     doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
-    added = []
     if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
-        try:
-            added = denylist.apply(ctx.repo.root, proposal, ctx.store, host=host)
-            doc["proposal"], doc["auto_applied"] = [], added
-        except RuntimeError as e:          # an unreadable or redirected file: keep proposing
-            doc["auto_apply_refused"] = str(e)
+        _hold(doc, st, proposal, ctx.repo.root)
     if restored:
         doc["restored_protected"] = restored
     ctx.store.write("untool.json", doc)
-    return {"proposal": doc["proposal"], "applied_now": added, "restored": restored}
+    return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
+            "restored": restored}
 
 
 def _server_summary(stage, servers):
@@ -213,15 +221,84 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
                             for c in denylist.CODEX_LIVE_CAPABILITIES},
            "proposal": proposal, "updated": time.time(),
            "new_in_proposal": sorted(set(proposal) - set(prior.get("proposal", [])))}
-    added = []
     if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
-        try:
-            added = denylist.apply(ctx.repo.root, proposal, ctx.store, host="codex")
-            doc["proposal"], doc["auto_applied"] = [], added
-        except RuntimeError as e:          # a committed or unparseable file: keep proposing
-            doc["auto_apply_refused"] = str(e)
+        _hold(doc, prior, proposal, ctx.repo.root)
     ctx.store.write("untool.json", doc)
-    return {"proposal": doc["proposal"], "applied_now": added, "restored": []}
+    return {"proposal": doc["proposal"], "pending": bool(doc.get("auto_pending")),
+            "restored": []}
+
+
+def _hold(doc, prior, proposal, root):
+    """`auto`: keep the proposal as pending for `apply_pending`, from when it first waited. A
+    refusal to write the file (a committed or unparseable one) stands until a write succeeds."""
+    pend = prior.get("auto_pending") or {}
+    doc["auto_pending"] = {"items": list(proposal), "root": root,
+                           "since": pend.get("since") or time.time()}
+    if prior.get("auto_apply_refused"):
+        doc["auto_apply_refused"] = prior["auto_apply_refused"]
+
+
+def last_activity(ctx):
+    """When a session of this repository on this agent last did anything: a hook call (its
+    record's write) or a line in its own session log, whichever is later; 0 when none did."""
+    latest = 0.0
+    sess_dir = ctx.store.path("sessions")
+    try:
+        names = [n for n in os.listdir(sess_dir) if n.endswith(".json")]
+    except OSError:
+        return latest
+    for name in names:
+        try:
+            latest = max(latest, os.path.getmtime(os.path.join(sess_dir, name)))
+        except OSError:
+            continue
+        tp = (ctx.store.read(os.path.join("sessions", name)) or {}).get("transcript")
+        try:
+            latest = max(latest, os.path.getmtime(tp)) if tp else latest
+        except OSError:
+            pass
+    return latest
+
+
+def apply_pending(ctx, now=None):
+    """Write the pending `auto` deny list once the repository has been quiet long enough (see
+    PENDING_MAX_S). Returns the seconds to wait before looking again, or None when there is
+    nothing left to wait for: written, refused, given back or applied by hand meanwhile, or
+    `toolprune` is no longer `auto`."""
+    now = now or time.time()
+    with ctx.store.locked("mechanisms"):
+        unt = ctx.store.read("untool.json") or {}
+        pend = unt.get("auto_pending")
+        if not pend:
+            return None
+        root = pend.get("root") or ctx.repo.root
+        done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
+        done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
+        items = [t for t in pend.get("items") or [] if t not in done]
+        if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
+            idle = now - last_activity(ctx)
+            quiet_s = ctx.config.toolprune_quiet_minutes * 60
+            waited = now - float(pend.get("since") or now)
+            if idle < quiet_s and waited < PENDING_MAX_S:
+                return min(quiet_s - idle, PENDING_MAX_S - waited)
+            try:
+                unt["auto_applied"] = denylist.apply(root, items, ctx.store, host=ctx.host.name)
+                unt["proposal"] = [t for t in unt.get("proposal") or [] if t not in items]
+                unt.pop("auto_apply_refused", None)
+            except RuntimeError as e:      # an unreadable, committed or redirected file
+                unt["auto_apply_refused"] = str(e)
+        unt.pop("auto_pending", None)
+        ctx.store.write("untool.json", unt)
+        return None
+
+
+def schedule_pending(ctx):
+    """Look at the pending deny list now and, if it has to wait, leave a detached
+    `te toolprune apply-pending` to write it later (only the look, when TE_FOLD_SYNC=1)."""
+    wait = apply_pending(ctx)
+    if wait is not None and ctx.env.get("TE_FOLD_SYNC") != "1":
+        ctx.spawn(["toolprune", "apply-pending"], "fold.log")
+    return wait
 
 
 # Rarely used, but expensive to lose when a session needs it -- the Codex counterpart of
@@ -260,6 +337,8 @@ def fold_session(ctx, session_id, transcript_path=None):
                                        transcript=transcript, workdir=workdir)
                 record["injection"] = inj
                 record["untool"] = unt
+                if unt and unt.get("pending"):
+                    schedule_pending(ctx)
                 ctx.host.settle(transcript)
                 usage = ctx.host.session_usage(transcript)
                 eff, priced_by = accounting.effective(usage)
