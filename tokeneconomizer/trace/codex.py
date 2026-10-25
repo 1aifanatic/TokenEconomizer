@@ -17,6 +17,7 @@ import re
 import shlex
 
 from .jsonl import lines as _lines
+from .jsonl import records as _records
 
 _SHELL_PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.M)
 _SHELL_GIT_APPLY_PATH_RE = re.compile(r"^\+\+\+ b/(.+?)\s*$", re.M)
@@ -195,6 +196,24 @@ def codex_capability_trace(rollout_path, out_path):
             out.write(json.dumps({"type": "item.completed", "item": item}) + "\n")
             n += 1
     return n
+
+
+def codex_prompt_count(rollout_path):
+    """How many prompts a Codex session ran: one turn each (`_turn_starts`)."""
+    starts = _turn_starts(rollout_path)
+    return sum(1 for d in _records(rollout_path) if starts(d))
+
+
+def _turn_starts(rollout_path):
+    """What opens a turn in this rollout: its `task_started` events (0.163.0), or where it has
+    none, its `turn_context` records."""
+    def started(d):
+        return (d.get("type") == "event_msg"
+                and (d.get("payload") or {}).get("type") == "task_started")
+    if any(started(d) for d in _records(rollout_path)):
+        return started
+    return lambda d: d.get("type") == "turn_context"
+
 
 
 def codex_session_meta(rollout_path):

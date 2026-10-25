@@ -180,6 +180,10 @@ class Host:
     def session_usage(self, transcript_path):
         raise NotImplementedError
 
+    def prompt_count(self, transcript_path):
+        """How many prompts the finished session ran; None where the log does not say."""
+        return None
+
     def settle(self, transcript_path):
         """Wait, if this host needs to, until the finished session's log is complete."""
 
@@ -248,6 +252,9 @@ class ClaudeCode(Host):
     def session_usage(self, transcript_path):
         return trace.claude_session_usage(transcript_path)
 
+    def prompt_count(self, transcript_path):
+        return trace.claude_prompt_count(transcript_path)
+
     def tool_usage(self, trace_path):
         return trace.claude_tool_usage(os.path.realpath(trace_path))
 
@@ -299,6 +306,9 @@ class Codex(Host):
     def session_usage(self, transcript_path):
         return trace.codex_session_usage(transcript_path)
 
+    def prompt_count(self, transcript_path):
+        return trace.codex_prompt_count(transcript_path)
+
 
 class Pi(Host):
     """Pi (earendil-works/pi), through the extension in `plugin/pi/`.
@@ -330,6 +340,9 @@ class Pi(Host):
         out = os.path.join(workdir, "pi_trace.jsonl")
         n = trace.pi_session_to_claude(transcript_path, out)
         return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.pi_prompt_count(transcript_path)
 
     def session_usage(self, transcript_path):
         return trace.pi_session_usage(transcript_path)
@@ -378,6 +391,9 @@ class Copilot(Host):
 
     def session_usage(self, transcript_path):
         return trace.copilot_session_usage(transcript_path)
+
+    def prompt_count(self, transcript_path):
+        return trace.copilot_prompt_count(transcript_path)
 
     def settle(self, transcript_path, wait_s=15.0, fresh_s=60.0):
         # Copilot writes `session.shutdown` -- the event that carries usage -- just AFTER the

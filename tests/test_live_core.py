@@ -597,9 +597,11 @@ def test_a_job_that_never_answers_stops_blocking_the_next_one():
 
 
 # ---- Copilot session logs ------------------------------------------------------------------
-def copilot_events(path, calls, *, shutdown=True, model="gpt-5.4", cwd="/w/repo", sid="cp1"):
-    """A Copilot `session-state/<id>/events.jsonl`: session.start, one user message, the tool
-    calls as execution_start/complete pairs, and (unless killed) a session.shutdown."""
+def copilot_events(path, calls, *, shutdown=True, model="gpt-5.4", cwd="/w/repo", sid="cp1",
+                   prompts=1):
+    """A Copilot `session-state/<id>/events.jsonl`: session.start, `prompts` user messages (the
+    tool calls, as execution_start/complete pairs, in the first), and (unless killed) a
+    session.shutdown."""
     ev = [{"type": "session.start", "data": {"sessionId": sid, "copilotVersion": "1.0.83",
                                             "selectedModel": model, "context": {"cwd": cwd}}},
           {"type": "user.message", "data": {"content": "fix it", "turnId": "0"}}]
@@ -609,6 +611,8 @@ def copilot_events(path, calls, *, shutdown=True, model="gpt-5.4", cwd="/w/repo"
         ev.append({"type": "tool.execution_complete", "data": {
             "toolCallId": f"c{n}", "success": ok, "turnId": "0",
             "result": {"content": text, "detailedContent": text}}})
+    for k in range(1, prompts):
+        ev.append({"type": "user.message", "data": {"content": "and then", "turnId": str(k)}})
     if shutdown:
         ev.append({"type": "session.shutdown", "data": {
             "modelMetrics": {model: {"requests": {"count": 4}, "usage": {

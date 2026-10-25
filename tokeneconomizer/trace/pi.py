@@ -42,6 +42,12 @@ def pi_active_branch(entries):
     return list(reversed(path))
 
 
+def pi_prompt_count(path):
+    """How many prompts the conversation ran: `user` messages on its active branch."""
+    return sum(1 for e in pi_active_branch(_pi_entries(path))
+               if e.get("type") == "message" and (e.get("message") or {}).get("role") == "user")
+
+
 def _pi_usage(u):
     if not isinstance(u, dict):
         return None

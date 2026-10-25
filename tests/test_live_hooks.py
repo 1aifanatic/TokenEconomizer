@@ -139,6 +139,34 @@ def test_a_learned_fact_reaches_the_next_session_and_is_announced_once(env, repo
     assert starts[5]["hookSpecificOutput"]["additionalContext"] == ctx
 
 
+def multi_prompt_trap_session(path, repo, i, prompts=4, every=False):
+    """A session of `prompts` prompts that meets the missing `pytest` at its first test run (or,
+    with `every`, at each): later prompts use the working form, as the conversation shows it."""
+    def prompt(k):
+        edit = ("Edit", {"file_path": f"{repo}/pkg/m{i}_{k}.py", "old_string": "a",
+                         "new_string": "b"}, "ok", False)
+        known = ("Bash", {"command": "python -m pytest -q tests/test_a.py"}, "1 passed in 0.1s",
+                 False)
+        trap = ("Bash", {"command": "pytest -q tests/test_a.py"},
+                "bash: pytest: command not found", True)
+        return (f"fix bug {i}.{k}", [edit, trap, known] if every or k == 0 else [edit, known])
+    return write_session(path, [prompt(k) for k in range(prompts)])
+
+
+def test_facts_learn_per_session_however_many_prompts_it_ran(env, repo, tmp_path):
+    """Unlike tool pruning, the facts count sessions, not prompts. Within a session the agent
+    already knows the fix from its own earlier failure, so its later prompts would count as
+    exercising the fact without the failure: per prompt, a trap met once a session fires in a
+    quarter of them and never clears the firing gate. Four-prompt sessions reach the fact at the
+    fifth start, as one-prompt sessions do (above)."""
+    claim = "`pytest …` fails here with command not found; `python -m pytest …` works."
+    starts = [run_session(env, repo, f"s{i}",
+                          multi_prompt_trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
+              for i in range(6)]
+    assert all(s == {} for s in starts[:4])
+    assert claim in starts[4]["hookSpecificOutput"]["additionalContext"]
+
+
 def test_resume_does_not_inject_again_and_shadow_never_injects(env, repo, tmp_path):
     for i in range(5):
         run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
@@ -378,7 +406,7 @@ def test_with_propose_unused_tools_are_proposed_but_nothing_changes_until_applie
     for i in range(5):
         t = write_session(str(tmp_path / f"u{i}.jsonl"), [("look", [
             ("Read", {"file_path": f"{repo}/a.py"}, "x", False),
-            ("Bash", {"command": "ls"}, "a.py", False)])])
+            ("Bash", {"command": "ls"}, "a.py", False)]), ("and again", [])])
         run_session(env, repo, f"u{i}", t)
     st = store_for(env, repo)
     prop = st.read("untool.json")["proposal"]
@@ -402,7 +430,7 @@ def test_by_default_unused_tools_are_removed_from_the_next_session_and_it_says_s
     for i in range(5):
         t = write_session(str(tmp_path / f"u{i}.jsonl"), [("look", [
             ("Read", {"file_path": f"{repo}/a.py"}, "x", False),
-            ("Bash", {"command": "ls"}, "a.py", False)])])
+            ("Bash", {"command": "ls"}, "a.py", False)]), ("and again", [])])
         run_session(env, repo, f"u{i}", t)
     st = store_for(env, repo)
     deny = json.load(open(denylist.settings_path(repo)))["permissions"]["deny"]
@@ -431,7 +459,7 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     def sessions(prefix, n):
         for i in range(n):
             t = write_session(str(tmp_path / f"{prefix}{i}.jsonl"), [("look", [
-                ("Bash", {"command": "ls"}, "a.py", False)])])
+                ("Bash", {"command": "ls"}, "a.py", False)]), ("and again", [])])
             run_session(env, repo, f"{prefix}{i}", t)
     sessions("a", 5)
     def deny():
@@ -449,6 +477,74 @@ def test_tools_given_back_stay_back_until_named_again(env, repo, tmp_path, monke
     assert denylist.kept_for(store_for(env, repo), repo) == ["CronCreate"]
 
 
+def _prompts(env, repo, tmp_path, sid, n):
+    """One Claude Code session of `n` prompts; only the first calls a tool (Bash)."""
+    t = write_session(str(tmp_path / f"{sid}.jsonl"),
+                      [(f"prompt {k}", [("Bash", {"command": "ls"}, "a.py", False)] if k == 0
+                        else []) for k in range(n)])
+    run_session(env, repo, sid, t)
+
+
+def _another_repo(tmp_path, name):
+    r = tmp_path / name
+    (r / ".git").mkdir(parents=True)
+    (r / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    return str(r)
+
+
+def test_ten_prompts_over_two_sessions_are_enough_and_one_sessions_are_not(env, repo, tmp_path):
+    """The evidence counts prompts as well as sessions: a never-used tool is left out after ten
+    prompts over at least two sessions. One session's prompts are one piece of work, so ten of
+    them in a single session are not enough -- unless `toolprune_min_sessions=1`."""
+    env = dict(env, TE_TOOLPRUNE="propose")
+    _catalog(env, ["Bash", "Read", "Workflow", "CronCreate"])
+    _prompts(env, repo, tmp_path, "long", 10)
+    st = store_for(env, repo)
+    unt = st.read("untool.json")
+    assert unt["proposal"] == []
+    assert (unt["streaks"]["Workflow"], unt["prompt_streaks"]["Workflow"]) == (1, 10)
+    _prompts(env, repo, tmp_path, "short", 1)
+    assert sorted(st.read("untool.json")["proposal"]) == ["CronCreate", "Workflow"]   # not Read
+
+    one = dict(env, TE_TOOLPRUNE_MIN_SESSIONS="1")
+    nine, ten = _another_repo(tmp_path, "nine"), _another_repo(tmp_path, "ten")
+    _prompts(one, nine, tmp_path, "s9", 9)
+    _prompts(one, ten, tmp_path, "s10", 10)
+    assert store_for(one, nine).read("untool.json")["proposal"] == []
+    assert sorted(store_for(one, ten).read("untool.json")["proposal"]) == ["CronCreate", "Workflow"]
+
+
+def test_five_sessions_are_enough_however_short(env, repo, tmp_path):
+    env = dict(env, TE_TOOLPRUNE="propose")
+    _catalog(env, ["Bash", "Workflow"])
+    for i in range(4):
+        _prompts(env, repo, tmp_path, f"s{i}", 1)
+    assert store_for(env, repo).read("untool.json")["proposal"] == []
+    _prompts(env, repo, tmp_path, "s4", 1)
+    assert store_for(env, repo).read("untool.json")["proposal"] == ["Workflow"]
+
+
+def test_a_session_without_prompts_is_no_evidence(env, repo, tmp_path):
+    env = dict(env, TE_TOOLPRUNE="propose")
+    _catalog(env, ["Bash", "Workflow"])
+    _prompts(env, repo, tmp_path, "some", 4)
+    _prompts(env, repo, tmp_path, "none", 0)
+    unt = store_for(env, repo).read("untool.json")
+    assert (unt["sessions"], unt["streaks"]["Workflow"], unt["prompt_streaks"]["Workflow"]) == (
+        1, 1, 4)
+
+
+def test_a_high_risk_tool_needs_three_times_the_prompts(env, repo, tmp_path):
+    env = dict(env, TE_TOOLPRUNE="propose")
+    _catalog(env, ["Bash", "Workflow", "NotebookEdit"])
+    _prompts(env, repo, tmp_path, "a", 20)
+    _prompts(env, repo, tmp_path, "b", 9)
+    assert store_for(env, repo).read("untool.json")["proposal"] == ["Workflow"]
+    _prompts(env, repo, tmp_path, "c", 1)
+    assert sorted(store_for(env, repo).read("untool.json")["proposal"]) == [
+        "NotebookEdit", "Workflow"]
+
+
 def _pending_repo(env, repo, tmp_path, quiet="60"):
     """Five sessions that leave three tools unused, under the default wait before writing."""
     env = dict(env, TE_TOOLPRUNE_QUIET_MINUTES=quiet)
@@ -457,7 +553,7 @@ def _pending_repo(env, repo, tmp_path, quiet="60"):
     for i in range(5):
         t = write_session(str(tmp_path / f"u{i}.jsonl"), [("look", [
             ("Read", {"file_path": f"{repo}/a.py"}, "x", False),
-            ("Bash", {"command": "ls"}, "a.py", False)])])
+            ("Bash", {"command": "ls"}, "a.py", False)]), ("and again", [])])
         run_session(env, repo, f"u{i}", t)
     return env, LiveContext.build(hosts.ClaudeCode(), repo, env)
 
@@ -751,12 +847,13 @@ GITHUB_TOOLS = ["github-mcp-server-list_issues", "github-mcp-server-get_commit",
                 "github-mcp-server-search_code"]
 
 
-def copilot_session(env, repo, tmp_path, sid, calls, monkeypatch, source="new"):
+def copilot_session(env, repo, tmp_path, sid, calls, monkeypatch, source="new", prompts=1):
     """One Copilot session, as its hook file delivers it: no transcript path before Stop (the
     log's place is fixed by the session id), Claude tool names, a top-level context answer."""
     home = tmp_path / "copilot-home"
     monkeypatch.setenv("COPILOT_HOME", str(home))
-    copilot_events(str(home / "session-state" / sid / "events.jsonl"), calls, cwd=repo, sid=sid)
+    copilot_events(str(home / "session-state" / sid / "events.jsonl"), calls, cwd=repo, sid=sid,
+                   prompts=prompts)
     base = {"session_id": sid, "cwd": repo, "timestamp": "2026-10-08T04:22:15.157Z"}
     start = call(env, dict(base, hook_event_name="SessionStart", source=source), "copilot")
     call(env, dict(base, hook_event_name="UserPromptSubmit", prompt="fix it"), "copilot")
@@ -821,16 +918,30 @@ def test_copilot_proposes_only_whole_unused_mcp_servers(env, repo, tmp_path, mon
     for i in range(5):
         copilot_session(env, repo, tmp_path, f"u{i}", [
             ("bash", {"command": "ls"}, "a.py\n<shellId: 0 completed with exit code 0>", True)],
-            monkeypatch)
+            monkeypatch, prompts=2)
     st = store_for(env, repo, "copilot")
     unt = st.read("untool.json")
     # builtins went unused too, but Copilot has no persistent per-tool lever: only the server
     assert unt["proposal"] == ["github-mcp-server"]
     assert unt["servers"]["github-mcp-server"] == {"tools": 3, "used": False,
-                                                   "unused_sessions": 5}
+                                                   "unused_sessions": 5, "unused_prompts": 10}
     assert not os.path.exists(denylist.settings_path(repo, "copilot"))
     (notice,) = copilot_session(env, repo, tmp_path, "n", [], monkeypatch)["progress"]
     assert "1 MCP server(s) went unused" in notice and "/tokeneconomizer:toolprune" in notice
+
+
+def test_two_copilot_sessions_of_five_prompts_are_enough_to_propose_a_server(
+        env, repo, tmp_path, monkeypatch):
+    env = dict(env, TE_TOOLPRUNE="propose")
+    _copilot_catalog(env, ["bash", "view"] + GITHUB_TOOLS)
+    for sid in ("u1", "u2"):
+        copilot_session(env, repo, tmp_path, sid, [
+            ("bash", {"command": "ls"}, "a.py\n<shellId: 0 completed with exit code 0>", True)],
+            monkeypatch, prompts=5)
+    unt = store_for(env, repo, "copilot").read("untool.json")
+    assert unt["proposal"] == ["github-mcp-server"]
+    assert unt["servers"]["github-mcp-server"]["unused_sessions"] == 2
+    assert unt["servers"]["github-mcp-server"]["unused_prompts"] == 10
 
 
 def test_by_default_copilot_turns_off_the_unused_server_and_says_so(env, repo, tmp_path,
@@ -839,7 +950,7 @@ def test_by_default_copilot_turns_off_the_unused_server_and_says_so(env, repo, t
     for i in range(5):
         copilot_session(env, repo, tmp_path, f"u{i}", [
             ("bash", {"command": "ls"}, "a.py\n<shellId: 0 completed with exit code 0>", True)],
-            monkeypatch)
+            monkeypatch, prompts=2)
     settings = json.load(open(denylist.settings_path(repo, "copilot")))
     assert settings["disabledMcpServers"] == ["github-mcp-server"]
     (notice,) = copilot_session(env, repo, tmp_path, "n", [], monkeypatch)["progress"]
@@ -875,18 +986,24 @@ def test_copilot_apply_and_restore_touch_only_the_plugins_own_servers(repo, tmp_
 
 
 # ---- Codex capability untooling ----------------------------------------------------------
-def codex_rollout(path, repo, i, exec_inputs=()):
-    """A Codex rollout: one shell command and, per `exec_inputs`, one code-mode exec call."""
+def codex_rollout(path, repo, i, exec_inputs=(), prompts=1):
+    """A Codex rollout of `prompts` turns: in the first, one shell command and, per
+    `exec_inputs`, one code-mode exec call."""
     recs = [{"type": "session_meta", "payload": {"id": f"thread-{i}", "cwd": repo,
-                                                 "cli_version": "0.153.1"}},
-            {"type": "turn_context", "payload": {"turn_id": "t1", "model": "gpt-5.6-sol"}},
-            {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1", "item": {
-                "type": "CommandExecution", "id": f"c{i}", "command": ["bash", "-lc", "ls"],
-                "aggregated_output": "a.py", "exit_code": 0, "status": "completed"}}}]
-    for k, src in enumerate(exec_inputs):
-        recs.append({"type": "response_item", "payload": {
-            "type": "custom_tool_call", "name": "exec", "call_id": f"x{i}-{k}",
-            "status": "completed", "input": src}})
+                                                 "cli_version": "0.153.1"}}]
+    for k in range(1, prompts + 1):
+        recs += [{"type": "turn_context", "payload": {"turn_id": f"t{k}", "model": "gpt-5.6-sol"}},
+                 {"type": "event_msg", "payload": {"type": "task_started", "turn_id": f"t{k}"}}]
+        if k > 1:
+            continue
+        recs.append({"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1",
+                                                      "item": {
+            "type": "CommandExecution", "id": f"c{i}", "command": ["bash", "-lc", "ls"],
+            "aggregated_output": "a.py", "exit_code": 0, "status": "completed"}}})
+        for n, src in enumerate(exec_inputs):
+            recs.append({"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": f"x{i}-{n}",
+                "status": "completed", "input": src}})
     recs.append({"type": "event_msg", "payload": {"type": "token_count", "info": {
         "total_token_usage": {"input_tokens": 3000, "cached_input_tokens": 2000,
                               "cache_write_input_tokens": 0, "output_tokens": 90,
@@ -900,24 +1017,30 @@ def test_codex_proposes_capabilities_it_never_saw_used(env, repo, tmp_path):
     env = dict(env, TE_TOOLPRUNE="propose")
     for i in range(5):
         uses = ["await tools.view_image({path: 'a.png'})"] if i == 2 else []
-        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, uses)
+        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, uses, prompts=2)
         run_session(env, repo, f"cx{i}", t, host="codex")
     unt = store_for(env, repo, "codex").read("untool.json")
-    # collaboration and goals went unused in all five; image was used once and is kept
+    # collaboration and goals went unused over all ten prompts; image was used once: kept
     assert unt["proposal"] == ["collaboration", "goals"]
     assert unt["capabilities"]["image_media"]["used"] is True
-    assert unt["capabilities"]["goals"] == {"loaded_sessions": 5, "unused_sessions": 5,
-                                            "used": False}
+    assert unt["capabilities"]["goals"] == {"loaded_sessions": 5, "loaded_prompts": 10,
+                                            "unused_sessions": 5, "used": False}
+    assert (unt["sessions"], unt["prompts"]) == (5, 10)
     assert not os.path.exists(denylist.settings_path(repo, "codex"))      # nothing written yet
 
 
 def test_codex_needs_the_full_evidence_before_proposing(env, repo, tmp_path):
     """The experiments' controller demotes collaboration after ONE unused task; a person's
-    sessions need `untool_evidence` of them."""
-    for i in range(4):
+    sessions need `toolprune_evidence` prompts of it, however they split into sessions."""
+    env = dict(env, TE_TOOLPRUNE="propose")
+    for i, prompts in enumerate((3, 3, 3)):
         run_session(env, repo, f"cx{i}", codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"),
-                                                       repo, i), host="codex")
-    assert store_for(env, repo, "codex").read("untool.json")["proposal"] == []
+                                                       repo, i, prompts=prompts), host="codex")
+    assert store_for(env, repo, "codex").read("untool.json")["proposal"] == []      # nine
+    run_session(env, repo, "cx3", codex_rollout(str(tmp_path / "rollout-3.jsonl"), repo, 3),
+                host="codex")
+    assert store_for(env, repo, "codex").read("untool.json")["proposal"] == [
+        "collaboration", "goals"]                                                    # ten
 
 
 @pytest.fixture
@@ -989,7 +1112,7 @@ def test_a_committed_codex_config_is_never_edited(tmp_path, codex_accepts):
 
 def _codex_sessions(env, repo, tmp_path, n=5):
     for i in range(n):
-        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i)
+        t = codex_rollout(str(tmp_path / f"rollout-{i}.jsonl"), repo, i, prompts=2)
         run_session(env, repo, f"cx{i}", t, host="codex")
 
 

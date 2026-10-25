@@ -41,8 +41,9 @@ what the next sessions in that repository pay for:
   that `pytest` is missing here and `python -m pytest` works, that the test runner wants labels
   without a `tests.` prefix -- are learned from recurring evidence and stated at the start of
   the next session. Learning them makes no model call.
-- **Tool pruning.** Tools that stay loaded but go unused, session after session (five in a row
-  by default), are left out of the next sessions through the agent's own settings. By default
+- **Tool pruning.** Tools that stay loaded but go unused (over ten prompts across at least two
+  sessions, or five sessions however short) are left out of the next sessions through the
+  agent's own settings. By default
   this happens without asking you: the next session start says which tools were left out, and
   one command gives them back. Set `toolprune=propose` to approve each deny list yourself instead.
 - **Failure-loop intervention.** A turn that keeps repeating the same failing edit-and-test
@@ -203,17 +204,20 @@ command (`repos`, `doctor`, `config unset`, ...) and how each agent asks before 
 
 The three mechanisms are `microskills`, `toolprune` and `loopguard`; each takes `on` or `off`,
 and each has numbers you can tune with the same `config set` command (in Claude Code's form here).
-Tool pruning is `auto` by default: once a tool has gone unused for `toolprune_evidence` sessions
-in a row (five), the plugin adds it to the deny list without asking, and it is left out from the
-next session on. It writes the list once your sessions in the repository have been idle for an
-hour (`toolprune_quiet_minutes`): a conversation resumed after its tools change writes its whole
-history to the prompt cache again instead of reading it, and after an idle hour that cache has
-expired anyway. With `toolprune=propose` the plugin only proposes the list, and nothing changes
-until you run `toolprune apply`.
+Tool pruning is `auto` by default: once a tool never used here has gone unused over
+`toolprune_evidence` prompts (ten) across at least `toolprune_min_sessions` sessions (two), or
+over `toolprune_sessions` sessions however short (five), the plugin adds it to the deny list
+without asking, and it is left out from the next session on. Prompts let long sessions count for
+more; the two-session floor keeps one session's work from deciding alone. It writes the list
+once your sessions in the repository have been idle for an hour (`toolprune_quiet_minutes`): a
+conversation resumed after its tools change writes its whole history to the prompt cache again
+instead of reading it, and after an idle hour that cache has expired anyway. With
+`toolprune=propose` the plugin only proposes the list, and nothing changes until you run
+`toolprune apply`.
 
 ```text
 /tokeneconomizer:config set microskills_max_facts=2     # inject at most two facts
-/tokeneconomizer:config set toolprune_evidence=10       # wait for ten unused sessions
+/tokeneconomizer:config set toolprune_evidence=20       # wait for twenty unused prompts
 /tokeneconomizer:config set loopguard_nudges=2          # redirect twice before telling you
 ```
 

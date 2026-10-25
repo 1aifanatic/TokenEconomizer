@@ -532,16 +532,6 @@ def restore(repo_root, store, tools=None, host="claude"):
     return _restore_json_list(repo_root, store, tools, host)
 
 
-def filter_proposal(proposal, streaks, evidence):
-    """Hold back high-risk tools until they have HIGH_RISK_FACTOR x the usual evidence."""
-    out = []
-    for t in proposal:
-        need = evidence * (live_adapter.HIGH_RISK_FACTOR if t in live_adapter.HIGH_RISK else 1)
-        if int(streaks.get(t, 0)) >= need:
-            out.append(t)
-    return out
-
-
 def copilot_server_proposal(raw, catalog, used, servers):
     """MCP servers every one of whose catalog tools is in the evidence proposal `raw`."""
     by_server = {}

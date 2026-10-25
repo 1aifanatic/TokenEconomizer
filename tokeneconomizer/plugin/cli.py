@@ -123,6 +123,7 @@ def cmd_status(args):
                                               if ln.startswith("- ")),
                         "sessions_folded": inj.get("sessions", 0)},
         "toolprune": {"mode": cfg.toolprune, "sessions": unt.get("sessions", 0),
+                      "prompts": unt.get("prompts", 0),
                       "catalog_source": unt.get("catalog_source"),
                       "proposal": unt.get("proposal", []),
                       "applied": denylist.applied_for(ctx.store, ctx.repo.root,
@@ -161,7 +162,8 @@ def cmd_status(args):
         print("  toolprune    not available on this host")
     else:
         src = u["catalog_source"] or "none yet"
-        print(f"  toolprune    {u['sessions']} sessions observed, catalog: {src}; "
+        print(f"  toolprune    {u['sessions']} sessions ({u['prompts']} prompts) observed, "
+              f"catalog: {src}; "
               f"proposed {denylist.unit(ctx.host.name, plural=True)}: "
               f"{', '.join(u['proposal']) or '-'}; applied: {', '.join(u['applied']) or '-'}")
     sp = out["loopguard"]
@@ -190,8 +192,8 @@ def cmd_microskills(args):
 # ---- toolprune -----------------------------------------------------------------------------
 def _toolprune_show(ctx, unt):
     host = ctx.host.name
-    print(f"sessions observed: {unt.get('sessions', 0)}  catalog: "
-          f"{unt.get('catalog_source') or 'none yet'}")
+    print(f"sessions observed: {unt.get('sessions', 0)} ({unt.get('prompts', 0)} prompts)  "
+          f"catalog: {unt.get('catalog_source') or 'none yet'}")
     print(f"applied ({denylist.unit(host, plural=True)} this plugin added to "
           f"{denylist.settings_path(ctx.repo.root, host)}): "
           f"{', '.join(denylist.applied_for(ctx.store, ctx.repo.root, host)) or '-'}")
@@ -211,7 +213,8 @@ def _toolprune_show(ctx, unt):
         if caps:
             print("capabilities (removable from a project's .codex/config.toml):")
             for c, e in sorted(caps.items()):
-                print(f"  {c:14s} loaded in {e['loaded_sessions']:3d} sessions, unused in "
+                print(f"  {c:14s} loaded in {e['loaded_sessions']:3d} sessions "
+                      f"({e.get('loaded_prompts', e['loaded_sessions']):3d} prompts), unused in "
                       f"{e['unused_sessions']:3d}{'  USED (kept)' if e['used'] else ''}")
         trusted = denylist.codex_project_trusted(ctx.repo.root)
         if trusted is False:
@@ -223,15 +226,20 @@ def _toolprune_show(ctx, unt):
         if servers:
             print("MCP servers (Copilot can only remove a whole server):")
             for name, e in sorted(servers.items()):
-                state = "USED (kept)" if e["used"] else f"unused in {e['unused_sessions']} sessions"
+                state = ("USED (kept)" if e["used"] else
+                         f"unused for {e.get('unused_sessions', 0)} sessions "
+                         f"({e.get('unused_prompts', 0)} prompts)")
                 print(f"  {name:24s} {e['tools']:3d} tools, {state}")
     streaks = unt.get("streaks") or {}
     if streaks and host == "claude":
-        print("unused-session streaks (tools never used are candidates once over "
-              f"{ctx.config.toolprune_evidence}):")
-        for t, n in sorted(streaks.items(), key=lambda kv: -kv[1])[:30]:
+        cfg = ctx.config
+        prompts = unt.get("prompt_streaks") or {}
+        print(f"how long each tool has gone unused (a tool never used is left out after "
+              f"{cfg.toolprune_evidence} prompts over {cfg.toolprune_min_sessions}+ sessions, "
+              f"or after {cfg.toolprune_sessions} sessions):")
+        for t, n in sorted(streaks.items(), key=lambda kv: (-kv[1], -prompts.get(kv[0], 0)))[:30]:
             used = "used" if t in set(unt.get("used_tools", [])) else ""
-            print(f"  {n:4d}  {t} {used}")
+            print(f"  {n:4d} sessions {prompts.get(t, n):5d} prompts  {t} {used}")
     if not unt.get("catalog_source") or unt.get("catalog_source") == "observed":
         if os.path.exists(os.path.join(ctx.root, "hosts", host, "catalog.json")):
             # Recorded, but a repository reads the catalog when its next session is folded.
@@ -424,6 +432,8 @@ def _config_view(cfg):
         "toolprune": {"state": "off" if cfg.toolprune == "off" else "on",
                       "toolprune": d.pop("toolprune"),
                       "toolprune_evidence": d.pop("toolprune_evidence"),
+                      "toolprune_min_sessions": d.pop("toolprune_min_sessions"),
+                      "toolprune_sessions": d.pop("toolprune_sessions"),
                       "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes")},
         "loopguard": {
             "state": "off" if cfg.loopguard == "off" else "on",

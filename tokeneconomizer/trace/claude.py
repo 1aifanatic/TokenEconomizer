@@ -62,6 +62,36 @@ def claude_calls(lines):
     return out
 
 
+def _is_prompt(ev):
+    """Is this entry a prompt the person gave, typed or as a slash command? Its own `user`
+    entries, less tool results, a local command's output, an interrupt marker, a compaction
+    summary, the meta text Claude Code adds, and a subagent's."""
+    if (ev.get("type") != "user" or ev.get("isMeta") or ev.get("isSidechain")
+            or ev.get("isCompactSummary")):
+        return False
+    content = (ev.get("message") or {}).get("content")
+    if isinstance(content, list):
+        blocks = [b for b in content if isinstance(b, dict)]
+        if any(b.get("type") == "tool_result" for b in blocks):
+            return False
+        content = " ".join(b.get("text") or "" for b in blocks if b.get("type") == "text")
+    return isinstance(content, str) and not content.startswith(("<local-command",
+                                                                "[Request interrupted"))
+
+
+def claude_prompt_count(transcript_path):
+    """How many prompts the person gave a Claude Code session (`_is_prompt`)."""
+    n = 0
+    for line in _lines(transcript_path):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        n += isinstance(ev, dict) and _is_prompt(ev)
+    return n
+
+
+
 def claude_subagent_files(transcript_path):
     """Subagent transcripts of a Claude Code session: `<dir>/<session-id>/subagents/*.jsonl`."""
     if not transcript_path:

@@ -59,10 +59,10 @@ This records which tools a Claude Code session loads, with no model call. Do it 
 machine, and again after Claude Code updates. **Don't skip it:** without it the deny list sees
 only the few tools Claude Code defers, not the ones every session loads.
 
-**4. Work normally.** See [What to expect](#what-to-expect). Once tools have gone unused for
-about five sessions, the plugin leaves them out of the next sessions without asking you (it
-writes the list once your sessions here have been idle for an hour), and the session start says
-so once:
+**4. Work normally.** See [What to expect](#what-to-expect). Once a tool has gone unused over
+ten prompts across two or more sessions (or five sessions, however short), the plugin leaves it
+out of the next sessions without asking you (it writes the list once your sessions here have
+been idle for an hour), and the session start says so once:
 
 ```text
 /tokeneconomizer:toolprune            # the tools it left out, and the evidence
@@ -126,8 +126,9 @@ read-only, so Codex asks first: choose **Yes, proceed**. From a terminal, inside
 session).
 
 **4. Work normally.** See [What to expect](#what-to-expect). Codex's deny list turns off the
-sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only after it went
-unused in every session where it was loaded; a package you used even once is kept. It is
+sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only once it has
+been loaded and unused long enough ([What to expect](#what-to-expect)); a package you used even
+once is kept. It is
 written to the project's `.codex/config.toml`, which Codex reads **only in a trusted project**
 (the session start that announces it says so otherwise), and never into one your repository
 commits: that stays a proposal, and the session start says why. The web, asking you questions
@@ -192,7 +193,8 @@ With no model call. Do it once on this machine, and again after Copilot updates.
 
 **4. Work normally.** See [What to expect](#what-to-expect). Copilot has no setting that removes a
 single built-in tool, only one that turns off a whole MCP server, so the deny list turns off a
-server only when **none** of its tools was used in about five sessions: one of yours from
+server only when **none** of its tools was used long enough ([What to expect](#what-to-expect)):
+one of yours from
 `~/.copilot/mcp-config.json`, or the built-in `github-mcp-server`, which loads only when you are
 signed in to GitHub. It is written to `.github/copilot/settings.local.json`, and the next session
 start says so; `/tokeneconomizer:toolprune restore` turns the server back on. `toolprune
@@ -289,8 +291,11 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
   adds facts says so once, in one line. A resumed session keeps the facts it started with, word
   for word, so its cached prompt still matches. `microskills` shows the facts injected and those
   forming.
-- **Deny list.** Applied without asking you, after about five sessions in which a tool, package
-  or server went unused, from the next session on; that session's start says so once. It is
+- **Deny list.** Applied without asking you once a tool, package or server never used here has
+  gone unused over ten prompts across at least two sessions, or over five sessions however short
+  (three times as long for a few higher-risk tools), from the next session on; that session's
+  start says so once. Prompts let long sessions count for more, and the two-session floor keeps
+  one session's work from deciding alone. A session that ran no prompt counts for nothing. It is
   written once the repository's sessions have been idle for an hour: a conversation resumed
   after its tools change writes its whole history to the prompt cache again instead of reading
   it, and after an idle hour that cache has expired anyway. `toolprune` shows a list still
@@ -378,7 +383,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 
 ```text
 /tokeneconomizer:config set microskills_max_facts=2            # inject at most two facts
-/tokeneconomizer:config set toolprune_evidence=10              # wait for ten unused sessions
+/tokeneconomizer:config set toolprune_evidence=20              # wait for twenty unused prompts
 /tokeneconomizer:config set loopguard_nudges=2 loopguard.min_turns=30
 /tokeneconomizer:config unset loopguard.min_turns              # back to the default
 ```
@@ -388,7 +393,9 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | `microskills_max_facts` | `4` | the most facts injected at session start |
 | `microskills_max_tokens` | `150` | the size of the injected block, in tokens (about 4 characters each) |
 | `microskills_propose_every` | `5` | sessions between runs of the paid fact proposer |
-| `toolprune_evidence` | `5` | sessions a tool must go unused before it is left out (three times as long for a few higher-risk tools; the web is never proposed) |
+| `toolprune_evidence` | `10` | prompts a never-used tool must go unused, over at least `toolprune_min_sessions` sessions, before it is left out (three times as many for a few higher-risk tools; the web is never proposed) |
+| `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
+| `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
 | `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it; `0` writes at once |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
 | `loopguard_nudges` | `1` | redirects per prompt-turn before the guard only notifies you |

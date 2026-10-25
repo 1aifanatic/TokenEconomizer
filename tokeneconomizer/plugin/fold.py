@@ -91,20 +91,43 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
     return {"optimizer_tokens": float(opt_tokens or 0), "rendered_chars": len(rendered)}
 
 
-def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=None):
+def enough_evidence(sessions, prompts, cfg, high_risk=False):
+    """Has a never-used tool gone unused long enough to be left out? Over `toolprune_evidence`
+    prompts spread across at least `toolprune_min_sessions` sessions, or over
+    `toolprune_sessions` sessions however short; a high-risk tool needs HIGH_RISK_FACTOR times
+    the prompts and the sessions. Prompts let long sessions count for more; the floor keeps one
+    session's prompts -- one piece of work -- from deciding alone (in recorded sessions that is
+    what pruned tools a later session needed)."""
+    k = live_adapter.HIGH_RISK_FACTOR if high_risk else 1
+    return ((sessions >= cfg.toolprune_min_sessions and prompts >= cfg.toolprune_evidence * k)
+            or sessions >= cfg.toolprune_sessions * k)
+
+
+def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=None,
+                    prompts=None):
+    """Tool pruning's evidence: the sessions a tool went unused (`ToolingStage`'s streaks) and
+    the prompts those sessions ran (`prompt_streaks`), weighed by `enough_evidence`. A list
+    applies from a later session, since a running session keeps the tools it started with.
+    `prompts` is None where the log does not say, and the session counts as one prompt."""
     if not denylist.supports(ctx.host.name) or ctx.config.toolprune == "off":
         return None
     if ctx.host.name == "codex":
-        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir)
+        return _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts)
     host = ctx.host.name
     from tokeneconomizer.config import ToolingConfig
     from tokeneconomizer.toolprune import ToolingStage
     st = ctx.store.read("untool.json") or {}
-    stage = ToolingStage(ToolingConfig(evidence=ctx.config.toolprune_evidence), host, "agent",
+    # The stage proposes never-used tools unused for the session floor; `enough_evidence`
+    # decides among them.
+    stage = ToolingStage(ToolingConfig(evidence=max(1, ctx.config.toolprune_min_sessions)),
+                         host, "agent",
                          adapter=adapter, repo=ctx.repo.label, results_root=ctx.mech_dir,
                          fresh=True)
     stage.used_tools = set(st.get("used_tools", []))
     stage.tool_unused_streaks = {k: int(v) for k, v in (st.get("streaks") or {}).items()}
+    # A session from before prompts were counted counts as one prompt.
+    prompt_streaks = {k: int(v) for k, v in
+                      (st.get("prompt_streaks") or stage.tool_unused_streaks).items()}
     stage.catalog_tools = set(st.get("catalog_tools", []))
     stage.catalog_desc = dict(st.get("catalog_desc") or {})
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
@@ -128,26 +151,34 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
     # observed catalog; the source (or its absence) is recorded in untool.json instead.
     stage._warned_no_catalog = True
     srow = {}
+    before = dict(stage.tool_unused_streaks)
     stage.after_task({"instance_id": session_id}, {"untooled_excluded": applied}, run_dir, srow)
+    for t, n in stage.tool_unused_streaks.items():
+        if n == 0:
+            prompt_streaks[t] = 0                          # used
+        elif n == before.get(t, 0) + 1:                    # unused this session
+            prompt_streaks[t] = prompt_streaks.get(t, 0) + (1 if prompts is None else prompts)
     sessions = int(st.get("sessions", 0)) + 1
-    raw = stage.build_tools({"instance_id": f"after-{session_id}"}, sessions) or []
+    raw = [t for t in stage.build_tools({"instance_id": f"after-{session_id}"}, sessions) or []
+           if enough_evidence(stage.tool_unused_streaks.get(t, 0), prompt_streaks.get(t, 0),
+                              ctx.config, high_risk=t in live_adapter.HIGH_RISK)]
     doc = {"used_tools": sorted(stage.used_tools), "streaks": stage.tool_unused_streaks,
+           "prompt_streaks": prompt_streaks,
            "catalog_tools": sorted(stage.catalog_tools), "catalog_desc": stage.catalog_desc,
            # A session run under an applied mask parses no catalog (the stage skips it, as the
            # masked list is not the full one); the last source still describes the catalog.
            "catalog_source": srow.get("untool_catalog_source") or st.get("catalog_source"),
-           "sessions": sessions, "updated": time.time()}
+           "sessions": sessions, "prompts": int(st.get("prompts", 0)) + (prompts or 0),
+           "updated": time.time()}
     if host == "copilot":
         # Copilot's only persistent lever is a whole MCP server (see `denylist`).
         servers = trace.copilot_mcp_servers(ctx.env)
         proposal = [s for s in denylist.copilot_server_proposal(
             raw, stage.catalog_tools, stage.used_tools, servers)
             if s not in applied and s not in kept]
-        doc["servers"] = _server_summary(stage, servers)
+        doc["servers"] = _server_summary(stage, servers, prompt_streaks)
     else:
-        proposal = [t for t in denylist.filter_proposal(raw, stage.tool_unused_streaks,
-                                                      ctx.config.toolprune_evidence)
-                    if t not in applied and t not in kept]
+        proposal = [t for t in raw if t not in applied and t not in kept]
     doc["proposal"] = proposal
     doc["new_in_proposal"] = sorted(set(proposal) - set(st.get("proposal", [])))
     if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
@@ -159,32 +190,36 @@ def _fold_toolprune(ctx, adapter, run_dir, session_id, transcript=None, workdir=
             "restored": restored}
 
 
-def _server_summary(stage, servers):
-    """{server: {tools, used, unused_sessions}} -- the Copilot evidence at the unit it acts on."""
+def _server_summary(stage, servers, prompt_streaks):
+    """{server: {tools, used, unused_sessions, unused_prompts}} -- the Copilot evidence at the
+    unit it acts on: a server's least-evidenced tool."""
     out = {}
     for t in stage.catalog_tools:
         s = trace.mcp_server_of(t, servers)
         if not s:
             continue
-        e = out.setdefault(s, {"tools": 0, "used": False, "unused_sessions": None})
+        e = out.setdefault(s, {"tools": 0, "used": False, "unused_sessions": None,
+                               "unused_prompts": None})
         e["tools"] += 1
         e["used"] = e["used"] or t in stage.used_tools
-        n = int(stage.tool_unused_streaks.get(t, 0))
-        e["unused_sessions"] = n if e["unused_sessions"] is None else min(e["unused_sessions"], n)
+        for key, n in (("unused_sessions", stage.tool_unused_streaks.get(t, 0)),
+                       ("unused_prompts", prompt_streaks.get(t, 0))):
+            e[key] = int(n) if e[key] is None else min(e[key], int(n))
     return out
 
 
-def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
+def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir, prompts=None):
     """Codex: the experiments' capability controller (`codex_untool.CodexUntoolProfile`, driven
     through `ToolingStage`) decides which packages went unused, over a trace that carries the
     model's own `exec` calls (`trace.codex_capability_trace`). Two live adaptations:
 
       * the session ran under the capabilities the PERSON applied, not the profile's own mask
         (a plugin launches nothing), so the observation is recorded against the applied set;
-      * a package is proposed only once the profile has demoted it AND it went unused in
-        `toolprune_evidence` sessions (x3 for image/media, the high-risk package), with no use
-        ever -- the profile alone demotes collaboration after one unused task, which was right
-        for a sealed benchmark stream and is too quick for a person's sessions."""
+      * a package is proposed only once the profile has demoted it AND it was loaded, and
+        unused, long enough by `enough_evidence` (x3 for image/media, the high-risk package),
+        with no use ever -- the profile alone demotes collaboration after one unused task, which
+        was right for a sealed benchmark stream and is too quick for a person's sessions. The
+        profile counts sessions; the prompts are counted here (`loaded_prompts`)."""
     from tokeneconomizer.config import ToolingConfig
     from tokeneconomizer.toolprune import ToolingStage
     if not transcript or not workdir:
@@ -202,23 +237,34 @@ def _fold_toolprune_codex(ctx, adapter, session_id, transcript, workdir):
     applied = denylist.applied_for(ctx.store, ctx.repo.root, ctx.host.name)
     kept = set(denylist.kept_for(ctx.store, ctx.repo.root, ctx.host.name))   # given back
     stage.codex_profile._pending["logical_capabilities"] = sorted(applied)
+    loaded_before = dict(stage.codex_profile.state.get("loaded_exposures") or {})
     srow = {}
     stage.after_task({"instance_id": session_id}, {}, run_dir, srow)
     state = stage.codex_profile.state
     ever_used = set(state.get("ever_completed") or ())
     loaded = state.get("loaded_exposures") or {}
+    prior = ctx.store.read("untool.json") or {}
+    # A session from before prompts were counted counts as one prompt.
+    loaded_prompts = dict(prior.get("loaded_prompts") or
+                          {c: int(n) for c, n in loaded_before.items()})
+    for c in denylist.CODEX_LIVE_CAPABILITIES:
+        if int(loaded.get(c, 0)) > int(loaded_before.get(c, 0)):     # loaded this session
+            loaded_prompts[c] = int(loaded_prompts.get(c, 0)) + (1 if prompts is None
+                                                                 else prompts)
     proposal = [c for c in denylist.CODEX_LIVE_CAPABILITIES
                 if c in (state.get("current_pruned") or ()) and c not in ever_used
                 and c not in applied and c not in kept
-                and int(loaded.get(c, 0)) >= ctx.config.toolprune_evidence * (
-                    live_adapter.HIGH_RISK_FACTOR if c in CODEX_HIGH_RISK else 1)]
-    prior = ctx.store.read("untool.json") or {}
+                and enough_evidence(int(loaded.get(c, 0)), int(loaded_prompts.get(c, 0)),
+                                    ctx.config, high_risk=c in CODEX_HIGH_RISK)]
     doc = {"sessions": int(state.get("tasks_completed") or 0), "catalog_source": "capabilities",
+           "prompts": int(prior.get("prompts", 0)) + (prompts or 0),
            "capabilities": {c: {"loaded_sessions": int(loaded.get(c, 0)),
+                                "loaded_prompts": int(loaded_prompts.get(c, 0)),
                                 "unused_sessions": int((state.get("zero_attempt_exposures")
                                                         or {}).get(c, 0)),
                                 "used": c in ever_used}
                             for c in denylist.CODEX_LIVE_CAPABILITIES},
+           "loaded_prompts": loaded_prompts,
            "proposal": proposal, "updated": time.time(),
            "new_in_proposal": sorted(set(proposal) - set(prior.get("proposal", [])))}
     if ctx.config.toolprune == "auto" and proposal and not ctx.config.shadow:
@@ -324,6 +370,11 @@ def fold_session(ctx, session_id, transcript_path=None):
         workdir = tempfile.mkdtemp(prefix="te-fold-")
         try:
             trace_path = ctx.host.mechanism_trace(transcript, workdir) if transcript else None
+            try:
+                prompts = ctx.host.prompt_count(transcript) if transcript else None
+            except (OSError, ValueError):
+                prompts = None
+            record["prompts"] = prompts
             if not trace_path:
                 record["error"] = "transcript unreadable"
             else:
@@ -333,8 +384,10 @@ def fold_session(ctx, session_id, transcript_path=None):
                 with ctx.store.locked("mechanisms"):
                     inj = _fold_microskills(ctx, adapter, run_dir, session_id,
                                             injected=sess.get("injected_ids"))
-                    unt = _fold_toolprune(ctx, adapter, run_dir, session_id,
-                                       transcript=transcript, workdir=workdir)
+                    # A session that ran no prompt is no evidence about the tools.
+                    unt = None if prompts == 0 else _fold_toolprune(
+                        ctx, adapter, run_dir, session_id, transcript=transcript,
+                        workdir=workdir, prompts=prompts)
                 record["injection"] = inj
                 record["untool"] = unt
                 if unt and unt.get("pending"):

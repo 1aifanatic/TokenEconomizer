@@ -133,6 +133,12 @@ def copilot_turns(path):
     return turns
 
 
+def copilot_prompt_count(path):
+    """How many prompts a Copilot session ran: one `user.message` event each."""
+    return sum(1 for ev in _copilot_events(path) if ev.get("type") == "user.message")
+
+
+
 def copilot_mcp_servers(env=None):
     """MCP server names a Copilot session can load: the built-in GitHub server plus every
     server in the user's `mcp-config.json`. Tool names are `<server>-<tool>`."""

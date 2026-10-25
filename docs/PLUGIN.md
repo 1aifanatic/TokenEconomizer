@@ -54,7 +54,7 @@ Every hook fails open: any error becomes an empty output (no change) and a trace
 | Learning signal | the official grader's `resolved` | the envelope learns from turns that **ended green**: the agent stopped on its own, was not stopped by the guard, and no verification after its last edit failed | There is no grader. Micro-skills and evidence pruning never needed one |
 | Injection channel | a prefix on the task prompt | `SessionStart` `additionalContext` | Verified to reach the model (§3) |
 | Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list**, applied by default once the evidence forms it and the repository's sessions have been idle longer than a prompt cache lives (§3), and announced at the next session start (`toolprune=propose` waits for approval instead), written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. A session keeps the tools it started with, but a conversation resumed after a change sends the new ones, re-writing its cached prefix, hence the idle wait. Each agent's file can express a different unit (§3) |
-| Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (loaded but unused for N sessions) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
+| Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (never used, and unused over N prompts across two or more sessions, or over N sessions) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
 | Network | every arm, baseline included, carries an answer-key guard — a `PreToolUse` hook and an `/etc/hosts` block refuse the benchmarks' upstream sources — and drops the web tools | **no guard**: no `PreToolUse` hook (on Pi, no `tool_call` handler), no blocked command or host; the web tools stay | A benchmark's answer is a fetch away. A real session has no answer key, and the web is part of the work |
 | Nudge | kill the agent, resume it with a continuation prompt | a mid-turn reminder attached to the tool result | Different intervention, so its effect is not inherited from the experiments |
 | Still stuck after the redirect | terminal abort, in autonomous runs | a one-line **notice** to the person, ending with how to stop the turn on that agent and in that mode (§3); the plugin never stops a turn, and `loopguard: stop` is read as `nudge` | Not every agent's hooks can stop a turn (Codex and Copilot ignore `continue: false`), and the person decides: the benchmark guard's own design note says "interactive callers should map it to a hand-off" |
@@ -417,6 +417,34 @@ OpenRouter (cache breakpoints, which move every turn, left out of the comparison
     conversation back the section it carries, unwrapped (`carriedSection`): two resumes after a
     fact was retired on disk kept the original system message, and a new session took the
     current facts.
+
+**Counting prompts, 2026-10-24** (the `experimental` branch). Can the mechanisms learn from the
+prompts of a session rather than from whole sessions, so a long first session counts for more?
+
+* Tool pruning: yes, with a floor. Replaying this machine's recorded Claude Code sessions
+  (12 projects, 61 sessions, 893 prompts) through the plugin's hooks and fold, against one tool
+  catalog, and counting a tool a later session used as a wrong prune:
+
+  | Rule | Projects with a list | Wrong prunes | Tools left out of the next session, summed |
+  |---|---|---|---|
+  | 5 sessions (`main`) | 7 | 1 | 340 |
+  | 10 prompts over 2+ sessions, or 5 sessions (now) | 8 | 1 | 512 |
+  | 10 prompts (`toolprune_min_sessions=1`) | 8 | 7 | 628 |
+
+  Ten prompts in one session pruned tools the next session needed (`ListAgents`,
+  `SendMessage`, a connector's tools): a session's prompts are one piece of work. Ten prompts
+  alone also never prunes for one-prompt sessions, hence the five-session fallback. Prompts
+  are counted from each agent's own log (`trace.*_prompt_count`); a session that ran none is
+  no evidence.
+* Micro-skills: no. Folded per prompt, a fact went active sooner, but a session meets its trap
+  once and its later prompts use the working form the conversation already shows, so the fact
+  fired in a quarter of the prompts that exercised it and never cleared the firing gate (40%
+  over at least 4): in a stream of four-prompt sessions it was never injected, where per
+  session it is injected at the fifth start. A replay that split prompts into sessions of
+  their own had shown the opposite only because each such start recorded the fact as given.
+  The facts still count sessions.
+* The loop guard already counts prompt-turns: each turn that ends green feeds the envelope at
+  its `Stop`, and the guard acts within the same session once it has five.
 
 ## 4. State and privacy
 

@@ -26,7 +26,9 @@ person can tune by hand:
 
   * microskills_max_facts, microskills_max_tokens -- caps on the injected block;
   * microskills_propose_every   -- sessions between paid proposer runs;
-  * toolprune_evidence          -- unused sessions before a tool is proposed;
+  * toolprune_evidence          -- prompts a never-used tool must have stayed unused through,
+                                   over at least toolprune_min_sessions sessions, before it is
+                                   proposed -- or over toolprune_sessions sessions, however short;
   * toolprune_quiet_minutes     -- how long every session of the repository must have been idle
                                    before `auto` writes a deny list (0: at once), so that no
                                    conversation resumed with a warm prompt cache loses it;
@@ -127,7 +129,9 @@ class LiveConfig:
     microskills_max_tokens: int = 150
     microskills_propose_every: int = 5
     toolprune: str = "auto"
-    toolprune_evidence: int = 5
+    toolprune_evidence: int = 10
+    toolprune_min_sessions: int = 2
+    toolprune_sessions: int = 5
     toolprune_quiet_minutes: int = 60
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
@@ -243,6 +247,8 @@ _ENV = {"TE_MODE": "mode", "TE_PAID": "paid", "TE_SHADOW": "shadow",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
         "TE_TOOLPRUNE": "toolprune", "TE_TOOLPRUNE_EVIDENCE": "toolprune_evidence",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
+        "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",
+        "TE_TOOLPRUNE_SESSIONS": "toolprune_sessions",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
