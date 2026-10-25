@@ -41,11 +41,11 @@ what the next sessions in that repository pay for:
   that `pytest` is missing here and `python -m pytest` works, that the test runner wants labels
   without a `tests.` prefix -- are learned from recurring evidence and stated at the start of
   the next session. Learning them makes no model call.
-- **Tool pruning.** Tools that stay loaded but go unused (over ten prompts across at least two
-  sessions, or five sessions however short) are left out of the next sessions through the
-  agent's own settings. By default
-  this happens without asking you: the next session start says which tools were left out, and
-  one command gives them back. Set `toolprune=propose` to approve each deny list yourself instead.
+- **Tool pruning.** Tools that stay loaded but are never used (over ten prompts across at least
+  two sessions, or five sessions however short) are left out of the next sessions through the
+  agent's own settings. By default this happens without asking you: the next session start says
+  which tools were left out, and one command gives them back. Set `toolprune=propose` to approve
+  each deny list yourself instead.
 - **Failure-loop intervention.** A turn that keeps repeating the same failing edit-and-test
   cycle, well past how long this repository's turns usually take, gets one redirect. If it is
   still stuck after that, the plugin tells you how to stop it; it never stops a turn itself.
@@ -162,8 +162,8 @@ Uninstalling, Copilot with your own model key, and troubleshooting are in
 
 | Agent | Supported | Older versions |
 |---|---|---|
-| Claude Code | 2.1.300 to 2.1.307 | not supported |
-| Codex | 0.153.1 to 0.163.0 | not supported |
+| Claude Code | 2.1.300 to 2.1.310 | not supported |
+| Codex | 0.153.1 to 0.164.0 | not supported |
 | Copilot CLI | 1.0.83 to 1.0.102 | not supported |
 | Pi | 1.2.0 to 1.3.0 | 0.99.x: load the extension by path (below) |
 
