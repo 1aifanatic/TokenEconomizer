@@ -1,0 +1,121 @@
+"""Micro-skills read generically in the plugin: any language or toolchain, builds and checks as
+well as tests, every edited file -- while the experiments keep the paper's reading."""
+import hashlib
+import json
+
+from tokeneconomizer.microskills import GENERIC, NODE_WEB, PYTHON_GIT, observe
+from tokeneconomizer.microskills import distiller as dist
+from tokeneconomizer.microskills import envfacts as ef
+from tokeneconomizer.plugin.adapter import detect_vocabulary
+from fixtures import write_claude_transcript
+
+
+def _form(cmd, vocab):
+    obs = observe.classify_command(cmd, vocab=vocab)
+    return (obs[0].intent, obs[0].form) if obs else None
+
+
+def test_the_generic_reading_knows_builds_and_other_ecosystems():
+    assert _form("npm run build", GENERIC) == ("run_build", "npm run build")
+    assert _form("npm run test:unit", GENERIC) == ("run_tests", "npm run test:unit")
+    assert _form("cargo build --release", GENERIC) == ("run_build", "cargo build")
+    assert _form("tsc -p .", GENERIC) == ("run_build", "tsc")
+    assert _form("go test ./...", GENERIC) == ("run_tests", "go test")
+    assert _form("./gradlew test", GENERIC) == ("run_tests", "gradlew test")
+    assert _form("bundle install", GENERIC) == ("package_tool", "bundle")
+    # The experiments' vocabularies read as they did.
+    assert _form("tsc -p .", PYTHON_GIT) is None and _form("npm run build", NODE_WEB) == (
+        "package_tool", "npm")
+    assert _form("./gradlew test", PYTHON_GIT) is None
+
+
+def _session(tmp_path, i, calls):
+    return write_claude_transcript(str(tmp_path / f"s{i}.jsonl"), calls)
+
+
+def test_a_build_tool_repair_becomes_a_fact(tmp_path):
+    """Not a test command at all: `tsc` missing, `npx tsc` working, session after session."""
+    d = ef.EnvFactsDistiller("acme/web", vocab=GENERIC)
+    for i in range(6):
+        d.update(_session(tmp_path, i, [
+            ("Edit", {"file_path": f"/r/src/m{i}.ts", "old_string": "a", "new_string": "b"}, "ok"),
+            ("Bash", {"command": "tsc -p ."}, "Exit code 127\nbash: tsc: command not found"),
+            ("Bash", {"command": "npx tsc -p ."}, "")]), iid=f"s{i}")
+    text = d.render()
+    assert text.startswith(ef.GENERIC_HEADER)
+    assert "`tsc …` fails here with command not found; `npx tsc …` works." in text
+
+
+def test_every_edited_file_counts_in_the_generic_reading(tmp_path):
+    p = _session(tmp_path, 0, [
+        ("Edit", {"file_path": "/r/src/main.go", "old_string": "a", "new_string": "b"}, "ok"),
+        ("Write", {"file_path": "/r/web/app.ts", "content": "x"}, "ok"),
+        ("Edit", {"file_path": "/r/pkg/m.py", "old_string": "a", "new_string": "b"}, "ok")])
+    assert observe.observe_task(p, GENERIC)["edited"] == ["app.ts", "m.py", "main.go"]
+    assert observe.observe_task(p, PYTHON_GIT)["edited"] == ["m.py"]
+
+
+def test_the_generic_digest_is_language_neutral_and_relative(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    r = str(repo)
+    p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
+        ("Edit", {"file_path": f"{r}/src/main.ts", "old_string": "a", "new_string": "b"}, "ok", r),
+        ("Bash", {"command": f"cd {r} && npm run build"},
+         f"Exit code 2\n{r}/src/main.ts(3,5): error TS2304: Cannot find name 'foo'.", r),
+        ("Bash", {"command": "node scripts/gen.js"},
+         "Error: Cannot find module 'left-pad'\nExit code 1", r),
+        ("Bash", {"command": "cargo build"}, "Finished dev", r)])
+    dg = dist.build_generic_digest("acme/web", p, "s0")
+    assert dg["edited_files"] == ["main.ts"]
+    assert dg["check_commands"] == ["npm run build", "cargo build"]
+    assert dg["failed_commands"] == [
+        # line and column masked; the error's own code kept, as it names the failure
+        {"cmd": "npm run build", "error": "src/main.ts(N,N): error TS2304: Cannot find name 'foo'."},
+        {"cmd": "node scripts/gen.js", "error": "Error: Cannot find module 'left-pad'"}]
+    assert dg["missing_dependency"] and not dg["missing_command"]
+    shown = json.dumps(dist.proposer_view(dg))
+    assert r not in shown and "_cmd_blob" not in shown
+
+
+def test_the_plugin_reads_every_repository_generically(tmp_path):
+    (tmp_path / "package.json").write_text("{}")
+    v = detect_vocabulary(str(tmp_path))
+    assert v.generic and v.canonical_interpreter == "node"
+    assert detect_vocabulary(str(tmp_path / "nowhere")) is GENERIC
+    assert detect_vocabulary(str(tmp_path), "python-git") is PYTHON_GIT
+
+
+def test_the_proposer_keeps_its_window_across_folds(tmp_path, monkeypatch):
+    """The plugin reloads the proposer for every session. Its window of recent sessions was not
+    saved, so each tick saw one session, and a fact -- which must cite two -- could never be
+    admitted, however many calls were paid for."""
+    monkeypatch.setattr(dist, "PROPOSE_EVERY", 3)
+    prompts = []
+
+    def runner(prompt, model):
+        prompts.append(prompt)
+        return json.dumps({"extractors": [], "facts": [{
+            "id": "build-before-test", "claim": "make test needs make build first",
+            "injection": "`make test` runs the built binary: run `make build` first.",
+            "detector": {"scope": r"make test", "confirm": r"make build"},
+            "cite": ["s0", "s1"]}]}), 100.0
+    root = str(tmp_path / "state")
+    for i in range(2):
+        d = dist.Distiller.load("acme/tool", root, runner=runner, vocab=GENERIC)
+        d.update(_session(tmp_path, i, [
+            ("Bash", {"command": "make build"}, "built"),
+            ("Bash", {"command": "make test"}, "ok  ./... 0.01s")]), iid=f"s{i}")
+        d.save(root)
+    assert len(prompts) == 1 and "whatever its language" in prompts[0]
+    assert "build-before-test" in d.facts
+    again = dist.Distiller.load("acme/tool", root, vocab=GENERIC)
+    assert [dg["iid"] for dg in again.window] == ["s0", "s1"]
+
+
+def test_the_experiments_proposer_prompt_is_the_papers():
+    """The generic prompt is the plugin's; the experiments' must stay what the paper ran."""
+    assert hashlib.sha256(dist.PROPOSER_SYSTEM.encode()).hexdigest()[:16] == "fad9adfb8fda5875"
+    g = dist.PROPOSER_SYSTEM_GENERIC
+    assert "repro_written" not in g and "importerror" not in g
+    assert g.count(", ".join(dist.GENERIC_PREDICATES)) == 2

@@ -108,8 +108,10 @@ def _session_env(state, trap):
     # one plugin per name (verified: one SessionStart hook with both present).
     # The probe applies the deny list itself, for one measured session, and restores it: its
     # sessions must only propose one, as `toolprune=auto` would apply it for all the rest.
+    # Micro-skills is off by default; the probe checks that a learned fact reaches the context,
+    # and the trap's fact is one the free layer learns without a model call.
     env.update(TOKENECONOMIZER_HOME=state, PATH=trap + os.pathsep + env.get("PATH", ""),
-               TE_TOOLPRUNE="propose")
+               TE_TOOLPRUNE="propose", TE_MICROSKILLS="envfacts")
     return env
 
 

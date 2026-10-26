@@ -19,7 +19,7 @@ What happens at each hook, and how each agent was verified to behave, is in
 | `context.py`, `paths.py`, `store.py` | where state lives, which repository a session is in, locked atomic JSON |
 | `adapter.py` | the `DomainAdapter` for a real repository |
 | `accounting.py` | the session ledger |
-| `sidecall.py`, `judge.py` | opt-in paid calls through the agent's own CLI, off the hook's critical path |
+| `sidecall.py`, `judge.py` | the plugin's model calls (the loop guard's judge, micro-skills' proposer) through the agent's own CLI, off the hook's critical path |
 | `repomap.py`, `repomap_gen.py` | the opt-in repository map |
 | `probe.py` | `te --host copilot probe`: the plugin end to end in real Copilot sessions |
 

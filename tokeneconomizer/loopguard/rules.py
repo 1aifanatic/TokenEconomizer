@@ -151,7 +151,9 @@ def assess_abort(state, envelope=None, judge=None, thr=None):
         # an over-envelope run is worth a paid judge look even without an exact repeated
         # failure yet, which is what lets the guard engage on a short-turn agent whose
         # spirals hit the cap before accumulating a repeat signature.
-        over_envelope = envelope is not None and state.turns >= envelope
+        # `gate_over_envelope=False` (the plugin's) leaves the gate to the trouble signs alone.
+        over_envelope = (envelope is not None and state.turns >= envelope
+                         and thr.get("gate_over_envelope", True))
         if not (gate_for_judge(state, thr) or over_envelope):
             return False, "gate-closed"
         try:

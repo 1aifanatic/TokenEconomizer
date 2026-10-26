@@ -1,4 +1,4 @@
-"""Paid side calls -- the proposer, the stuck judge, the nudge writer -- on the user's own agent.
+"""Side calls -- the proposer, the stuck judge, the nudge writer -- on the user's own agent.
 
 The mechanisms call an optimizer as `runner(prompt, model) -> (text, effective_tokens)`
 (`runner.AgentRunner.optimizer_call`). In the harness that call went to the agent's model through
@@ -11,8 +11,9 @@ so no extra API key is needed and the call is billed where the session is:
     was charged to; in a user's session the cheapest capable model is the right default, and the
     ledger records the real cost either way.
   * Codex: `codex exec --json --disable hooks --ephemeral -s read-only`. Each such call carries
-    Codex's full base prompt (~25k tokens, mostly cached) on the user's plan quota, which is why
-    paid mechanisms default off and the Codex default injection is the free layer.
+    Codex's full base prompt (~25k tokens, mostly cached) on the user's plan quota, one reason
+    micro-skills (whose proposer calls it) defaults off and the loop guard's judge is woken
+    only by a sign of trouble.
   * Copilot CLI: `copilot -p` as a pure text completion, as `te_harness.copilot.optimizer_call`
     runs it: a neutral cwd, no custom instructions, no built-in MCP server, every tool denied
     and excluded. Its usage is read from the call's own session log (`result.sessionId` ->
@@ -28,10 +29,14 @@ so no extra API key is needed and the call is billed where the session is:
 Every side call runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
 returns no reply -- a CLI that is not signed in, say -- leaves one line in the plugin's
-errors.log, which `te doctor` shows. Nothing here runs unless `paid` is enabled.
+errors.log, which `te doctor` shows. One that answered it is not signed in also pauses that
+host's side calls (`paused`): every later call would fail the same way, and Copilot's leave an
+empty session behind each time. Nothing here runs unless micro-skills is on (the proposer)
+or the loop guard is (the judge and the nudge writer).
 """
 import json
 import os
+import re
 import subprocess
 import tempfile
 
@@ -45,20 +50,57 @@ def _env():
     return dict(os.environ, TE_SIDECALL="1")
 
 
+# What a CLI says when it is not signed in -- Copilot's "To authenticate, ... run the '/login'
+# command" under BYOK, Claude Code's "Please run /login".
+_SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed) in")
+
+
 def _no_reply(host, out):
     """Note a side call that came back empty: the paid helpers otherwise fail silently -- seen
-    with Copilot, which does not pass a BYOK provider's variables to the hooks that start it."""
+    with Copilot, which does not pass a BYOK provider's variables to the hooks that start it.
+    A CLI that said it is not signed in pauses the host's side calls."""
     import time
     from .paths import state_root
-    tail = " ".join((getattr(out, "stderr", "") or "").split())[-300:]
+    stderr = getattr(out, "stderr", "") or ""
+    tail = " ".join(stderr.split())[-300:]
     try:
         root = state_root()
         os.makedirs(root, exist_ok=True)
         with open(os.path.join(root, "errors.log"), "a", encoding="utf-8") as fh:
             fh.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} sidecall {host}: no reply "
                      f"(exit {getattr(out, 'returncode', '?')}) {tail}\n")
+        if _SIGNED_OUT_RE.search(stderr + (getattr(out, "stdout", "") or "")):
+            path = _pause_path(host, root)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"at": time.time(), "reason": tail[-200:]}, fh)
     except OSError:
         pass
+
+
+def _pause_path(host, root=None):
+    from .paths import state_root
+    return os.path.join(root or state_root(), "hosts", host, "sidecall.json")
+
+
+def paused(host, root=None):
+    """The pause on this host's side calls ({"at", "reason"}) since its CLI said it is not
+    signed in, or None. `te config set` of `microskills` or `loopguard` lifts it (`resume`)."""
+    try:
+        with open(_pause_path(host, root), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and d.get("at") else None
+
+
+def resume(host, root=None):
+    """Lift the pause; True if there was one."""
+    try:
+        os.remove(_pause_path(host, root))
+        return True
+    except OSError:
+        return False
 
 
 _FLAGS = {}
@@ -226,10 +268,9 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
 
 
 def runner_for(host_name, config):
-    """The optimizer callable for this host, or None when paid calls are not allowed. Each host's
-    calls go through that host's own CLI, never another agent's."""
-    if not config.paid:
-        return None
+    """The optimizer callable for this host. Each host's calls go through that host's own CLI,
+    never another agent's. The caller decides whether a call is allowed: micro-skills' proposer
+    when micro-skills is on, the loop guard's judge when the guard is."""
     model = config.paid_model
     if host_name == "pi":
         return lambda prompt, _m="agent": pi_call(prompt, model=model)

@@ -1,7 +1,7 @@
-"""The loop guard's paid judge, off the hook's critical path.
+"""The loop guard's judge, off the hook's critical path.
 
-With `paid` on, the guard's gate can ask an LLM whether a turn is stuck and, when it is, have a
-second call write the redirect. Both are side calls through the agent's own CLI (`sidecall`),
+With the guard on, its gate asks an LLM whether a turn is stuck and, when it is, has a second
+call write the redirect. Both are side calls through the agent's own CLI (`sidecall`),
 and run inside a PostToolUse hook they would hold the agent for tens of seconds. So the hook
 only STARTS a job here and returns: `AsyncJudge.start` writes the request and
 spawns `te judge` detached; the job runs the judge, and the nudge writer only when the verdict is
@@ -50,13 +50,25 @@ class AsyncJudge:
         return True, res.get("verdict") or None
 
 
+class NoVerdict:
+    """The judge while this agent's model calls are paused: it never answers, so the guard
+    spares the turn rather than act on its rule alone, and only the backstop remains."""
+
+    def start(self, guard, digest):
+        return None
+
+    def poll(self, guard):
+        return False, None
+
+
 def run_job(ctx, session_id, job_id):
     """The detached half: judge the digest, write the redirect if stuck, charge the ledger."""
     from ..loopguard import judge as loop_judge
     req = ctx.store.read(REQUEST.format(sid=session_id)) or {}
     if req.get("id") != job_id:                       # superseded by a newer request
         return None
-    runner = sidecall.runner_for(ctx.host.name, ctx.config)
+    runner = (None if sidecall.paused(ctx.host.name, ctx.root)
+              else sidecall.runner_for(ctx.host.name, ctx.config))
     verdict, written = None, None
     if runner is not None:
         try:

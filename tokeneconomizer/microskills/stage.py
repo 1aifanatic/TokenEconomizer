@@ -94,9 +94,10 @@ class PrefixStage(Stage):
             # layer already injects, so it authors only facts beyond them.
             external = env.injectable_claims if env is not None else None
             dist = (Distiller(repo, runner=runner, model=optimizer_model,
-                              external_facts=external) if fresh
+                              external_facts=external, vocab=vocab) if fresh
                     else Distiller.load(repo, results_root, runner=runner,
-                                        model=optimizer_model, external_facts=external))
+                                        model=optimizer_model, external_facts=external,
+                                        vocab=vocab))
             if env is not None:
                 self.reason = "envfacts+manual-distill"
                 self.distiller = ComposedDistiller(env, dist)

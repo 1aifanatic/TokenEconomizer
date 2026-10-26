@@ -99,16 +99,23 @@ def test_config_layers_and_never_raises_on_bad_values(tmp_path):
     cfg = live_config.load_config(root, repo_dir=repo_dir, env={"TE_UNTOOL": "auto"})
     assert cfg.loopguard == "stop"                # the invalid repo value is ignored
     assert cfg.toolprune_evidence == 7 and cfg.toolprune == "auto"
-    assert cfg.microskills == "envfacts+distiller" and cfg.microskills_effective == "envfacts"
+    assert cfg.microskills == "envfacts+distiller"     # its proposer needs no `paid`
     joined = " ".join(cfg.warnings)
-    assert "bogus" in joined and "nope" in joined and "paid=false" in joined
+    assert "bogus" in joined and "nope" in joined and "paid" not in joined
     assert live_config.load_config(root, env={"TE_DISABLE": "1"}).enabled is False
 
 
 def test_write_config_validates_before_writing(tmp_path):
     path = str(tmp_path / "config.json")
-    live_config.write_config(path, {"loopguard": "off", "paid": "true"})
-    assert json.load(open(path)) == {"loopguard": "off", "paid": True}
+    live_config.write_config(path, {"loopguard": "off", "paid_model": "haiku"})
+    assert json.load(open(path)) == {"loopguard": "off", "paid_model": "haiku"}
+    with pytest.raises(ValueError, match="always asks its judge"):
+        live_config.write_config(path, {"paid": "true"})          # gone: refused, and why
+    assert "paid" not in json.load(open(path))
+    with open(path, "w") as fh:
+        json.dump({"paid": True, "loopguard": "off"}, fh)          # an old file still reads
+    cfg = live_config.load_config(str(tmp_path), repo_dir=None, env={})
+    assert not cfg.warnings
     with pytest.raises(ValueError):
         live_config.write_config(path, {"loopguard": "sometimes"})
     assert json.load(open(path))["loopguard"] == "off"
@@ -679,6 +686,7 @@ def test_copilot_tools_are_grouped_by_mcp_server(tmp_path):
         "github-mcp-server", "acme-db"}
 
 
+@pytest.mark.real_sidecalls
 def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_path,
                                                                           monkeypatch):
     import subprocess
@@ -701,12 +709,13 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
     assert cmd[:3] == ["copilot", "-p", "propose facts"] and "--disable-builtin-mcps" in cmd
     assert cmd.count("--excluded-tools") == len(sidecall.COPILOT_TOOLS)
     assert seen["env"]["TE_SIDECALL"] == "1"            # its own hooks must not recurse
-    cfg = live_config.LiveConfig(paid=True)
+    cfg = live_config.LiveConfig()
     assert sidecall.runner_for("copilot", cfg).__code__.co_names.count("copilot_call") == 1
     assert sidecall.runner_for("claude", cfg).__code__.co_names.count("claude_call") == 1
     assert sidecall.runner_for("pi", cfg).__code__.co_names.count("pi_call") == 1
 
 
+@pytest.mark.real_sidecalls
 def test_a_side_call_with_no_reply_is_noted_and_keeps_to_a_bare_completion(tmp_path,
                                                                            monkeypatch):
     """Seen live: under Copilot's BYOK the provider's variables do not reach the hooks, so the
@@ -774,6 +783,7 @@ def test_a_pi_reply_is_read_from_its_json_run():
     assert trace.pi_json_reply("") == ("", None)
 
 
+@pytest.mark.real_sidecalls
 def test_a_pi_side_call_is_a_bare_run_on_the_persons_own_pi(monkeypatch):
     import subprocess
     from tokeneconomizer.plugin import sidecall

@@ -17,7 +17,7 @@ from tests.test_live_hooks import (GREEN, _first, _turn, env, repo, run_session,
 
 
 # ---- parsing ------------------------------------------------------------------------------
-@pytest.mark.parametrize("key,on", [("microskills", "envfacts"), ("toolprune", "auto"),
+@pytest.mark.parametrize("key,on", [("microskills", "envfacts+distiller"), ("toolprune", "auto"),
                                     ("loopguard", "nudge")])
 def test_each_mechanism_takes_a_plain_on_and_off(key, on):
     cfg = LiveConfig()
@@ -185,9 +185,9 @@ def test_a_higher_min_turns_holds_the_guard_back(env, repo):
 def test_injection_off_and_a_tight_fact_cap_keep_the_context_clean(env, repo, tmp_path):
     for i in range(4):
         run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
-    off = run_session(dict(env, TE_INJECT="off"), repo, "s4",
+    off = run_session(dict(env, TE_MICROSKILLS="off"), repo, "s4",
                       trap_session(str(tmp_path / "s4.jsonl"), repo, 4))
-    assert off == {}                                     # the default injects here
+    assert off == {}                                     # `envfacts` injects here
     tight = dict(env, TE_INJECT_MAX_TOKENS="5")          # smaller than the block's header
     run_session(tight, repo, "s5", trap_session(str(tmp_path / "s5.jsonl"), repo, 5))
     after = run_session(tight, repo, "s6", trap_session(str(tmp_path / "s6.jsonl"), repo, 6))

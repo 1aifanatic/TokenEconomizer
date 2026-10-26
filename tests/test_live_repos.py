@@ -47,6 +47,9 @@ def env(tmp_path):
     return {"TOKENECONOMIZER_HOME": str(tmp_path / "te"), "TE_FOLD_SYNC": "1",
             # A deny list is written at the fold here; the wait before it has its own tests.
             "TE_TOOLPRUNE_QUIET_MINUTES": "0",
+            # Facts are learned here without a model call. Micro-skills is off by default, and
+            # its `on` adds the proposer; both have their own tests.
+            "TE_MICROSKILLS": "envfacts",
             "GIT_CEILING_DIRECTORIES": str(tmp_path), "HOME": str(home),
             "PATH": os.environ.get("PATH", "")}
 

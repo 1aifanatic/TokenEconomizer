@@ -2,21 +2,27 @@
 
 The defaults:
 
-  * microskills = "envfacts" -- the LLM-free facts only. The paid proposer (`envfacts+distiller`,
-                                `distiller`) is opt-in, and refused unless `paid` is also true;
+  * microskills = "off"      -- nothing is learned or injected. `on` is "envfacts+distiller":
+                                the LLM-free facts plus the proposer, which reads digests of
+                                finished sessions every `microskills_propose_every` sessions and
+                                calls a model through the agent's own CLI (charged to the
+                                ledger) to write facts beyond them, as in the experiments.
+                                "envfacts" alone makes no model call;
   * toolprune   = "auto"     -- a deny list is applied once the evidence forms it and the
                                 repository's sessions have been idle (toolprune_quiet_minutes),
                                 from the next session, and announced once at that session's start;
                                 `toolprune restore` gives it back. "propose" only proposes it,
                                 and writes nothing to the agent's settings until the person
                                 runs `toolprune apply`;
-  * loopguard   = "nudge"    -- at most one mid-turn redirect per prompt-turn; a turn still
-                                stuck after it gets a notice to the person, saying how to stop
-                                it. The plugin never stops a turn itself. "stop", which used to
-                                stop a headless turn on Claude Code and Pi, is still read, and
-                                acts as "nudge" with a warning;
-  * paid        = False      -- no mechanism makes an LLM call of its own. Every paid call that is
-                                allowed is charged to the session's ledger;
+  * loopguard   = "nudge"    -- a turn that shows signs of looping is put to a judge, a model
+                                called through the agent's own CLI, and redirected mid-turn only
+                                when the judge finds it stuck (the redirect written by that
+                                model), at most once per prompt-turn; a turn still stuck after it
+                                gets a notice to the person, saying how to stop it. The plugin
+                                never stops a turn itself. "stop", which used to stop a headless
+                                turn on Claude Code and Pi, is still read, and acts as "nudge"
+                                with a warning. Every model call the plugin makes is charged to
+                                the session's ledger;
   * shadow      = False      -- with True, every decision is computed and logged but none
                                 reaches the agent: the way to measure a mechanism before
                                 trusting it.
@@ -25,7 +31,7 @@ Each mechanism also takes a plain `on` / `off` (`on` = the value above), and has
 person can tune by hand:
 
   * microskills_max_facts, microskills_max_tokens -- caps on the injected block;
-  * microskills_propose_every   -- sessions between paid proposer runs;
+  * microskills_propose_every   -- sessions between proposer runs;
   * toolprune_evidence          -- prompts a never-used tool must have stayed unused through,
                                    over at least toolprune_min_sessions sessions, before it is
                                    proposed -- or over toolprune_sessions sessions, however short;
@@ -62,7 +68,7 @@ MODES = ("auto", "interactive", "headless")
 AGGR = ("conservative", "default", "aggressive")
 
 # What `on` turns each mechanism to, and the words read as on / off.
-ON_VALUE = {"microskills": "envfacts", "toolprune": "auto", "loopguard": "nudge",
+ON_VALUE = {"microskills": "envfacts+distiller", "toolprune": "auto", "loopguard": "nudge",
             "repomap": "on"}
 _ON = ("on", "true", "yes", "1", "enable", "enabled")
 _OFF = ("off", "false", "no", "0", "disable", "disabled")
@@ -84,6 +90,14 @@ ALIASES = {
 }
 _THRESHOLD_PREFIXES = ("loopguard.", "spiral.")
 
+# Settings that no longer exist, and where what they did went. A config file that still has one
+# is read without complaint; `config set` says why it is refused.
+OBSOLETE = {
+    "paid": "the loop guard always asks its judge (`loopguard=off` turns it off), and "
+            "micro-skills' proposer runs whenever micro-skills is on (`microskills=envfacts` "
+            "keeps only the facts that need no model call)",
+}
+
 # The loop guard's thresholds a person may pin (`loopguard.<name>=<value>`), with their type
 # and range. They are the keys of `loopguard.DEFAULT_THRESHOLDS`; a turn's "turns" are its tool
 # calls here.
@@ -98,9 +112,9 @@ LOOPGUARD_KEYS = {
     "envelope_min_samples": (int, 1, None, "ended-green turns needed before the envelope is used"),
     "backstop_mult": (float, 0.1, None, "stuck past this multiple of the envelope: redirect, "
                                         "then stop"),
-    "judge_confidence": (float, 0.0, 1.0, "paid judge confidence needed to act (paid=true)"),
-    "gate_min_turns": (int, 1, None, "tool calls before the paid judge is consulted"),
-    "gate_error_outputs": (int, 1, None, "failing results that wake the paid judge early"),
+    "judge_confidence": (float, 0.0, 1.0, "the judge's confidence needed to redirect"),
+    "gate_min_turns": (int, 1, None, "tool calls before the judge is consulted"),
+    "gate_error_outputs": (int, 1, None, "failing results that wake the judge without a repeat"),
 }
 
 
@@ -124,10 +138,10 @@ def _threshold_name(key):
 class LiveConfig:
     enabled: bool = True
     mode: str = "auto"
-    microskills: str = "envfacts"
+    microskills: str = "off"
     microskills_max_facts: int = 4
     microskills_max_tokens: int = 150
-    microskills_propose_every: int = 5
+    microskills_propose_every: int = 3
     toolprune: str = "auto"
     toolprune_evidence: int = 10
     toolprune_min_sessions: int = 2
@@ -141,7 +155,6 @@ class LiveConfig:
     repomap_tokens: int = 2048
     repomap_python: str = ""
     repomap_timeout: int = 8
-    paid: bool = False
     paid_model: str = ""
     shadow: bool = False
     vocabulary: str = "auto"
@@ -149,7 +162,7 @@ class LiveConfig:
 
     _CHOICES = {"mode": MODES, "microskills": MICROSKILLS, "toolprune": TOOLPRUNE,
                 "loopguard": LOOPGUARD, "repomap": REPOMAP, "loopguard_aggr": AGGR,
-                "vocabulary": ("auto", "python-git", "node-web")}
+                "vocabulary": ("auto", "generic", "python-git", "node-web")}
     # The smallest value a number setting takes, where it is not 1.
     _MIN = {"toolprune_quiet_minutes": 0}
 
@@ -164,6 +177,8 @@ class LiveConfig:
         if name is not None:
             return self._set_threshold(name, value, source)
         key = canonical(key)
+        if key in OBSOLETE:
+            return True
         names = {f.name: f for f in fields(self) if f.name != "warnings"}
         if key not in names:
             self.warnings.append(f"{source}: unknown key {key!r}")
@@ -224,17 +239,9 @@ class LiveConfig:
         self.loopguard_thresholds[name] = v
         return True
 
-    @property
-    def microskills_effective(self):
-        """The micro-skill profile that will actually run: a paid profile without `paid` falls
-        back to the free layer, and says so in `warnings` when the config is loaded."""
-        if self.microskills in ("envfacts+distiller", "distiller") and not self.paid:
-            return "envfacts"
-        return self.microskills
-
 
 # Environment variables, old names first so that a new name set alongside its old one wins.
-_ENV = {"TE_MODE": "mode", "TE_PAID": "paid", "TE_SHADOW": "shadow",
+_ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_PAID_MODEL": "paid_model", "TE_VOCABULARY": "vocabulary",
         "TE_INJECT": "microskills", "TE_INJECT_MAX_FACTS": "microskills_max_facts",
         "TE_INJECT_MAX_TOKENS": "microskills_max_tokens",
@@ -294,9 +301,6 @@ def load_config(root, repo_dir=None, env=None):
         cfg.warnings.append("loopguard=stop acts as nudge: the plugin no longer stops a turn; a "
                             "turn still stuck after the redirect gets a notice saying how to stop "
                             "it (set loopguard=nudge to silence this)")
-    if cfg.microskills != cfg.microskills_effective:
-        cfg.warnings.append(f"microskills={cfg.microskills!r} makes paid calls but paid=false; "
-                            f"running {cfg.microskills_effective!r}")
     return cfg
 
 
@@ -310,6 +314,10 @@ def _drop_old_names(current, key):
 def write_config(path, updates):
     """Merge `updates` into the JSON config at `path` (validating each key first), under the
     settings' current names. A `loopguard.<name>` key lands in `loopguard_thresholds`."""
+    gone = [k for k in updates if canonical(k) in OBSOLETE]
+    if gone:
+        raise ValueError("; ".join(f"`{k}` no longer exists: {OBSOLETE[canonical(k)]}"
+                                   for k in gone))
     probe = LiveConfig()
     bad = [k for k, v in updates.items() if not probe.set(k, v, source="te config")]
     if bad:

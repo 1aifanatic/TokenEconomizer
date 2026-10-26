@@ -29,6 +29,9 @@ def env(tmp_path):
     return {"TOKENECONOMIZER_HOME": str(tmp_path / "home"), "TE_FOLD_SYNC": "1",
             # A deny list is written at the fold here; the wait before it has its own tests.
             "TE_TOOLPRUNE_QUIET_MINUTES": "0",
+            # Facts are learned here without a model call. Micro-skills is off by default, and
+            # its `on` adds the proposer; both have their own tests.
+            "TE_MICROSKILLS": "envfacts",
             "GIT_CEILING_DIRECTORIES": str(tmp_path), "PATH": os.environ.get("PATH", "")}
 
 
@@ -137,6 +140,44 @@ def test_a_learned_fact_reaches_the_next_session_and_is_announced_once(env, repo
     assert "learned fact" in starts[4]["systemMessage"]
     assert "systemMessage" not in starts[5]           # unchanged manual: no second notice
     assert starts[5]["hookSpecificOutput"]["additionalContext"] == ctx
+
+
+def test_micro_skills_is_off_by_default_and_learns_nothing(env, repo, tmp_path, monkeypatch,
+                                                           capsys):
+    """The sessions that teach the fact above leave nothing behind unless it is turned on."""
+    from tokeneconomizer.plugin import cli
+    default = {k: v for k, v in env.items() if k != "TE_MICROSKILLS"}
+    starts = [run_session(default, repo, f"s{i}",
+                          trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
+              for i in range(6)]
+    assert all(s == {} for s in starts)
+    assert store_for(default, repo).read("injection.json") is None
+    monkeypatch.delenv("TE_MICROSKILLS", raising=False)
+    for k, v in default.items():
+        monkeypatch.setenv(k, v)
+    assert cli.main(["--host", "claude", "--cwd", repo, "microskills"]) == 0
+    assert "`config set microskills=on` turns it on" in capsys.readouterr().out
+
+
+def test_micro_skills_on_runs_the_proposer_without_paid_and_charges_it(
+        env, repo, tmp_path, monkeypatch):
+    """`on` is the experiments' micro-skills: the free facts plus the proposer, here every
+    third session (after the 2nd, 5th, ...), as a session carries more work than a benchmark
+    task. Turning it on is what allows the proposer's model call; `paid` is the loop guard's."""
+    from tokeneconomizer.plugin import sidecall
+    models = []
+
+    def fake_call(prompt, model="haiku", **kw):
+        models.append(model)
+        return "{}", 120.0
+    monkeypatch.setattr(sidecall, "claude_call", fake_call)
+    on = dict(env, TE_MICROSKILLS="on")
+    for i in range(5):
+        run_session(on, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
+    ledger = store_for(on, repo).read_lines("ledger.jsonl")
+    assert models == ["haiku", "haiku"]
+    assert [r["overhead"]["optimizer_tokens"] for r in ledger] == [0, 120.0, 0, 0, 120.0]
+    assert store_for(on, repo).read("injection.json")["profile"] == "envfacts+distiller"
 
 
 def multi_prompt_trap_session(path, repo, i, prompts=4, every=False):
@@ -322,12 +363,12 @@ def test_the_guard_redirects_then_tells_the_person_how_to_stop_on_every_agent(
         assert len(to_model) == 1                                      # the redirect alone
 
 
-def _fake_judges(monkeypatch, seen):
+def _fake_judges(monkeypatch, seen, stuck=True):
     from tokeneconomizer.loopguard import judge as reflect
 
     def judge(digest, runner, model="agent"):
         seen.append(digest)
-        return {"stuck": True, "confidence": 0.95, "reason": "loop", "_tokens": 1000.0}
+        return {"stuck": stuck, "confidence": 0.95, "reason": "loop", "_tokens": 1000.0}
 
     def writer(digest, runner, model="agent"):
         return {"text": "Read the failing assertion before editing again.", "_tokens": 300.0}
@@ -335,13 +376,13 @@ def _fake_judges(monkeypatch, seen):
     monkeypatch.setattr(reflect, "llm_nudge_writer", writer)
 
 
-def test_the_paid_judge_answers_from_a_job_and_its_spend_is_charged_as_it_happens(
+def test_the_judge_answers_from_a_job_and_its_spend_is_charged_as_it_happens(
         env, repo, monkeypatch):
-    """The job runs inline here (TE_JUDGE_SYNC=1); in the plugin it is a detached process."""
+    """The job runs inline here (see conftest); in the plugin it is a detached process."""
     from tokeneconomizer.plugin import accounting
     seen = []
     _fake_judges(monkeypatch, seen)
-    paid = dict(env, TE_PAID="1", TE_JUDGE_SYNC="1")
+    paid = env
     for k in range(5):
         _turn(paid, repo, "s", f"g{k}", GREEN)
     outs = _turn(paid, repo, "s", "stuck", stuck_calls(40))
@@ -361,18 +402,74 @@ def test_the_paid_judge_answers_from_a_job_and_its_spend_is_charged_as_it_happen
         1300.0 * len(charged))
 
 
-def test_a_hook_only_starts_the_paid_judge_and_never_waits_for_it(env, repo, monkeypatch):
+def test_a_hook_only_starts_the_judge_and_never_waits_for_it(env, repo, monkeypatch):
     from tokeneconomizer.plugin import judge as live_judge
     seen, spawned = [], []
     _fake_judges(monkeypatch, seen)
     monkeypatch.setattr(live_judge, "spawn_job", lambda ctx, sid, job: spawned.append(job))
-    paid = dict(env, TE_PAID="1")
+    paid = env
     for k in range(5):
         _turn(paid, repo, "s", f"g{k}", GREEN)
     _turn(paid, repo, "s", "stuck", stuck_calls(12))
     assert len(spawned) == 1 and seen == []           # started once, never run in the hook
     req = store_for(env, repo).read("judge/s.request.json")
     assert req["id"] == spawned[0] and "NOT green" not in req["digest"]
+
+
+def _redirects(outs):
+    return [i for i, o in enumerate(outs) if "hookSpecificOutput" in o]
+
+
+def test_the_judge_decides_every_redirect_but_the_backstops(env, repo, monkeypatch):
+    """With the guard on, a turn that shows signs of looping goes to the judge, and only a
+    confident `stuck` redirects it; a `productive` verdict spares it, and only the backstop --
+    far past the usual turn AND the strict stall pattern, which the judge cannot veto -- still
+    acts. The rule alone, as the guard ran without a judge, redirected this turn at call 12."""
+    _warm(env, repo)                                   # usual turn: 8 calls, envelope 10
+    seen = []
+    _fake_judges(monkeypatch, seen, stuck=False)
+    spared = _turn(env, repo, "s", "spared", stuck_calls(40))
+    first = _redirects(spared)
+    assert seen and first and first[0] + 1 >= 25       # the backstop: 2.5 x the envelope
+    _fake_judges(monkeypatch, seen, stuck=True)
+    judged = _turn(env, repo, "s", "judged", stuck_calls(40))
+    first = _redirects(judged)
+    assert first and first[0] + 1 < 25
+    assert judged[first[0]]["hookSpecificOutput"]["additionalContext"] == (
+        "Read the failing assertion before editing again.")
+
+
+def test_the_judge_is_not_asked_before_the_repository_is_learned(env, repo, monkeypatch):
+    seen = []
+    _fake_judges(monkeypatch, seen)
+    assert all(o == {} for o in _turn(env, repo, "s", "cold", stuck_calls(40)))
+    assert seen == []
+
+
+def test_a_long_turn_with_no_sign_of_trouble_never_wakes_the_judge(env, repo, monkeypatch):
+    """Interactive turns outrun a small envelope all the time: that alone asks nothing."""
+    _warm(env, repo)
+    seen = []
+    _fake_judges(monkeypatch, seen)
+    long_and_clean = [("Read", {"file_path": f"/r/m{k}.py"}, "ok") for k in range(60)]
+    assert all(o == {} for o in _turn(env, repo, "s", "long", long_and_clean))
+    assert seen == []
+
+
+def test_while_model_calls_are_paused_only_the_backstop_redirects(env, repo, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    _warm(env, repo)
+    seen = []
+    _fake_judges(monkeypatch, seen)
+    monkeypatch.setattr(sidecall, "paused", lambda host, root=None: {"at": 1.0})
+    outs = _turn(env, repo, "s", "stuck", stuck_calls(40))
+    first = _redirects(outs)
+    assert seen == [] and first and first[0] + 1 >= 25
+
+
+def _warm(env, repo):
+    for k in range(5):
+        _turn(env, repo, "s", f"g{k}", GREEN)
 
 
 def test_only_turns_that_end_green_feed_the_envelope(env, repo):
@@ -895,6 +992,53 @@ def test_copilot_learns_from_its_own_logs_and_injects_at_top_level(env, repo, tm
     assert rec["input_tokens"] == 4000 - 2400 - 100
     turns = [e for e in st.read_lines("events.jsonl") if e["kind"] == "turn"]
     assert len(turns) == 5 and all(t["tool_calls"] == 2 for t in turns)
+
+
+SIGNED_OUT = ("Error: No authentication information found. Copilot can be authenticated with "
+              "GitHub using an OAuth Token or a Fine-Grained Personal Access Token. To "
+              "authenticate, you can use any of the following methods: Start 'copilot' and run "
+              "the '/login' command")
+
+
+def test_a_signed_out_copilot_pauses_the_model_calls_and_says_so_once(env, repo, tmp_path,
+                                                                     monkeypatch):
+    """Seen live under BYOK: Copilot does not pass the provider to the plugin's hooks, so the
+    proposer's `copilot -p` asked to sign in, every third session, each time leaving an empty
+    session behind. One such answer pauses the calls; the next start says so once, the facts
+    that need no model call still form, and `config set microskills=on` tries again."""
+    import subprocess
+    from tokeneconomizer.plugin import cli, sidecall
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)                  # `_no_reply` writes under the state root
+    tried = []
+
+    def signed_out(prompt, model="", **kw):
+        tried.append(prompt)
+        sidecall._no_reply("copilot", subprocess.CompletedProcess([], 1, "", SIGNED_OUT))
+        return "", None
+    monkeypatch.setattr(sidecall, "copilot_call", signed_out)
+    on = dict(env, TE_MICROSKILLS="on")
+    starts = [copilot_session(on, repo, tmp_path, f"b{i}", COPILOT_TRAP, monkeypatch)
+              for i in range(6)]
+    assert len(tried) == 1                        # after the 2nd session; not after the 5th
+    said = [p for s in starts for p in s.get("progress", []) if "not signed in" in p]
+    assert len(said) == 1 and "Copilot does not pass it to the plugin's hooks" in said[0]
+    assert "progress" in starts[2] and said[0] in starts[2]["progress"]
+    assert "`python -m pytest …` works." in starts[4]["additionalContext"]
+    assert cli.main(["--host", "copilot", "--cwd", repo, "config", "set", "microskills=on"]) == 0
+    assert sidecall.paused("copilot") is None
+
+
+def test_only_a_signed_out_answer_pauses_the_model_calls(env, monkeypatch):
+    import subprocess
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setenv("TOKENECONOMIZER_HOME", env["TOKENECONOMIZER_HOME"])
+    sidecall._no_reply("pi", subprocess.CompletedProcess([], 1, "", "429 rate limited"))
+    assert sidecall.paused("pi") is None
+    sidecall._no_reply("claude", subprocess.CompletedProcess([], 1, "Invalid API key · Please "
+                                                                    "run /login", ""))
+    assert sidecall.paused("claude") and sidecall.paused("pi") is None
+    assert sidecall.resume("claude") and sidecall.paused("claude") is None
 
 
 def test_a_failed_copilot_tool_reaches_the_guard(env, repo, tmp_path, monkeypatch):

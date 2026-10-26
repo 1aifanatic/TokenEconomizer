@@ -20,8 +20,9 @@ import json
 import os
 import re
 
+from ..trace import call_cwds
 from ..trace.claude import CONVERSATION
-from .lifecycle import Lifecycle, edited_pyfiles
+from .lifecycle import Lifecycle, edited_files, edited_pyfiles
 
 # ---- proposer cadence / caps / gates ---------------------------------------
 PROPOSE_EVERY  = 8      # one LLM proposer call per this many tasks (PrefixStage rebinds
@@ -33,6 +34,7 @@ MAX_EXTRACTORS = 12     # cap authored features (keeps the digest bounded)
 RAW_SAMPLE     = 3      # raw excerpts shown to the proposer on an abstaining tick
 ABSTAIN_GATE   = 0.5    # tick is "abstaining" if >= this frac of window cmds are unseen
 STATE_SUBDIR   = "manual_state"
+BLOB_CAP       = 20_000  # characters of a saved digest's raw commands (twice that of output)
 
 # ---- regexes ---------------------------------------------------------------
 PYTEST_RE = re.compile(r"-m\s+pytest|\bpytest\b|\bpy\.test\b")
@@ -104,7 +106,9 @@ def bash_cmds(calls):
 
 
 # ---- compact digest: one dict per finished task (the proposer's only view) --
-def build_digest(repo, transcript_path, iid, resolved=None):
+def build_digest(repo, transcript_path, iid, resolved=None, generic=False):
+    if generic:
+        return build_generic_digest(repo, transcript_path, iid, resolved)
     try:
         calls = load_calls(transcript_path)
     except Exception:
@@ -128,6 +132,104 @@ def build_digest(repo, transcript_path, iid, resolved=None):
         "badarg": bool(BADARG_RE.search(out_blob)),
         # RAW blobs kept for host-side detector eval, NOT serialized to the prompt.
         "_cmd_blob": cmd_blob,
+        "_out_blob": out_blob,
+    }
+
+
+# ---- the generic digest: any language or toolchain (`Vocabulary.generic`, the plugin's) ---
+# Build, test, lint and type-check commands across ecosystems, and test runs among them.
+CHECK_RE = re.compile(
+    r"\b(?:pytest|py\.test|tox|nox|unittest|runtests\.py|jest|vitest|mocha|rspec|phpunit|ctest|"
+    r"tsc|eslint|prettier|ruff|flake8|pylint|mypy|pyright|golangci-lint|cmake|ninja|bazel)\b|"
+    r"(?:^|[\s;&|(])make\b|"
+    r"\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?(?:test|build|lint|check|typecheck)\b|"
+    r"\b(?:cargo|go|mvn|gradle|gradlew|dotnet|mix|swift)\s+"
+    r"(?:test|build|check|vet|clippy|compile|package|verify)\b")
+TEST_RE = re.compile(
+    r"\b(?:pytest|py\.test|tox|nox|unittest|runtests\.py|jest|vitest|mocha|rspec|phpunit|ctest)\b|"
+    r"\b(?:make|npm|yarn|pnpm|bun|cargo|go|mvn|gradle|gradlew|dotnet|mix|swift|rake)\s+"
+    r"(?:run\s+)?test\b")
+MISSING_CMD_RE = re.compile(r"command not found|: not found\b|is not recognized as", re.I)
+MISSING_DEP_RE = re.compile(
+    r"ModuleNotFoundError|No module named|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|"
+    r"cannot find package|could not find (?:package|crate|module|gem)|unresolved import|"
+    r"cannot load such file|undefined reference to|fatal error: [^\n]*: No such file", re.I)
+BAD_USAGE_RE = re.compile(r"(?m)^usage:|unrecognized arguments?|no such option|"
+                          r"unknown (?:option|flag|command)|invalid option|unexpected argument|"
+                          r"error: argument", re.I)
+_EXIT_RE = re.compile(r"(?i)\bexit(?:ed with)?(?: code| status)?[:=\s]+(\d+)")
+_FAILED_OUT_RE = re.compile(r"Traceback \(most recent call last\)|^\w*Error\b", re.M)
+_ERROR_LINE_RE = re.compile(r"(?i)\b(?:error|failed|failure|fatal|exception|traceback|cannot|"
+                            r"not found|denied|refused|panic)\b")
+
+
+def _command_failed(out):
+    m = _EXIT_RE.search(out or "")
+    if m:
+        return int(m.group(1)) != 0
+    return bool(MISSING_CMD_RE.search(out or "") or MISSING_DEP_RE.search(out or "")
+                or _FAILED_OUT_RE.search(out or ""))
+
+
+def _relative(text, roots):
+    """A command or error line with the repository's own paths made relative and the home
+    directory written `~`: the same shape on every machine, and no one's paths in a prompt."""
+    for r in roots:
+        if r:
+            text = text.replace(r + "/", "").replace(r, ".")
+    text = re.sub(r"^cd \.\s*(?:&&|;)\s*", "", text)        # into the repository: no `cd`
+    home = os.path.expanduser("~")
+    return text.replace(home, "~") if home and home != "/" else text
+
+
+def error_signature(out, roots=()):
+    """The first line of a failing output that names the failure, normalized so two sessions
+    that fail the same way read the same: paths, numbers and addresses masked."""
+    for ln in (out or "").splitlines():
+        if _ERROR_LINE_RE.search(ln) or MISSING_CMD_RE.search(ln):
+            s = _relative(ln.strip(), roots)
+            s = re.sub(r"0x[0-9a-fA-F]+", "<hex>", s)
+            s = re.sub(r"(?<![\w.~])/[^\s'\"`:,)]+", "<path>", s)
+            s = re.sub(r"\b\d+\b", "N", s)
+            return " ".join(s.split())[:120]
+    return ""
+
+
+def build_generic_digest(repo, transcript_path, iid, resolved=None):
+    """The digest the plugin's proposer reads: every edited file whatever its language, the
+    build/test/lint commands run, the commands that failed with a normalized error line, and
+    flags that hold in any ecosystem. Raw blobs stay host-side for the detectors."""
+    from .observe import repository_top
+    try:
+        calls = load_calls(transcript_path)
+    except Exception:
+        return None
+    cmds = bash_cmds(calls)
+    start = next((c for c in call_cwds(transcript_path) if c), None)
+    roots = sorted({r for r in (start, repository_top(start)) if r}, key=len, reverse=True)
+    out_blob = "\n".join(o for _, o in cmds)
+    failed, seen = [], set()
+    for c, o in cmds:
+        if not _command_failed(o):
+            continue
+        row = (_templates([_relative(c, roots)], cap=1) or [""])[0], error_signature(o, roots)
+        if row not in seen:
+            seen.add(row)
+            failed.append({"cmd": row[0], "error": row[1]})
+    return {
+        "iid": iid,
+        "resolved": bool(resolved) if resolved is not None else None,
+        "edited_files": sorted(edited_files(calls)),
+        "n_cmds": len(cmds),
+        "cmd_templates": _templates(_relative(c, roots) for c, _ in cmds),
+        "check_commands": _templates(_relative(c, roots) for c, _ in cmds
+                                     if CHECK_RE.search(c))[:6],
+        "failed_commands": failed[:6],
+        "missing_command": bool(MISSING_CMD_RE.search(out_blob)),
+        "missing_dependency": bool(MISSING_DEP_RE.search(out_blob)),
+        "bad_usage": bool(BAD_USAGE_RE.search(out_blob)),
+        "_ran_tests": any(TEST_RE.search(c) for c, _ in cmds),
+        "_cmd_blob": "\n".join(c for c, _ in cmds),
         "_out_blob": out_blob,
     }
 
@@ -164,12 +266,22 @@ def _rx(pat):
 
 
 # ---- detector DSL: host-executable, no LLM at eval time --------------------
+# Each reads either digest: a fact the experiments' proposer named keeps a meaning under the
+# generic digest, and the reverse.
 PREDICATES = {
-    "repro_written": lambda dg: dg["repro_written"],
-    "importerror":   lambda dg: dg["importerror"],
-    "badarg":        lambda dg: dg["badarg"],
-    "ran_tests":     lambda dg: bool(dg["test_invocations"]),
+    "repro_written": lambda dg: bool(dg.get("repro_written")),
+    "importerror":   lambda dg: bool(dg.get("importerror", dg.get("missing_dependency"))),
+    "badarg":        lambda dg: bool(dg.get("badarg", dg.get("bad_usage"))),
+    "ran_tests":     lambda dg: bool(dg.get("test_invocations") or dg.get("_ran_tests")),
+    "ran_checks":    lambda dg: bool(dg.get("check_commands") or dg.get("test_invocations")),
+    "command_failed": lambda dg: bool(dg.get("failed_commands")),
+    "missing_command": lambda dg: bool(dg.get("missing_command")),
+    "missing_dependency": lambda dg: bool(dg.get("missing_dependency", dg.get("importerror"))),
+    "bad_usage":     lambda dg: bool(dg.get("bad_usage", dg.get("badarg"))),
+    "edited":        lambda dg: bool(dg.get("edited_files")),
 }
+GENERIC_PREDICATES = ("ran_checks", "ran_tests", "command_failed", "missing_command",
+                      "missing_dependency", "bad_usage", "edited")
 
 
 class Detector:
@@ -292,7 +404,7 @@ class Fact:
 
 
 # ---- proposer prompt (facts + extractors + revisable contradiction) --------
-PROPOSER_SYSTEM = (
+_PROPOSER_HEAD = (
     "You mine a DURABLE, REPO-SPECIFIC operating manual for a coding agent from a "
     "window of finished-task digests in ONE repository. Each digest lists edited "
     "files, command templates, test invocations, and boolean flags — NOT raw logs.\n\n"
@@ -301,7 +413,10 @@ PROPOSER_SYSTEM = (
     "required env var, a build/reinstall step that's needed (or NOT needed), a lint/"
     "format hook that reformats, etc. Do NOT emit task-specific fixes or which lines "
     "to change — only durable interface facts true across tasks.\n\n"
-    "For EACH fact return an object with:\n"
+)
+PROPOSER_SYSTEM = (
+    _PROPOSER_HEAD
+    + "For EACH fact return an object with:\n"
     '  id          short kebab slug\n'
     '  claim       one sentence, what is true about this repo\n'
     '  injection   the exact line to inject into the agent prefix. State it as a '
@@ -338,10 +453,33 @@ PROPOSER_SYSTEM = (
 )
 
 
+# The plugin's: any language or toolchain, with tests one topic among several. Its rules
+# (fields, detectors, extractors, revision) are the experiments' own.
+_GENERIC_HEAD = (
+    "You mine a DURABLE, REPO-SPECIFIC operating manual for a coding agent from a "
+    "window of finished-session digests in ONE repository, whatever its language and "
+    "toolchain. Each digest lists the files edited, command templates (paths relative to "
+    "the repository), the build, test and lint commands run, the commands that failed "
+    "with a normalized error line, and boolean flags — NOT raw logs or file contents. "
+    "(Each session is called a task below.)\n\n"
+    "Emit facts that a FUTURE session in this repository would want stated up front to "
+    "avoid wasted commands: how to build, run or check it here and the exact invocation "
+    "that works; the toolchain (interpreter, package manager, compiler, version manager) "
+    "and how it is reached; a setup, install, code-generation or rebuild step that is "
+    "needed (or NOT needed); an environment variable, service or working directory a "
+    "command needs; where generated, configured or vendored files live; a command that "
+    "fails here and the variant that works; a hook or formatter that rewrites files. "
+    "Tests are one such topic, not the focus. Do NOT emit task-specific fixes or which "
+    "lines to change — only durable facts true across sessions.\n\n"
+)
+PROPOSER_SYSTEM_GENERIC = (_GENERIC_HEAD + PROPOSER_SYSTEM[len(_PROPOSER_HEAD):]).replace(
+    "repro_written, importerror, badarg, ran_tests", ", ".join(GENERIC_PREDICATES))
+
+
 def build_proposer_prompt(repo, window, existing_ids, existing_feats, raw_excerpts,
-                          external=()):
+                          external=(), generic=False):
     view = [proposer_view(d) for d in window]
-    p = (PROPOSER_SYSTEM
+    p = ((PROPOSER_SYSTEM_GENERIC if generic else PROPOSER_SYSTEM)
          + f"\n\nRepo: {repo}"
          + "\n\nExisting fact ids (re-emit an id with ONLY detector.contradict changed to "
            "revise its contradiction condition, else use a NEW id):\n"
@@ -397,8 +535,10 @@ class Distiller:
         d.update(transcript_path, iid=..., resolved=...) # fold in the finished task
         d.save(root)
     """
-    def __init__(self, repo, runner=None, model="agent", external_facts=None):
+    def __init__(self, repo, runner=None, model="agent", external_facts=None, vocab=None):
         self.repo = repo
+        # The plugin's generic reading (`Vocabulary.generic`): the generic digest and prompt.
+        self.generic = bool(getattr(vocab, "generic", False))
         # Zero-arg callable returning claims another layer already injects (see
         # build_proposer_prompt); None when the distiller runs alone.
         self.external_facts = external_facts
@@ -426,13 +566,19 @@ class Distiller:
         dg["features"] = feats
         return dg
 
+    def _sensed(self, cmd):
+        """Does a built-in sense already read this command?"""
+        if self.generic:
+            return bool(CHECK_RE.search(cmd))
+        return bool(PYTEST_RE.search(cmd) or REPRO_RE.search(cmd))
+
     def _coverage(self, cmds):
         """Fraction of commands matched by SOME extractor or built-in test/repro sense."""
         if not cmds:
             return 1.0
         seen = 0
         for c, _ in cmds:
-            hit = (PYTEST_RE.search(c) or REPRO_RE.search(c)
+            hit = (self._sensed(c)
                    or any(ex.rx and ex.rx.search(c) for ex in self.extractors.values()))
             if hit:
                 seen += 1
@@ -443,7 +589,7 @@ class Distiller:
         out = []
         for cmds in self.raw_window[-WINDOW:]:
             for c, _ in cmds:
-                if PYTEST_RE.search(c) or REPRO_RE.search(c):
+                if self._sensed(c):
                     continue
                 if any(ex.rx and ex.rx.search(c) for ex in self.extractors.values()):
                     continue
@@ -461,7 +607,8 @@ class Distiller:
         excerpts = self._abstaining_excerpts()[:RAW_SAMPLE] if abstaining else []
         external = list(self.external_facts()) if self.external_facts else []
         prompt = build_proposer_prompt(self.repo, self.window, set(self.facts),
-                                       set(self.extractors), excerpts, external=external)
+                                       set(self.extractors), excerpts, external=external,
+                                       generic=self.generic)
         raw, eff = self.runner(prompt, self.model)
         if eff is not None:
             self.opt_tokens += eff
@@ -553,7 +700,8 @@ class Distiller:
         if not lines:
             return ""
         head = (f"# repo operating manual ({self.repo.split('/')[-1]}) "
-                f"— learned from prior tasks in this repo")
+                + ("— learned from earlier sessions in this repository" if self.generic
+                   else "— learned from prior tasks in this repo"))
         return head + "\n" + "\n".join(f"- {l}" for l in lines) + "\n"
 
     def update(self, transcript_path, iid="", resolved=None, edited=None):
@@ -564,7 +712,7 @@ class Distiller:
             self.now += 1
             return
         cmds = bash_cmds(calls)
-        dg = build_digest(self.repo, transcript_path, iid, resolved)
+        dg = build_digest(self.repo, transcript_path, iid, resolved, generic=self.generic)
         if dg is None:
             self.now += 1
             return
@@ -590,16 +738,25 @@ class Distiller:
         return os.path.join(d, repo.replace("/", "__") + ".json")
 
     def save(self, root):
+        # The window goes with the facts: a proposer reloaded for each session (the plugin's
+        # fold) must see the recent sessions, as one kept in memory over a stream (the
+        # experiments') does -- a fact needs MIN_CITE of them to be grounded, so a window of
+        # the current session alone could never admit one. Raw blobs are capped.
+        window = [dict(dg, _cmd_blob=dg.get("_cmd_blob", "")[-BLOB_CAP:],
+                       _out_blob=dg.get("_out_blob", "")[-2 * BLOB_CAP:])
+                  for dg in self.window[-WINDOW:]]
         json.dump({"repo": self.repo, "now": self.now, "opt_tokens": self.opt_tokens,
                    "last_propose": self.last_propose,
                    "extractors": {k: e.to_dict() for k, e in self.extractors.items()},
-                   "facts": {k: f.to_dict() for k, f in self.facts.items()}},
+                   "facts": {k: f.to_dict() for k, f in self.facts.items()},
+                   "window": window,
+                   "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]},
                   open(self._path(root, self.repo), "w"), indent=2)
 
     @classmethod
-    def load(cls, repo, root, runner=None, model="agent", external_facts=None):
+    def load(cls, repo, root, runner=None, model="agent", external_facts=None, vocab=None):
         p = cls._path(root, repo)
-        self = cls(repo, runner, model, external_facts=external_facts)
+        self = cls(repo, runner, model, external_facts=external_facts, vocab=vocab)
         if not os.path.exists(p):
             return self
         d = json.load(open(p))
@@ -608,6 +765,8 @@ class Distiller:
         self.last_propose = d.get("last_propose", -1)
         self.extractors = {k: Extractor(v) for k, v in d.get("extractors", {}).items()}
         self.facts = {k: Fact.from_dict(v) for k, v in d.get("facts", {}).items()}
+        self.window = list(d.get("window") or [])[-WINDOW:]
+        self.raw_window = [[(c, "") for c in cmds] for cmds in d.get("raw_cmds") or []]
         return self
 
     def debug_row(self):

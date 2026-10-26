@@ -15,16 +15,20 @@ answers fit an interactive session instead of a sealed benchmark task:
     union of a probed snapshot (`te toolprune refresh-catalog`, stored under the state root), the
     deferred tools the transcript lists, and the tools it used. Without a snapshot only deferred
     tools can be proposed -- they cost one listing line each, so that is honest but small.
-  * `env_vocabulary` picks the environment-fact vocabulary from the repository's own markers
-    (`package.json` -> Node, Python packaging files -> Python), overridable by config.
+  * `env_vocabulary` is the generic one (`microskills.GENERIC`): every ecosystem at once, builds
+    and checks as well as tests, every edited file, and the proposer's language-neutral digest.
+    The repository's markers only pick how a script run through its shebang is spelled
+    (`package.json` alone -> `node`). The experiments' narrower vocabularies stay selectable
+    (`vocabulary=python-git` / `node-web`).
   * `problem_statements` is empty: there is no issue text to give the per-task tool judge.
 """
+import dataclasses
 import json
 import os
 
 from .. import trace
 from ..loopguard import state_from_trajectory
-from ..microskills import NODE_WEB, PYTHON_GIT
+from ..microskills import GENERIC, NODE_WEB, PYTHON_GIT
 from ..toolprune.tools import PROTECTED_TOOLS
 
 # Tools a person relies on in an interactive session, beyond the benchmark work surface.
@@ -66,8 +70,8 @@ def detect_vocabulary(repo_root, preference="auto"):
         return PYTHON_GIT
     has = lambda names: any(os.path.exists(os.path.join(repo_root or "", n)) for n in names)
     if has(_NODE_MARKERS) and not has(_PY_MARKERS):
-        return NODE_WEB
-    return PYTHON_GIT
+        return dataclasses.replace(GENERIC, canonical_interpreter="node")
+    return GENERIC
 
 
 def catalog_path(state_root, host):

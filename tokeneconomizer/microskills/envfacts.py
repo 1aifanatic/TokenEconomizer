@@ -44,6 +44,8 @@ STATE_SUBDIR = "envfacts_state"
 MAX_FACTS = 4
 MAX_TOKENS = 150          # ~4 chars per token; the whole block, header included
 HEADER = "# environment facts learned from earlier tasks in this checkout"
+# The plugin's (`Vocabulary.generic`): a person's work comes in sessions, not tasks.
+GENERIC_HEADER = "# environment facts learned from earlier sessions in this repository"
 
 # Words that would turn a fact into completion or verification advice.
 _LINT_RE = re.compile(r"\b(skip|no need|don'?t|do not|stop|done|completed?|finish(?:ed)?|"
@@ -173,9 +175,10 @@ def typed_ok(o):
 
 
 def _repairs(form, a_form, intent):
-    """Can `form` stand in for the failing `a_form`? Another form -- and, outside test runs,
-    not a bare one: only a fuller spelling repairs a bare interpreter or package tool."""
-    return form != a_form and (intent == "run_tests" or not is_bare(form))
+    """Can `form` stand in for the failing `a_form`? Another form -- and, outside test runs
+    and builds, not a bare one: only a fuller spelling repairs a bare interpreter or package
+    tool."""
+    return form != a_form and (intent in ("run_tests", "run_build") or not is_bare(form))
 
 
 def _moves_shell(form):
@@ -244,12 +247,16 @@ class EnvFactsDistiller:
         self.last_digest = None         # the most recent per-task verdicts (telemetry)
 
     # ---- render --------------------------------------------------------------------
+    @property
+    def header(self):
+        return GENERIC_HEADER if self.vocab.generic else HEADER
+
     def render(self, task=None):
         chosen = self._select()
         self.last_injected = {f.id for f in chosen}
         if not chosen:
             return ""
-        lines = [HEADER] + [f"- {t}" for t in self._merged_lines(chosen)]
+        lines = [self.header] + [f"- {t}" for t in self._merged_lines(chosen)]
         return "\n".join(lines) + "\n"
 
     def injected_ids(self):
@@ -280,7 +287,7 @@ class EnvFactsDistiller:
             trial = chosen + [f]
             if len(trial) > self.max_facts:
                 break
-            text = HEADER + "\n" + "\n".join(f"- {t}" for t in self._merged_lines(trial))
+            text = self.header + "\n" + "\n".join(f"- {t}" for t in self._merged_lines(trial))
             if len(text) > self.max_tokens * 4:
                 continue
             chosen = trial
@@ -324,14 +331,14 @@ class EnvFactsDistiller:
         by_intent = {}
         for o in obs:
             by_intent.setdefault(o.intent, []).append(o)
-        for intent in ("run_interpreter", "run_tests", "package_tool"):
+        for intent in ("run_interpreter", "run_tests", "run_build", "package_tool"):
             seq = by_intent.get(intent, [])
             # A test run that failed because its LABEL did not load says nothing about the way
             # the runner was called (Django reports a bad label as a ModuleNotFoundError): those
             # are ArgRepair's. Counting them here once taught "`python tests/runtests.py` fails;
             # `python runtests.py` works" from a stream of mistyped labels.
             fails = [o for o in seq if form_failed(o)]
-            if intent != "run_tests":
+            if intent not in ("run_tests", "run_build"):
                 # An explicit path or activation that fails is a missing dependency, not a
                 # resolution problem; only a bare form can be "repaired" by a fuller one.
                 fails = [o for o in fails if is_bare(o.form)]

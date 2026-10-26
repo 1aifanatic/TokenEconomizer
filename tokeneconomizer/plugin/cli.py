@@ -42,8 +42,8 @@ import sys
 import time
 
 from .. import loopguard
-from . import accounting, denylist, fold, hosts, paths, repomap, repos, toolcheck
-from .config import unset_config, write_config
+from . import accounting, denylist, fold, hosts, paths, repomap, repos, sidecall, toolcheck
+from .config import canonical, unset_config, write_config
 from .context import LiveContext
 from .paths import state_root
 
@@ -118,7 +118,7 @@ def cmd_status(args):
                                           cfg.loopguard_thresholds)
     ledger = accounting.summarize(ctx.store.read_lines("ledger.jsonl"))
     out.update({
-        "microskills": {"profile": cfg.microskills_effective,
+        "microskills": {"profile": cfg.microskills,
                         "injected_lines": sum(1 for ln in (inj.get("rendered") or "").splitlines()
                                               if ln.startswith("- ")),
                         "sessions_folded": inj.get("sessions", 0)},
@@ -137,8 +137,8 @@ def cmd_status(args):
     print(f"TokenEconomizer -- {out['repo']} ({ctx.host.name})")
     print(f"  repository   {ctx.repo.root}, {repos.describe(ctx.repo)}")
     print(f"  state        {out['state']}")
-    print(f"  config       microskills={cfg.microskills_effective} toolprune={cfg.toolprune} "
-          f"loopguard={cfg.loopguard} repomap={cfg.repomap} mode={cfg.mode} paid={cfg.paid} "
+    print(f"  config       microskills={cfg.microskills} toolprune={cfg.toolprune} "
+          f"loopguard={cfg.loopguard} repomap={cfg.repomap} mode={cfg.mode} "
           f"shadow={cfg.shadow}")
     if cfg.repomap != "off":
         rm = repomap.read_state(ctx)
@@ -177,6 +177,12 @@ def cmd_status(args):
 def cmd_microskills(args):
     ctx = _ctx(args)
     inj = ctx.store.read("injection.json") or {}
+    if ctx.config.microskills == "off":
+        print(f"micro-skills is off here (the default). `config set microskills=on` turns it on: "
+              f"facts are then learned from finished sessions, and a model proposes more every "
+              f"{ctx.config.microskills_propose_every} sessions, through this agent")
+        if not inj:
+            return 0
     text = inj.get("rendered") or ""
     print(text.rstrip() or "(nothing injected yet: no fact has cleared its firing gate)")
     facts = inj.get("facts") or {}
@@ -481,6 +487,14 @@ def cmd_config(args):
     print(f"{path}: {json.dumps(cur, sort_keys=True)}")
     print("applies from the next hook call; a new fact-size cap applies once the next session "
           "has been folded")
+    if {canonical(k) for k in updates} & {"microskills", "loopguard"} and sidecall.resume(
+            ctx.host.name, ctx.root):
+        print(f"the plugin's model calls through `{ctx.host.name} -p` will be tried again")
+    if "distiller" in str(cur.get("microskills", "")):
+        every = cur.get("microskills_propose_every") or ctx.config.microskills_propose_every
+        print(f"note: micro-skills calls a model through this agent every {every} sessions to "
+              "propose facts, charged to the session's cost; `microskills=envfacts` learns "
+              "without model calls")
     if cur.get("loopguard") == "stop":
         print("note: `stop` acts as `nudge`: the plugin never stops a turn; a turn still stuck "
               "after the redirect gets a notice saying how to stop it")
@@ -499,7 +513,7 @@ def cmd_fold(args):
 
 
 def cmd_judge(args):
-    """The detached half of the paid stuck judge (see plugin/judge.py); not for people."""
+    """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
     judge.run_job(_session_ctx(args, args.session), args.session, args.job)
     return 0
@@ -613,6 +627,13 @@ def cmd_doctor(args):
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
     agents = [h for h in ("claude", "codex", "copilot", "pi") if _sh.which(h)]
     print(f"agents      {', '.join(agents) or 'none of claude, codex, copilot, pi on PATH'}")
+    for h in agents:
+        pause = sidecall.paused(h, root)
+        if pause:
+            print(f"{h:11s} model calls paused since "
+                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['at']))}: `{h} -p` said "
+                  f"it is not signed in; `config set microskills=on` (or `loopguard=on`) "
+                  f"tries again")
     if "claude" in agents:
         cat = os.path.join(root, "hosts", "claude", "catalog.json")
         print(f"claude      catalog {'present' if os.path.exists(cat) else 'not probed'}")
@@ -633,7 +654,8 @@ def cmd_doctor(args):
               f"{copilot_model() or '(Copilot default)'}")
         if base:
             print("copilot     note: Copilot does not pass COPILOT_PROVIDER_* to the plugin's "
-                  "hooks, so with paid=true its side calls cannot use this provider")
+                  "hooks, so its model calls (micro-skills' proposer, the loop guard's judge) "
+                  "cannot use this provider")
         ctrust = denylist.copilot_folder_trusted(args.cwd)
         if ctrust is not None:
             print(f"copilot     this folder is {'trusted' if ctrust else 'NOT trusted'} (an "

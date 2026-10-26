@@ -12,9 +12,9 @@
 
 Every handler returns quickly and fails open. A hook that raises would break the user's session
 for a cost optimization, so `hook.main` turns any exception into an empty output, and nothing
-here waits on the network: injection reads a cached render, and the only paid call a hook can
-cause -- the sampled stuck judge -- runs only when `paid` is on and the free gate is open, and
-then in a detached job (`judge`), never in the hook itself.
+here waits on the network: injection reads a cached render, and the only model call a hook can
+cause -- the sampled stuck judge -- runs only when the guard's free gate is open, and then in a
+detached job (`judge`), never in the hook itself.
 
 Every visible action is announced in one `systemMessage` line, so a person can see why the agent
 changed course; `shadow` computes and logs every decision without acting on any of them.
@@ -24,7 +24,7 @@ import os
 import time
 
 from .. import loopguard
-from . import denylist, fold, repomap, repos
+from . import denylist, fold, repomap, repos, sidecall
 from .hosts import merge_outputs
 from .paths import ensure_launcher
 
@@ -133,6 +133,20 @@ class LiveController:
         if (self.cfg.toolprune != "off" and denylist.supports(self.host.name)
                 and not self.cfg.shadow):
             outputs.extend(self._toolprune_notices(seen))
+
+        pause = sidecall.paused(self.host.name, self.ctx.root)
+        calls_a_model = "distiller" in self.cfg.microskills or self.cfg.loopguard != "off"
+        if (pause and calls_a_model and not self.cfg.shadow
+                and seen.get("sidecall_paused") != pause["at"]):
+            byok = (" (with your own model key, Copilot does not pass it to the plugin's hooks)"
+                    if self.host.name == "copilot" else "")
+            outputs.append(self.host.notice(
+                f"TokenEconomizer: the plugin's own model calls go through `{self.host.name} -p`, "
+                f"which answered that it is not signed in{byok}, so they are paused; facts that "
+                f"need no model call are still learned, and the loop guard redirects only at its "
+                f"backstop. `{self._cmd('config')} set microskills=on` (or `loopguard=on`) tries "
+                f"again."))
+            seen["sidecall_paused"] = pause["at"]
 
         note = repos.migration_notice(self.ctx.root, self._cmd("repos"))
         if note and not self.cfg.shadow:
@@ -261,13 +275,20 @@ class LiveController:
         return {}
 
     # ---- PostToolUse ---------------------------------------------------------------------
-    def _judge(self, thr):
-        """The paid stuck judge, run in the background (`judge.AsyncJudge`), or None: the
-        hook only starts a job, and a later call picks up its verdict with the redirect already
-        written, so the agent never waits on it."""
-        if not self.cfg.paid:
+    def _judge(self, thr, envelope):
+        """The stuck judge, run in the background (`judge.AsyncJudge`): with the guard on, it
+        makes every call to redirect but the backstop's. The hook only starts a job, and a later
+        call picks up its verdict with the redirect already written, so the agent never waits.
+
+        None before this repository has an envelope -- the guard does not act on a repository
+        whose usual turns it has not learned (the rule fallback never acts without one either).
+        While this agent's model calls are paused, a judge that never answers: the turn is
+        spared, as a missing verdict is, rather than redirected on the rule alone."""
+        from .judge import AsyncJudge, NoVerdict
+        if envelope is None:
             return None
-        from .judge import AsyncJudge
+        if sidecall.paused(self.host.name, self.ctx.root):
+            return NoVerdict()
         return AsyncJudge(self.ctx, self.sid, thr.get("judge_confidence"))
 
     def post_tool(self):
@@ -289,8 +310,15 @@ class LiveController:
                                       overrides=self.cfg.loopguard_thresholds)
         envelope = tracker.envelope
         thr = loopguard.thresholds(tracker, self.cfg.loopguard_thresholds)
+        # The judge is woken only by a sign of trouble -- a repeated failure, or dense errors --
+        # once a turn has run `min_turns` calls; never merely because the turn outran this
+        # repository's usual length, which interactive turns do all the time (the experiments'
+        # agents ran under a turn cap, hence their envelope gate).
+        thr = dict(thr, gate_over_envelope=False,
+                   gate_min_turns=max(thr["gate_min_turns"], thr["min_turns"]))
         decision = g.fold(name, args, text, code, envelope=envelope, thr=thr,
-                          judge=self._judge(thr), nudge_budget=self.cfg.loopguard_nudges)
+                          judge=self._judge(thr, envelope),
+                          nudge_budget=self.cfg.loopguard_nudges)
         out = {}
         if decision:
             action, reason = decision

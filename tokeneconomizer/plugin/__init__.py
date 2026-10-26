@@ -14,7 +14,8 @@ fails open.
   * after a session -- `fold`: run `PrefixStage` and `ToolingStage` over the finished session,
                     off the agent's critical path; `denylist` writes an approved proposal into
                     the agent's own settings file;
-  * paid, opt-in -- `sidecall`, `judge`: LLM calls through the agent's own CLI, charged to the
+  * model calls  -- `sidecall`, `judge`: LLM calls through the agent's own CLI (the proposer
+                    with micro-skills on, the judge with the loop guard on), charged to the
                     session's ledger (`accounting`);
   * commands     -- `hook.main` (what the hooks execute) and `cli.main` (`te`), with
                     `toolcheck`, `repomap` and `probe` behind it.

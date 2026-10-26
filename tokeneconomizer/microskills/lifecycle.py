@@ -35,6 +35,21 @@ def edited_pyfiles(calls):
     return fs
 
 
+def edited_files(calls):
+    """Every file an edit tool wrote, by basename, whatever its language: the plugin's reading
+    (`Vocabulary.generic`). The experiments count Python files only (`edited_pyfiles`)."""
+    fs = set()
+    for tool, args, _ in calls:
+        if tool in ("edit", "multiedit", "write", "create", "str_replace_editor"):
+            p = args.get("file_path") or args.get("path") or ""
+            if p:
+                fs.add(os.path.basename(p))
+        elif tool == "apply_patch":
+            for p in args.get("paths") or ():
+                fs.add(os.path.basename(p))
+    return fs
+
+
 class Lifecycle:
     def __init__(self, key, high, drift=True):
         self.key = key

@@ -64,7 +64,7 @@ def _run_dir(workdir, trace_path):
 
 
 def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
-    profile = ctx.config.microskills_effective
+    profile = ctx.config.microskills
     if profile == "off":
         return None
     from tokeneconomizer.config import InjectionConfig
@@ -73,7 +73,10 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
                            propose_every=ctx.config.microskills_propose_every,
                            max_facts=ctx.config.microskills_max_facts,
                            max_tokens=ctx.config.microskills_max_tokens)
-    runner = sidecall.runner_for(ctx.host.name, ctx.config) if icfg.paid else None
+    # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
+    # still learns.
+    runner = (sidecall.runner_for(ctx.host.name, ctx.config)
+              if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}

@@ -225,6 +225,51 @@ def test_a_cd_into_the_start_directory_by_absolute_path_is_no_cd():
     assert o.form == "cd /elsewhere && python runtests.py"          # left the start: as typed
 
 
+def test_a_cd_up_to_the_repository_from_a_subdirectory_is_no_cd():
+    """Seen live on Pi: a session started in `pkg/` ran `cd <repository> && pytest -q`, which
+    was learned as a form of its own, spelled with that machine's path."""
+    kw = dict(cwd="", root="/r/pkg", top="/r")
+    assert observe.classify_command("cd /r && pytest -q", **kw)[0].form == "pytest"
+    assert observe.classify_command("cd .. && pytest -q", **kw)[0].form == "pytest"
+    o = observe.classify_command("cd /r && cd tests && python runtests.py app", **kw)[0]
+    assert o.form == "cd tests && python runtests.py"
+    # Anywhere else above the start is taken as typed: relative to the repository it would hold
+    # only for sessions that start there (seen in a home directory that is a repository).
+    o = observe.classify_command("cd /r/tests && python runtests.py app", **kw)[0]
+    assert o.form == "cd /r/tests && python runtests.py"
+    o = observe.classify_command("cd /elsewhere && pytest -q", **kw)[0]
+    assert o.form == "cd /elsewhere && pytest"
+    o = observe.classify_command("cd /r && pytest -q", cwd="", root="/r/pkg")[0]
+    assert o.form == "cd /r && pytest"                             # no repository known
+
+
+def test_the_repository_is_the_nearest_directory_holding_git(tmp_path):
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    (tmp_path / "repo" / "pkg" / "sub").mkdir(parents=True)
+    (tmp_path / "wt" / "pkg").mkdir(parents=True)
+    (tmp_path / "wt" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
+    assert observe.repository_top(str(tmp_path / "repo" / "pkg" / "sub")) == str(tmp_path / "repo")
+    assert observe.repository_top(str(tmp_path / "wt" / "pkg")) == str(tmp_path / "wt")
+    assert observe.repository_top("relative/path") is None
+    assert observe.repository_top(str(tmp_path / "repo" / "gone")) is None
+
+
+def test_sessions_started_in_a_subdirectory_learn_the_repositorys_plain_form(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    start = str(repo / "pkg")
+    tasks = [[_at(("Edit", {"file_path": f"{repo}/pkg/m{i}.py", "old_string": "a",
+                            "new_string": "b"}, "ok"), start),
+              _at(_sh(f"cd {repo} && pytest -q", "bash: line 1: pytest: command not found"),
+                  start),
+              _at(_sh(f"cd {repo} && python -m pytest -q", "1 passed in 0.1s"), start)]
+             for i in range(6)]
+    d, rendered = _stream(tmp_path, tasks)
+    assert "`pytest …` fails here with command not found" in rendered[-1]
+    assert str(repo) not in rendered[-1] and not any(str(repo) in k for k in d.facts)
+
+
 def test_a_command_stopped_by_its_own_cd_teaches_nothing(tmp_path):
     p = write_claude_transcript(str(tmp_path / "t.jsonl"), [
         _at(_sh("cd tests && python runtests.py app", "Exit code 1\n/bin/bash: line 1: cd: "

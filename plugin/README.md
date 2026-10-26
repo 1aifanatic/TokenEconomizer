@@ -216,7 +216,7 @@ redirect shows "● TokenEconomizer: …" in the conversation (and on stdout und
 
 **With your own model key (BYOK).** If Copilot answers *"Access denied by policy settings"*, your
 organization's policy refuses its models, and Copilot can use your own provider instead. The
-plugin works the same way there, except for its paid helpers (below). In your shell profile:
+plugin works the same way there, except for its model calls (below). In your shell profile:
 
 ```bash
 export COPILOT_PROVIDER_TYPE=anthropic                  # or openai, azure
@@ -237,10 +237,13 @@ export COPILOT_PROVIDER_MODEL_ID=claude-haiku-4.5        # the id Copilot config
 export COPILOT_PROVIDER_WIRE_MODEL=anthropic/claude-haiku-4.5   # the id OpenRouter bills
 ```
 
-Copilot does not pass these variables to the plugin's hooks, so under BYOK the paid helpers
-(`paid=true`) cannot reach your provider: their calls answer nothing, and each leaves a line in
-`~/.tokeneconomizer/errors.log`. Everything else, including `refresh-catalog` and `measure`,
-needs no provider. `~/.tokeneconomizer/bin/te --host copilot doctor` shows the route it sees.
+Copilot does not pass these variables to the plugin's hooks, so under BYOK its model calls
+(micro-skills' proposer, the loop guard's judge) cannot reach your
+provider: `copilot -p` asks to sign in instead. The first such answer leaves a line in
+`~/.tokeneconomizer/errors.log` and pauses those calls, and the next session start says so once;
+the facts that need no model call are still learned (`microskills=envfacts` keeps only those).
+Everything else, including `refresh-catalog` and `measure`, needs no provider.
+`~/.tokeneconomizer/bin/te --host copilot doctor` shows the route it sees, and a pause.
 
 To check the whole plugin on your own setup:
 
@@ -285,12 +288,18 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 
 ## What to expect
 
-- **Facts.** A fact forms once the same environment failure has come up in a few sessions (three
-  confirming ones, among at least four where it applied), and is injected at every session start
-  after that while the failure keeps occurring or keeps being prevented. A session start that
-  adds facts says so once, in one line. A resumed session keeps the facts it started with, word
-  for word, so its cached prompt still matches. `microskills` shows the facts injected and those
-  forming.
+- **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
+  any language or toolchain: the same environment failure coming up in a few sessions (a tool,
+  interpreter, build or test command that fails as typed and works spelled another way), with
+  no model call; and, every three sessions, a model reading digests of the recent ones (the
+  commands run, the build, test and lint commands among them, the files edited, and each
+  failing command with its error line, paths relative to the repository) and writing facts
+  about the repository, each with the patterns that test it against later sessions. A fact is
+  injected at every session start once later sessions have confirmed it (three confirming ones,
+  among at least four where it applied), and retired when one contradicts it. How much this helps
+  depends on the repository's state and the tasks you run in it. A session start that adds facts
+  says so once, in one line. A resumed session keeps the facts it started with, word for word, so
+  its cached prompt still matches. `microskills` shows the facts injected and those forming.
 - **Deny list.** Applied without asking you once a tool, package or server never used here has
   gone unused over ten prompts across at least two sessions, or over five sessions however short
   (three times as long for a few higher-risk tools), from the next session on; that session's
@@ -303,13 +312,20 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
   give back is never removed again (`toolprune apply NAME` removes one again). With
   `toolprune=propose`, it is only proposed, the session start says so, and nothing changes
   until you run `toolprune apply`. A file the plugin creates is added to `.git/info/exclude`.
-- **Loop guard.** Quiet on normal turns. On a turn that keeps failing the same way well past this
-  repository's usual length, one redirect is attached to a tool result; if the turn is still stuck
-  after it, a one-line notice tells you how to stop it. The plugin never stops a turn itself.
+  Each checkout keeps its own settings file: a repository's other clones share what it learned,
+  and each gets the list when one of its own sessions ends.
+- **Loop guard.** Quiet on normal turns, and it does nothing until a repository has a few turns
+  that ended with passing checks. A turn that keeps hitting the same failures, or piles up
+  errors, after `min_turns` tool calls is put to a judge model; only a confident "stuck" verdict
+  attaches one redirect (written by that model) to a tool result, and if the turn is still stuck
+  after it, a one-line notice tells you how to stop it. A long turn with no such sign is never
+  judged. A turn far past the repository's usual length that also keeps churning edits through
+  the same failures is redirected even if the judge disagrees. The plugin never stops a turn
+  itself.
   Where the notice appears, and how to stop, on each agent and in each mode:
   [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
 - **Cost.** `status` shows each session's tokens, priced after it ends, and the plugin's own
-  overhead, which is zero unless you turn on the paid helpers.
+  overhead: the loop guard's judge, and micro-skills' proposer when it is on.
 
 ## Commands
 
@@ -367,17 +383,17 @@ and are shared by every agent working in it. The examples use Claude Code's form
 **Turn a mechanism on or off:**
 
 ```text
-/tokeneconomizer:config set loopguard=off                 # the loop guard, in this repository
-/tokeneconomizer:config set toolprune=off microskills=on
-/tokeneconomizer:config set loopguard=off --global        # in every repository
+/tokeneconomizer:config set microskills=on               # micro-skills, in this repository
+/tokeneconomizer:config set toolprune=off loopguard=off
+/tokeneconomizer:config set microskills=on --global       # in every repository
 /tokeneconomizer:config                                # what is on, and every value in effect
 ```
 
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
-| Micro-skills | `microskills` | `envfacts`: facts found without model calls | `off`; `envfacts+distiller`, `distiller` add a paid fact proposer (need `paid=true`) |
+| Micro-skills (off by default) | `microskills` | `envfacts+distiller`: facts found without model calls, plus a model proposing facts every `microskills_propose_every` sessions | `off`; `envfacts`: only the facts found without model calls; `distiller`: only the proposer |
 | Tool pruning | `toolprune` | `auto`: applied once it forms and your sessions have been idle an hour, from the next session, and announced | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
-| Loop guard | `loopguard` | `nudge`: one mid-turn redirect, then a notice to you if the turn is still stuck | `off`; `stop` is read as `nudge`, with a warning |
+| Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, one mid-turn redirect, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**
 
@@ -392,7 +408,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 |---|---|---|
 | `microskills_max_facts` | `4` | the most facts injected at session start |
 | `microskills_max_tokens` | `150` | the size of the injected block, in tokens (about 4 characters each) |
-| `microskills_propose_every` | `5` | sessions between runs of the paid fact proposer |
+| `microskills_propose_every` | `3` | sessions between runs of the fact proposer (the first runs after the second session) |
 | `toolprune_evidence` | `10` | prompts a never-used tool must go unused, over at least `toolprune_min_sessions` sessions, before it is left out (three times as many for a few higher-risk tools; the web is never proposed) |
 | `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
 | `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
@@ -417,10 +433,10 @@ wins over both. Defaults at each preset:
 | `envelope_pct` | 90 | 90 | 90 | percentile of the repository's passing turns the envelope starts from |
 | `envelope_margin` | 1.5 | 1.25 | 1.0 | multiplier on that percentile |
 | `envelope_min_samples` | 7 | 5 | 3 | passing turns needed before the envelope is used |
-| `backstop_mult` | 3.5 | 2.5 | 1.8 | past this multiple of the envelope, a stuck turn is redirected, then flagged to you |
-| `judge_confidence` | 0.85 | 0.7 | 0.55 | with `paid=true`: how sure the model judge must be |
-| `gate_min_turns` | 24 | 18 | 12 | with `paid=true`: tool calls before the judge is asked |
-| `gate_error_outputs` | 8 | 8 | 8 | with `paid=true`: failing results that ask the judge early |
+| `backstop_mult` | 3.5 | 2.5 | 1.8 | past this multiple of the envelope, a turn the rule calls stuck is redirected even if the judge disagrees, then flagged to you |
+| `judge_confidence` | 0.85 | 0.7 | 0.55 | how sure the judge must be that a turn is stuck |
+| `gate_min_turns` | 24 | 18 | 12 | tool calls before the judge is asked (never fewer than `min_turns`) |
+| `gate_error_outputs` | 8 | 8 | 8 | failing results that ask the judge without a repeated failure |
 
 **Repository map** (off by default; see [Repository map](#repository-map)):
 
@@ -435,8 +451,7 @@ wins over both. Defaults at each preset:
 
 | Key | Default | Values |
 |---|---|---|
-| `paid` | `false` | allow the plugin's own model calls (see [Model calls](#model-calls-and-api-keys)) |
-| `paid_model` | `""` | model for those calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, `COPILOT_MODEL` on Copilot (unless it is `auto`) |
+| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, `COPILOT_MODEL` on Copilot (unless it is `auto`) |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
 
@@ -498,18 +513,21 @@ not rewritten, so the commands that fact recommends keep working.
 
 ## Model calls and API keys
 
-**By default the plugin makes no model calls.** Micro-skills, tool pruning and the loop guard
-all run locally.
-
-With `paid=true`, three helpers can call a model: the fact proposer, the loop guard's judge and
-the redirect writer. They run through **your own agent CLI** (`claude -p`; `codex exec` on
-Codex; `copilot -p`, with every tool removed, on Copilot; `pi -p`, with nothing loaded but the
-model, on Pi), so they use whatever your sessions already use: a Claude subscription or
-Anthropic API key, your Codex login or OpenAI key, Copilot's subscription, or the provider and
-login Pi is set up with. (Copilot with BYOK is the exception; see [Copilot CLI](#copilot-cli).)
-Their cost is billed there too, and shown in `status`. A call that gets no reply leaves a line in
-`~/.tokeneconomizer/errors.log`. `toolprune measure` on Claude Code makes its two calls the same
-way, and only when you run it.
+**By default the plugin's only model calls are the loop guard's**: its judge, asked about a turn
+that shows signs of looping, and, when the judge finds it stuck, the redirect it writes. Tool
+pruning never calls a model. Turning micro-skills on adds its fact proposer, once every
+`microskills_propose_every` sessions (`microskills=envfacts` keeps only the facts found without
+a model call); `loopguard=off` stops the judge with the guard. These calls run through **your
+own agent CLI** (`claude -p`; `codex exec` on Codex; `copilot -p`, with every tool removed, on
+Copilot; `pi -p`, with nothing loaded but the model, on Pi), so they use whatever your sessions
+already use: a Claude subscription or Anthropic API key, your Codex login or OpenAI key,
+Copilot's subscription, or the provider and login Pi is set up with. (Copilot with BYOK is the
+exception; see [Copilot CLI](#copilot-cli).) Their cost is billed there too, and shown in
+`status`. A call that gets no reply leaves a line in `~/.tokeneconomizer/errors.log`; one whose
+CLI answered that it is not signed in also pauses that agent's calls (the loop guard then
+redirects only at its backstop), the next session start says so once, and
+`config set microskills=on` (or `loopguard=on`) tries again. `toolprune measure` on Claude Code
+makes its two calls the same way, and only when you run it.
 
 ## Troubleshooting
 
@@ -520,5 +538,5 @@ way, and only when you run it.
 | `python 3.x (needs >= 3.10)` | install Python 3.10+ or set `TE_PYTHON` to one |
 | the deny list leaves nothing out after many sessions | run `toolprune refresh-catalog` (Claude Code, Copilot) |
 | a Codex deny list was applied but nothing changed | trust the project in Codex; `~/.tokeneconomizer/bin/te --host codex doctor` says whether it is trusted |
-| errors.log has `sidecall copilot: no reply` | the paid helpers cannot use a Copilot BYOK provider ([Copilot CLI](#copilot-cli)); turn `paid` off |
+| errors.log has `sidecall copilot: no reply`, and a session start says the plugin's model calls are paused | they cannot use a Copilot BYOK provider ([Copilot CLI](#copilot-cli)): micro-skills keeps its facts that need no model call (`microskills=envfacts` stops trying the proposer), and the loop guard redirects only at its backstop. Once Copilot is signed in, `config set microskills=on` (or `loopguard=on`) tries again |
 | `te` shows another agent's state | add `--host claude`, `codex`, `copilot` or `pi` |

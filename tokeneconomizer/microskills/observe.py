@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 
 from ..trace import call_cwds, load_trajectory, strip_rtk_prefix
-from .lifecycle import edited_pyfiles
+from .lifecycle import edited_files, edited_pyfiles
 
 
 # --------------------------------------------------------------------------------------
@@ -35,6 +35,14 @@ class Vocabulary:
     package_tools: frozenset
     fetch_heads: frozenset = frozenset({"curl", "wget"})
     env_probe_heads: frozenset = frozenset({"which", "command", "type", "whereis"})
+    # Tools whose `<tool> test` runs the tests.
+    task_heads: frozenset = frozenset({"make", "npm", "yarn", "pnpm", "cargo", "go"})
+    # Executables that build, compile, lint or type-check (the `run_build` intent).
+    build_heads: frozenset = frozenset()
+    # The language-neutral reading the plugin uses: builds and checks are an intent of their
+    # own, every edited file counts, and the proposer reads the generic digest
+    # (`distiller.build_generic_digest`). The experiments' vocabularies keep their narrower one.
+    generic: bool = False
 
 
 PYTHON_GIT = Vocabulary(
@@ -58,6 +66,31 @@ NODE_WEB = Vocabulary(
     runner_modules=frozenset(),
     package_tools=frozenset({"npm", "yarn", "pnpm", "corepack", "apt", "apt-get"}),
 )
+
+# The plugin's: every ecosystem at once, since a repository a person works in may mix them.
+GENERIC = Vocabulary(
+    name="generic",
+    interpreters=PYTHON_GIT.interpreters | NODE_WEB.interpreters
+    | frozenset({"ruby", "perl", "php", "Rscript", "julia", "lua", "elixir"}),
+    canonical_interpreter="python",
+    runner_heads=PYTHON_GIT.runner_heads | NODE_WEB.runner_heads
+    | frozenset({"rspec", "phpunit", "ctest", "bats"}),
+    runner_scripts=PYTHON_GIT.runner_scripts,
+    runner_modules=PYTHON_GIT.runner_modules,
+    package_tools=PYTHON_GIT.package_tools | NODE_WEB.package_tools
+    | frozenset({"gem", "bundle", "composer", "cargo", "go", "mvn", "gradle", "dotnet", "brew",
+                 "rustup", "pyenv", "nvm", "asdf"}),
+    task_heads=frozenset({"make", "npm", "yarn", "pnpm", "cargo", "go", "mvn", "gradle",
+                          "gradlew", "dotnet", "mix", "swift", "rake"}),
+    build_heads=frozenset({"make", "cmake", "ninja", "bazel", "tsc", "eslint", "prettier",
+                           "ruff", "flake8", "pylint", "mypy", "pyright", "black", "isort",
+                           "golangci-lint", "gcc", "g++", "clang", "javac", "webpack", "vite"}),
+    generic=True,
+)
+# `<tool> build`, `npm run lint`, ...: what a generic reading counts as building or checking.
+BUILD_SUBS = frozenset({"build", "check", "compile", "lint", "vet", "typecheck", "type-check",
+                        "clippy", "package", "verify", "fmt", "format"})
+_RUN_SCRIPT_HEADS = frozenset({"npm", "yarn", "pnpm", "bun"})
 
 DEFAULT_VOCAB = PYTHON_GIT
 # Module-level aliases of the default vocabulary, kept for the offline analyses.
@@ -191,10 +224,32 @@ class Observation:
         return f"Obs({self.intent},{self.form!r},{self.outcome})"
 
 
-def _cd_target(cur, target, root=None):
+def repository_top(start):
+    """The repository a directory belongs to: the nearest directory at or above `start` that
+    holds a `.git` (a directory, or a worktree's file); None when there is none on disk, or
+    `start` itself is gone (a removed checkout must not borrow an enclosing repository)."""
+    if not start or not os.path.isabs(start) or not os.path.isdir(start):
+        return None
+    d = os.path.normpath(start)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+
+
+def _cd_target(cur, target, root=None, top=None):
     """Where `cd target` from `cur` lands, relative to the directory the session started in
     ("" for that directory itself); None when it leaves it or cannot be told (`~`, `$VAR`,
-    `-`, an absolute path with no known start)."""
+    `-`, an absolute path with no known start).
+
+    A session started in a subdirectory of its repository (`top`) that changes up to the
+    repository's top runs what a session started there runs: `cd <top> && pytest` is the plain
+    `pytest`, not a form of its own spelled with one machine's path. Any other directory above
+    the start is taken as typed: relative to `top` it would hold only for sessions that start
+    there."""
     if not target or target[0] in "~$-":
         return None
     if os.path.isabs(target):
@@ -205,10 +260,15 @@ def _cd_target(cur, target, root=None):
         rel = os.path.normpath(os.path.join(cur or ".", target))
     if rel == ".":
         return ""
-    return None if rel == ".." or rel.startswith("../") else rel
+    if rel == ".." or rel.startswith("../"):
+        if not (top and root):
+            return None
+        at = os.path.normpath(os.path.join(root, rel))
+        return "" if at == os.path.normpath(top) else None
+    return rel
 
 
-def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None):
+def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None):
     """Observations for one shell command (possibly compound). Activation prefixes carry
     across the segments of one command, which is how `source activate X && python ...`
     becomes a single form. `vocab` names the domain's intents (default Python/git).
@@ -216,7 +276,8 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None):
     `cwd` is the directory the command started in, relative to the one the session started
     in (`root`, an absolute path when known): a shell that keeps its directory between calls
     runs a bare `python runtests.py` in `tests/` after an earlier `cd tests`, and that is the
-    same form as `cd tests && python runtests.py` typed at the start."""
+    same form as `cd tests && python runtests.py` typed at the start. `top` is the repository
+    `root` lies in (`repository_top`), for a `cd` up to it from a subdirectory (`_cd_target`)."""
     vocab = vocab or DEFAULT_VOCAB
     obs = []
     carried = ""
@@ -240,7 +301,7 @@ def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None):
         # the forms that follow, as an activation is.
         m = _CD_RE.match(seg)
         if m:
-            there = _cd_target(here, m.group(2), root) if here is not None else None
+            there = _cd_target(here, m.group(2), root, top) if here is not None else None
             if there is None:
                 here, cd = None, f"cd {m.group(2)} &&"
             else:
@@ -322,8 +383,22 @@ def _classify(head, base, rest, body, prefix, seg, call, vocab):
             return Observation(call, "run_tests",
                                form(f"{vocab.canonical_interpreter} " + head.lstrip("./")),
                                head, prefix, seg)
-    if base in ("make", "npm", "yarn", "pnpm", "cargo", "go") and rest and rest[0] == "test":
+    if base in vocab.task_heads and rest and rest[0] == "test":
         return Observation(call, "run_tests", form(f"{base} test"), head, prefix, seg)
+    if vocab.generic:
+        if base in _RUN_SCRIPT_HEADS and len(rest) > 1 and rest[0] == "run":
+            script = rest[1]
+            kind = script.split(":", 1)[0]
+            if kind == "test":
+                return Observation(call, "run_tests", form(f"{base} run {script}"), head, prefix,
+                                   seg)
+            if kind in BUILD_SUBS:
+                return Observation(call, "run_build", form(f"{base} run {script}"), head, prefix,
+                                   seg)
+        if base in vocab.task_heads and rest and rest[0] in BUILD_SUBS:
+            return Observation(call, "run_build", form(f"{base} {rest[0]}"), head, prefix, seg)
+        if base in vocab.build_heads:
+            return Observation(call, "run_build", form(base), head, prefix, seg)
     if base in vocab.env_probe_heads:
         return Observation(call, "probe_env", form(base), head, prefix, seg)
     if base in vocab.fetch_heads:
@@ -400,6 +475,12 @@ def _label_failed(labels, out):
 # (`| grep FAILED`, a silent run) proves nothing either way.
 _LOADED_RE = re.compile(r"\bRan [1-9]\d* tests?\b|\b[1-9]\d* (?:passed|failed|passing|failing)\b|"
                         r"\bcollected [1-9]\d* items?\b")
+# Other runners' summaries, for the generic reading: Go's `ok  pkg 0.01s` and `--- PASS`, Rust's
+# `test result:`, RSpec's `3 examples, 0 failures`, .NET's `Passed!`, Maven's `Tests run: 3`.
+_LOADED_GENERIC_RE = re.compile(r"^ok\s+\S+\s+[\d.]+s\b|^--- (?:PASS|FAIL)\b|"
+                                r"\btest result: (?:ok|FAILED)\b|"
+                                r"\b[1-9]\d* examples?, \d+ failures?\b|"
+                                r"\b(?:Passed|Failed)!\s+-|\bTests run: [1-9]\d*", re.M)
 # Code asking for an environment variable by name, and the ways a command sets one.
 _ENV_NEED_RE = re.compile(r"environment variable\s+['\"`]?([A-Z][A-Z0-9_]{2,})")
 _ENV_PREFIX_RE = re.compile(r"(?:^|[\s;&(])(?:export\s+)?([A-Z][A-Z0-9_]{2,})=(['\"]?)([\w.\-/:]+)\2")
@@ -491,9 +572,11 @@ def observe_task(transcript_path, vocab=None):
     having run; a failed call with no infrastructure error marks only the first relevant
     segment as having run and leaves the others unknown (an `&&` chain may not have reached
     them)."""
+    vocab = vocab or DEFAULT_VOCAB
     calls = load_trajectory(transcript_path)
     cwds = call_cwds(transcript_path)
     root = next((c for c in cwds if c), None)
+    top = repository_top(root)
     obs_all = []
     triples = []
     env_calls = []
@@ -508,14 +591,13 @@ def observe_task(transcript_path, vocab=None):
             continue                     # stopped at its `cd`: nothing after it ran
         here = ""
         if root and idx < len(cwds) and cwds[idx]:
-            here = _cd_target("", cwds[idx], root)
-            here = here if here is not None else None
+            here = _cd_target("", cwds[idx], root, top)
         if here is None:
             # Started outside the session's directory: its own `cd`s are taken as typed.
             obs = classify_command(cmd, idx, vocab)
         else:
-            obs = classify_command(cmd, idx, vocab, cwd=here, root=root)
-        if "python" in cmd or "=" in cmd:
+            obs = classify_command(cmd, idx, vocab, cwd=here, root=root, top=top)
+        if vocab.generic or "python" in cmd or "=" in cmd:
             ec = _env_calls(cmd, out, ok if _exit_code_hint(out) is None else
                             _exit_code_hint(out) == 0)
             if ec["need"] or ec["sets"]:
@@ -527,7 +609,8 @@ def observe_task(transcript_path, vocab=None):
                 o.labels = _test_labels(o)
                 o.label_err = bool(o.labels) and _label_failed(o.labels, out)
                 o.loaded = bool(o.labels) and not o.label_err and bool(_LOADED_RE.search(out))
-                o.tests_ran = bool(_LOADED_RE.search(out))
+                o.tests_ran = bool(_LOADED_RE.search(out) or (
+                    vocab.generic and _LOADED_GENERIC_RE.search(out)))
         # Pass-through segments (a leading `cd`, a trailing `| head`, an `echo ---`
         # separator) neither add evidence nor pollute the output, so they do not break a
         # call's homogeneity; filters that rewrite content (grep, sed, awk, wc) do.
@@ -539,7 +622,8 @@ def observe_task(transcript_path, vocab=None):
         err = error_class(out)
         if err in FORM_ERRORS or err in NETWORK_ERRORS:
             targets = [o for o in obs if o.intent in ("run_interpreter", "run_tests",
-                                                       "package_tool", "fetch_remote")]
+                                                       "run_build", "package_tool",
+                                                       "fetch_remote")]
             named = [o for o in targets
                      if (o.head and o.head in out) or (o.head and o.head.rsplit("/", 1)[-1] in
                                                         _error_line(out, err))]
@@ -560,7 +644,8 @@ def observe_task(transcript_path, vocab=None):
         else:
             first = True
             for o in obs:
-                if o.intent in ("run_interpreter", "run_tests", "package_tool", "fetch_remote"):
+                if o.intent in ("run_interpreter", "run_tests", "run_build", "package_tool",
+                                "fetch_remote"):
                     o.outcome = "ran" if first else None
                     first = False
                 else:
@@ -581,7 +666,8 @@ def observe_task(transcript_path, vocab=None):
                 if not homogeneous or not success or not out.strip() or err in NETWORK_ERRORS:
                     o.outcome = None
         obs_all.extend(obs)
-    return {"obs": obs_all, "edited": sorted(edited_pyfiles(triples)), "n_calls": len(calls),
+    edited = edited_files(triples) if vocab.generic else edited_pyfiles(triples)
+    return {"obs": obs_all, "edited": sorted(edited), "n_calls": len(calls),
             "env": env_calls}
 
 
