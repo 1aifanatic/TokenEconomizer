@@ -74,7 +74,7 @@ def test_no_runner_accepts_an_optimizer_model_argument():
 
 
 def test_the_old_env_knob_is_refused_not_read():
-    """TE_OPTIMIZER_MODEL used to select it. Silently ignoring a variable someone set is
+    """TE_OPTIMIZER_MODEL is not honoured. Silently ignoring a variable someone set is
     worse than refusing it, so every mention must be inside a raise."""
     for fname in _HARNESSES:
         tree = _tree(fname)
@@ -101,16 +101,15 @@ def test_the_driver_refuses_a_model_id_for_the_agent_label_flag():
 
 
 # ---------------------------------------------------------------------------------------
-# The mechanism call's TRANSPORT (2026-09-07).
+# The mechanism call's TRANSPORT.
 #
 # The MODEL is fixed by the assertions above -- the agent's own, so overhead is priced on
-# the task rows' basis. The WIRE is not, and it was costing the Copilot lane an order of
-# magnitude: `copilot -p` is an agent session that carries the CLI's system prompt and (until
-# the --excluded-tools fix) its whole tool schema on every one-shot mechanism call. Measured
-# on one 2,423-char judge prompt: 22,460 billed prompt tokens through the CLI vs 1,078 over
-# the Messages API, which the Claude harness has used for these calls all along.
+# the task rows' basis. The WIRE is not: `copilot -p` is an agent session that carries the
+# CLI's system prompt on every one-shot mechanism call, which a bare request over the
+# Messages API (what the Claude harness uses for these calls) does not. So a Copilot lane
+# that can reach the Messages API sends its mechanism calls there.
 #
-# So these guard the two things that must stay true of the new transport:
+# These guard the two things that must stay true of that transport:
 #   * it only ever points at an endpoint that bills WHAT THE TASKS BILL -- the lane's own
 #     Anthropic-typed BYOK provider -- and
 #   * on the GitHub subscription it never activates at all: the calls stay on the CLI.
@@ -170,8 +169,8 @@ def test_a_subscription_lane_always_keeps_the_cli():
 
 def test_the_optimizer_call_excludes_tools_and_not_only_denies_them():
     """--deny-tool withholds permission but leaves the schema in the prompt; only
-    --excluded-tools keeps it out. Passing just the first cost ~16,900 tokens of tool
-    schema on EVERY mechanism call, which the ledger charged to the arm."""
+    --excluded-tools keeps it out. Passing just the first leaves ~16,900 tokens of tool
+    schema on EVERY mechanism call, which the ledger charges to the arm."""
     copilot = importlib.import_module("te_harness.copilot")
     src = inspect.getsource(copilot.optimizer_call)
     assert "--excluded-tools" in src
@@ -189,14 +188,14 @@ def test_both_harnesses_branch_on_the_endpoint_and_record_the_transport():
 
 
 # ---------------------------------------------------------------------------------------
-# WHO pays for the transport preflight (2026-09-07).
+# WHO pays for the transport preflight.
 #
 # The preflight exists because anthropic_optimizer_call never raises: a dead mechanism
-# endpoint would leave an economized arm running as a baseline wearing its name. But it
-# fired at every runner construction, including `baseline` -- which makes no mechanism call
-# at all, so it was billing a probe it never needed and would refuse a lane over an endpoint
-# it never touches. `config.needs_optimizer` is the gate, and these pin it to the facade so
-# the two cannot drift.
+# endpoint would leave an economized arm running as a baseline wearing its name. It runs
+# only for an arm that makes mechanism calls: `baseline` makes none, so probing for it
+# would bill a call it never needs and refuse a lane over an endpoint it never touches.
+# `config.needs_optimizer` is the gate, and these pin it to the facade so the two cannot
+# drift.
 # ---------------------------------------------------------------------------------------
 def test_needs_optimizer_agrees_with_the_facade_for_every_arm():
     """The predicate must be true exactly when Economizer.__init__ would resolve a runner.
@@ -263,8 +262,8 @@ def test_both_harnesses_gate_the_preflight_and_default_to_checking():
 def test_every_runner_caps_the_optimizer_call_at_the_same_number():
     """One cap across both agents and both domains.
 
-    The Web-Bench Copilot runner sat at 8192 while the other three were 16384, which is a
-    hazard rather than an inconsistency: a cap too low truncates a judge's per-tool JSON
+    A runner with a lower cap than the others is a hazard rather than an inconsistency: a
+    cap too low truncates a judge's per-tool JSON
     into an unparseable answer, and the mechanisms read that as "no verdict" while the call
     is still billed. So the cell pays for a judge whose verdict was thrown away, and only
     the truncation log says so. Pin them equal.
@@ -286,7 +285,7 @@ def test_every_runner_caps_the_optimizer_call_at_the_same_number():
 
 
 # --------------------------------------------------------------------------------------
-# WHERE the mechanism call goes, and WHICH CREDENTIAL it sends (2026-09-07).
+# WHERE the mechanism call goes, and WHICH CREDENTIAL it sends.
 #
 # Exactly one header, because anthropic_optimizer_call never raises: a request the endpoint
 # refuses arrives as ("", 0.0) == "no verdict", and the arm quietly runs its LLM-free path
@@ -337,8 +336,8 @@ def test_a_byok_provider_gets_its_own_url_and_one_credential(monkeypatch, tmp_pa
 
 
 def test_every_runner_preflights_the_mechanism_endpoint():
-    """All FOUR runners, not just the Copilot pair. The two Claude runners had no probe,
-    which is why a 401 could bill 83 rows before the ledger showed overhead of zero."""
+    """All FOUR runners, not just the Copilot pair. A runner without the probe lets a
+    refused credential (a 401) bill a lane's rows before the ledger shows overhead of zero."""
     for fname, classes in (("swebench.py", ("ClaudeSwebenchRunner", "CopilotSwebenchRunner")),
                            ("webbench.py", ("WebBenchRunner", "CopilotWebBenchRunner"))):
         tree = _tree(fname)

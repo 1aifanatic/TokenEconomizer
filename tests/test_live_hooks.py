@@ -113,10 +113,9 @@ def prevented_session(path, repo, i):
 
 
 def test_an_injected_fact_that_prevents_its_failure_stays_injected(env, repo, tmp_path):
-    """The session-start hook injects; a fold in another process learns afterwards. Without
-    telling the fold which facts the session was given, a fact that prevented its failure
-    counted as not having fired, and decayed out of the block -- seen live on Codex, where
-    three injected sessions left a fact at 5/8 and later under its gate."""
+    """The session-start hook injects; a fold in another process learns afterwards. The fold is
+    told which facts the session was given, so a fact that prevented its failure counts as having
+    fired, and stays in the block."""
     for i in range(5):
         run_session(env, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
     starts = [run_session(env, repo, f"p{i}", prevented_session(str(tmp_path / f"p{i}.jsonl"),
@@ -814,8 +813,8 @@ def test_each_session_is_folded_once_and_priced(env, repo, tmp_path):
 
 def test_a_fold_that_cannot_take_the_lock_skips_and_the_session_is_still_folded_once(
         env, repo, tmp_path, monkeypatch):
-    """The double fold seen live: a paid fold holds the lock through its side call, a second
-    fold of the same session gave up waiting after 10 s and folded it again, unlocked."""
+    """A paid fold holds the lock through its side call; a second fold of the same session that
+    cannot take it skips, leaving the session for the holder or a later start: it is folded once."""
     import fcntl
     from tokeneconomizer.plugin import fold, hosts
     from tokeneconomizer.plugin.context import LiveContext
@@ -1002,10 +1001,10 @@ SIGNED_OUT = ("Error: No authentication information found. Copilot can be authen
 
 def test_a_signed_out_copilot_pauses_the_model_calls_and_says_so_once(env, repo, tmp_path,
                                                                      monkeypatch):
-    """Seen live under BYOK: Copilot does not pass the provider to the plugin's hooks, so the
-    proposer's `copilot -p` asked to sign in, every third session, each time leaving an empty
-    session behind. One such answer pauses the calls; the next start says so once, the facts
-    that need no model call still form, and `config set microskills=on` tries again."""
+    """Under BYOK Copilot does not pass the provider to the plugin's hooks, so the proposer's
+    `copilot -p` can ask to sign in. One such answer pauses the calls; the next start says so
+    once, the facts that need no model call still form, and `config set microskills=on` tries
+    again."""
     import subprocess
     from tokeneconomizer.plugin import cli, sidecall
     for k, v in env.items():

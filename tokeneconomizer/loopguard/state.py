@@ -19,7 +19,13 @@ TEST_RUN_RE = re.compile(
     r"\btox\b|\bnox\b|\btrial\b|python\d?\s+-c\b)", re.IGNORECASE)
 ERR_RE = re.compile(
     r"(Traceback \(most recent call last\)|\b\w*Error\b|\bFAILED\b|\bassert\b|"
-    r"Exception|errors during collection)", re.IGNORECASE)
+    r"Exception|errors during collection|"
+    # Other ecosystems' failing-test summaries, which name no error: TAP (`node --test`)
+    # `# fail 2` and `not ok 3`, mocha's and rspec's counts, JUnit's, and Go's `--- FAIL: T`
+    # and `FAIL<tab>pkg` (not unittest's `FAIL: test_x`, which would change the line a Python
+    # failure is known by, and so which failures count as repeats).
+    r"^# fail [1-9]|^not ok \d|\b[1-9]\d* (?:failing|failures?)\b|Failures: [1-9]|"
+    r"^(?-i:--- FAIL: |FAIL\t|FAIL$))", re.IGNORECASE | re.MULTILINE)
 _EDIT_TOOLS = ("edit", "str_replace", "create")
 # Tools whose output is the content of files, not the outcome of running anything: a test file
 # full of `assert` read back is not a failure, nor is reading it twice a repeated one.

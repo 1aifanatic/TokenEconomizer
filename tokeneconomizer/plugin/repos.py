@@ -1,21 +1,20 @@
 """Which repository's state a session belongs to, over time: session pins, the checkout index,
 carrying state over from an earlier key, and the listing behind `te repos`.
 
-Three things used to put one repository's sessions under several keys, or several repositories'
-sessions under one; each has its remedy here.
+Three things can put one repository's sessions under several keys, or several repositories'
+sessions under one; each is handled here.
 
   * A session that changes directory. Every hook names the directory the agent is in NOW --
-    Claude Code's `cwd` follows the agent's `cd` -- so a session that moved into another
-    repository was recorded under both. The first hook of a session pins it
+    Claude Code's `cwd` follows the agent's `cd` -- so a session that moves into another
+    repository would be recorded under both. The first hook of a session pins it
     (`<root>/sessions/<host>/<id>.json`), and every later hook, and the fold it hands off, uses
     the pinned repository: the one the session started in, which is also where the agent files
     its own session log.
-  * A key that changed. Up to 0.1.0 a checkout's folder name was part of the key, any `.git`
-    entry made a checkout (an empty one in a home directory took in every project below it), and
-    a repository's `origin` can move. The first time a checkout is seen (`index.json` remembers
-    the ones already seen) the state its earlier keys hold is sent where it belongs (`adopt`);
-    `te repos migrate` does the same for every state directory, and runs by itself, once, in
-    the background after an upgrade.
+  * A key that changed. Up to 0.1.0 a checkout's folder name was part of the key and any `.git`
+    entry made a checkout, and a repository's `origin` can move. The first time a checkout is
+    seen (`index.json` remembers the ones already seen) the state its earlier keys hold is sent
+    where it belongs (`adopt`); `te repos migrate` does the same for every state directory, and
+    runs by itself, once, in the background after an upgrade.
   * Sessions filed under a repository that is not theirs. Each recorded session names the
     directory it ran in; one whose directory now resolves to another repository moves there
     and is folded again, so that repository learns from it (`migrate_dir`).

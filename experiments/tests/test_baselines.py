@@ -324,10 +324,10 @@ def test_rtk_on_copilot_registers_through_the_hooks_dir_not_a_plugin(tmp_path, m
         $COPILOT_HOME/hooks/*.json   -> {"tool_name": "Bash", "tool_input": {...}}
         $COPILOT_HOME/settings.json  -> {"toolName": "bash",  "toolArgs":   {...}}
 
-    rtk parses only the first. The plugin this scaffold used to install delivered the
-    second, so rtk exited 0 with empty stdout on every call and rewrote nothing -- the arm
-    was native while every provenance field read healthy. Pin the channel, the document
-    shape rtk itself publishes, and the absolute command path."""
+    rtk parses only the first. A hook handed the second (as a plugin hook is) exits 0 with
+    empty stdout on every call and rewrites nothing -- the arm is native while every
+    provenance field reads healthy. Pin the channel, the document shape rtk itself
+    publishes, and the absolute command path."""
     monkeypatch.setenv("TE_SCAFFOLD_CACHE", str(tmp_path / "cache"))
     ctx = FakeCtx(COPILOT, tmp_path, exec_result=_copilot_exec)
     notes = scaffolds.get("rtk").setup(ctx)
@@ -350,8 +350,8 @@ def test_rtk_on_copilot_registers_through_the_hooks_dir_not_a_plugin(tmp_path, m
 
 
 def test_rtk_hook_effect_is_probed_not_assumed(tmp_path, monkeypatch):
-    """Registered and executable is still not REWRITING. The Copilot arm was silently
-    native for a week with both of those true, so the row carries the effect itself."""
+    """Registered and executable is still not REWRITING. A hook that parses nothing leaves
+    both of those true while the arm runs native, so the row carries the effect itself."""
     monkeypatch.setenv("TE_SCAFFOLD_CACHE", str(tmp_path / "cache"))
     ctx = FakeCtx(COPILOT, tmp_path, exec_result=_copilot_exec)
     notes = scaffolds.get("rtk").setup(ctx)
@@ -360,8 +360,8 @@ def test_rtk_hook_effect_is_probed_not_assumed(tmp_path, monkeypatch):
     assert probe, "the hook must be fed a payload in the shape its channel delivers"
     assert '"tool_name"' in probe[0] and '"tool_input"' in probe[0]
 
-    # ... and a hook that parses nothing (empty stdout, rc 0 -- exactly the old failure)
-    # is caught and said out loud rather than reported as a healthy install.
+    # ... and a hook that parses nothing (empty stdout, rc 0) is caught and said out loud
+    # rather than reported as a healthy install.
     def mute(script):
         return _ok("") if "hook copilot" in script and "tool_input" in script \
             else _copilot_exec(script)
@@ -460,7 +460,7 @@ def test_repomap_writes_the_map_and_records_its_size(tmp_path, monkeypatch):
 
 def test_repomap_preflight_demands_aider_on_the_host():
     """The generator is a subprocess of this interpreter, so a missing aider must stop the
-    lane at construction rather than yield 277 rows of `map_ok: false`."""
+    lane at construction rather than yield a lane of `map_ok: false` rows."""
     scaffold = scaffolds.get("repomap")
     try:
         import aider.repomap                                        # noqa: F401
@@ -475,10 +475,10 @@ def test_repomap_preflight_demands_aider_on_the_host():
 def test_repomap_preflight_names_the_interpreter_before_telling_you_to_install(monkeypatch):
     """"Install aider" is the WRONG advice for the likelier failure. The launchers run
     `${PYTHON:-python3}`, so a lane started from an unactivated shell picks up the system
-    Python even though the guide's `pip install -e '.[baselines]'` put aider in the venv.
-    Observed 2026-09-08: a detached lane died here on a host whose system Python carried
-    every other harness dependency, so only this one arm failed. The message must let that
-    reader diagnose it instead of reinstalling a package they already have.
+    Python even though the guide's `pip install -e '.[baselines]'` put aider in the venv,
+    and when that Python carries every other harness dependency this arm is the only one
+    that stops. The message must let that reader diagnose it instead of reinstalling a
+    package they already have.
     """
     real_import = builtins.__import__
 
@@ -501,9 +501,9 @@ def test_repomap_generator_keeps_aiders_console_off_stdout(tmp_path):
     """The scaffold takes the generator's stdout VERBATIM as the map body, and aider writes
     its progress line -- "Initial repo scan can be slow in larger repos, but only happens
     once." -- to stdout whenever more than 100 files are uncached, which is every SWE-bench
-    repository on every task. Left as it was, that sentence opened every repo map an agent
-    read (seen live, 2026-09-13). The generator routes aider's console to stderr while the map
-    is built, so stdout is the map and nothing else."""
+    repository on every task, so on stdout that sentence would open every repo map an agent
+    reads. The generator routes aider's console to stderr while the map is built, so stdout
+    is the map and nothing else."""
     pytest.importorskip("aider.repomap")
     pkg = tmp_path / "pkg"
     pkg.mkdir()

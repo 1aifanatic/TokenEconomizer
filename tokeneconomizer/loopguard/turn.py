@@ -16,7 +16,9 @@ window to recover.
     agent stopped on its own, the guard did not stop it, and no verification after its last edit
     failed (`resolved_proxy`).
 """
+import os
 import re
+import shlex
 import time
 
 from .rules import DEFAULT_THRESHOLDS, assess_abort, is_stuck, nudge_text
@@ -37,7 +39,137 @@ VERIFY_RE = re.compile(
     r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|go\s+test|cargo\s+(?:test|nextest)|"
     r"(?:mvn|mvnw|\./mvnw)\s+(?:\S+\s+)*test|(?:gradle|gradlew|\./gradlew)\s+(?:\S+\s+)*test|"
     r"make\s+(?:test|check)|ctest|rspec|phpunit|dotnet\s+test|swift\s+test|mix\s+test|"
-    r"deno\s+test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
+    r"deno\s+test|node\s+--test|bazel\s+test|(?:\./)?bin/test)(?![\w.\-/])")
+
+# A command line's exit status is its LAST command's, so it may not be the test run's: `npm test
+# 2>&1 | tail -n 8` exits with `tail`'s status, `pytest | grep FAILED` with `grep`'s, `python -m
+# unittest; echo "exit=$?"` and `npm test || true` with 0, and `pytest -q; git diff` with
+# `git`'s. For such a test run the runner's own summary line decides (`runner_verdict`). Without
+# one, a run whose status was replaced (a pipe, `||`, a report of the status) is read by its
+# output's markers, as for an agent that reports no status (Claude Code); a run followed by other
+# commands keeps the status the agent reported, since their output is in the result too.
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+_QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_SEP_RE = re.compile(r"(&&|\|\||\|&|(?<!>)\||;|\n)")    # `|`, but not the `>|` redirect
+# A runner asked for its help, version or test list, not to run the tests.
+_NOT_A_RUN_RE = re.compile(r"\s(?:-h|--help|--version|--collect-only|--co|--list\S*)(?!\S)")
+# What may precede the command itself: `FOO=1 timeout 60 npm test`.
+_PREFIX_RE = re.compile(r"^\s*(?:(?:\w+=\S*|time|nice|nohup|command|env|"
+                        r"timeout(?:\s+(?:-\S+|[A-Z]+|\d\S*))+)\s+)*")
+# What only reports on the run before it: `echo "exit=$?"`, `true`, `exit 0`.
+_REPORT_RE = re.compile(r"^\s*(?:echo|printf|true|:|exit)(?:\s|$)")
+_RANK = {"own": 0, "hidden": 1, "mixed": 2}
+
+
+def status_of_tests(cmd):
+    """What `cmd`'s exit status says of the test runs in it: None when it runs none; "own" when
+    it is theirs (a run is last, or followed only by `&&`, or piped under `pipefail`); "hidden"
+    when a pipe, `||` or a mere report of the status replaced it; "mixed" when other commands
+    ran after, their output in the result too. A command recorded as `bash -lc '<script>'`
+    (Codex) is judged by its script."""
+    if not isinstance(cmd, str):
+        return None
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        parts = []
+    if (len(parts) >= 3 and os.path.basename(parts[0]) in _SHELLS
+            and parts[1].startswith("-") and "c" in parts[1]):
+        cmd = parts[2]
+    pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
+    while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
+        del pieces[-2:]
+    pipefail = "pipefail" in cmd
+    found = None
+    for i in range(0, len(pieces), 2):
+        stage = pieces[i]
+        if not VERIFY_RE.match(_PREFIX_RE.sub("", stage)) or _NOT_A_RUN_RE.search(stage):
+            continue
+        status = "own"
+        for sep, then in zip(pieces[i + 1::2], pieces[i + 2::2]):
+            if sep == "&&" or (pipefail and sep in ("|", "|&")):
+                continue
+            if sep in ("|", "|&", "||"):
+                status = "hidden"
+                break
+            if not _REPORT_RE.match(then):
+                status = "mixed"
+                break
+            status = "hidden"
+        if found is None or _RANK[status] > _RANK[found]:
+            found = status
+    return found
+
+
+# A test runner's summary of its run, which holds whatever the command line's exit status.
+_RUN_FAILED_RE = re.compile("|".join((
+    r"\b[1-9]\d* (?:failed|errors?)\b.*\bin \d+(?:\.\d+)?s\b",    # pytest
+    r"^FAILED \((?:failures|errors)=",                             # unittest, Django
+    r"^tests finished:.*\b[1-9]\d* (?:failed|exceptions?)\b",      # sympy's bin/test
+    r"^# fail [1-9]",                                               # TAP (`node --test`)
+    r"^Tests:.*\b[1-9]\d* failed\b",                               # jest
+    r"^\s*Tests\s+[1-9]\d* failed\b",                               # vitest
+    r"^\s*[1-9]\d* failing\b",                                      # mocha
+    r"^(?:--- FAIL: |FAIL\t|FAIL$)",                                # go
+    r"^test result: FAILED",                                        # cargo
+    r"\b\d+ examples?, [1-9]\d* failures?\b",                       # rspec
+    r"Tests run: \d+, Failures: (?:[1-9]|0, Errors: [1-9])",        # JUnit (Maven, Gradle)
+    r"BUILD FAIL(?:URE|ED)")), re.MULTILINE)
+_RUN_PASSED_RE = re.compile("|".join((
+    r"\b\d+ passed\b.*\bin \d+(?:\.\d+)?s\b",
+    r"^OK(?: \(.*\))?\s*$",
+    r"^tests finished: \d+ passed",
+    r"^# fail 0\b",
+    r"^Tests:\s+\d+ passed",
+    r"^\s*Tests\s+\d+ passed",
+    r"^\s*\d+ passing\b",
+    r"^ok\s+\S+\s+(?:\d+(?:\.\d+)?s|\(cached\))",
+    r"^test result: ok\.",
+    r"\b\d+ examples?, 0 failures\b",
+    r"BUILD SUCCESS")), re.MULTILINE)
+
+
+def runner_verdict(text):
+    """True when a test runner's summary in `text` says its run failed, False when one says it
+    passed (and none failed), None when `text` holds no summary."""
+    if not text:
+        return None
+    if _RUN_FAILED_RE.search(text):
+        return True
+    return False if _RUN_PASSED_RE.search(text) else None
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        parts = []
+    if (len(parts) >= 3 and os.path.basename(parts[0]) in _SHELLS
+            and parts[1].startswith("-") and "c" in parts[1]):
+        cmd = parts[2]
+    pieces = _SEP_RE.split(re.sub(r"[(){}]", " ", _QUOTED_RE.sub("Q", cmd)))
+    while len(pieces) > 1 and not pieces[-1].strip():      # a trailing `;` or newline
+        del pieces[-2:]
+    pipefail = "pipefail" in cmd
+    for i in range(0, len(pieces) - 1, 2):
+        stage = pieces[i]
+        if not VERIFY_RE.match(_PREFIX_RE.sub("", stage)) or _NOT_A_RUN_RE.search(stage):
+            continue
+        hidden = False
+        for sep, then in zip(pieces[i + 1::2], pieces[i + 2::2]):
+            if sep in ("|", "|&"):
+                hidden = not pipefail
+                break
+            if sep == "||":
+                hidden = True
+                break
+            if sep in (";", "\n"):
+                if not _REPORT_RE.match(then):
+                    hidden = False
+                    break
+                hidden = True
+        if hidden:
+            return True
+    return False
+
+
 _EDIT = {"edit", "create"}
 
 
@@ -204,8 +336,15 @@ class TurnGuard:
 
         The body is `NudgeGuard.monitor` for a single completed call."""
         thr = thr or DEFAULT_THRESHOLDS
-        shell_edits = (shell_edit_targets((args or {}).get("command"))
-                       if canon_tool(name) == "bash" else [])
+        cmd = (args or {}).get("command") if canon_tool(name) == "bash" else None
+        shell_edits = shell_edit_targets(cmd) if cmd is not None else []
+        status = status_of_tests(cmd)
+        if status in ("hidden", "mixed"):
+            verdict = runner_verdict(result)
+            if verdict is not None:
+                exit_code = int(verdict)
+            elif status == "hidden":
+                exit_code = None
         failed = None if exit_code is None else exit_code != 0
         self.st.update(name, args or {}, result or "", failed)
         self.whole.update(name, args or {}, result or "", failed)

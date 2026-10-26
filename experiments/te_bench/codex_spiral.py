@@ -9,13 +9,22 @@ CLI invocation.  Codex exposes stronger signals and a native session-resume comm
 * ``thread.started.thread_id`` can be passed to ``codex exec resume``;
 * file-change events contain every changed path, not just a generic edit tool name.
 
-The policy below uses only those deterministic, locally observable signals.  It has
-no paid judge and never terminally aborts a task.  The live v1 policy has one trigger:
-after the resolved-task tool envelope, a patch spanning at least 15 distinct files has
-failed verification after its latest edit.  At most once per task it checkpoints that
-trajectory and continues the *same* Codex thread.  Broader failure-loop and post-green
-rules remain available for offline experiments but are disabled by default. An
-orthogonal, opt-in completion audit can use the same thread once when deterministic
+The policies below use only those deterministic, locally observable signals.  They have
+no paid judge and never terminally abort a task; every rule is a nudge on the *same* Codex
+thread.  Two profiles ship (`profile_policy`):
+
+* ``post-green`` (`SHIPPED_POLICY`): one nudge to finalize, once the task's own success
+  check has passed unfiltered, every named pytest scope that failed unfiltered has since
+  passed, and the trajectory has run past the resolved-task tool envelope;
+* ``defensive`` (`DEFENSIVE_POLICY`, what the Codex lane runs unless an arm says
+  otherwise, `CODEX_DEFAULT_PROFILE`): the same, plus every deterministic spiral signature
+  the controller knows -- repeated failing verification, a repeated command, blocked
+  retrieval, a wide or churning patch that keeps failing, a passing check re-run again and
+  again, a run past twice the envelope -- at most two nudges per task.
+
+The bare dataclass defaults (`DEFAULT_POLICY`) are a single trigger: after the envelope, a
+patch spanning at least 15 distinct files has failed verification after its latest edit.
+An orthogonal, opt-in completion audit can use the same thread once when deterministic
 end-state evidence shows an empty patch or a still-failing post-edit verification.
 """
 
@@ -173,18 +182,17 @@ class CodexSpiralPolicy:
     # to finalize when the task's own success check has passed UNFILTERED and the
     # trajectory has already run past the learned resolved-task envelope.  It is gated on
     # a trustworthy green, so it can never interrupt an unfinished task or trust a
-    # narrowed pass (the injection-v3 / xarray-7400 false-green trap).
+    # narrowed pass (a filtered green covers only a subset of the accepted set).
     post_green_finalize_enabled: bool = False
     # Grace after the trustworthy green before nudging: never interrupt the accept step
     # itself; only redirect the wandering that follows it.
     post_green_finalize_grace_turns: int = 3
-    # Live A/B lesson (xarray, seed 0): an unfiltered green on ONE test file does not
-    # prove the patch is done when ANOTHER scope still has an outstanding unfiltered
-    # failure.  Two false fires regressed resolve this way:
-    #   * xarray-7400: gold `test_concat.py` failed unfiltered, was re-run only FILTERED,
-    #     and the gate fired on an unfiltered green of a DIFFERENT file (`test_combine.py`).
-    #   * xarray-6857: the full-suite `pytest` failed unfiltered after the last edit and
-    #     was never cleared; the gate fired on a narrow green (`test_indexes.py`).
+    # An unfiltered green on ONE test file does not prove the patch is done when ANOTHER
+    # scope still has an outstanding unfiltered failure.  Two shapes of it:
+    #   * a test file failed unfiltered and was re-run only FILTERED, while a different
+    #     file then passed unfiltered;
+    #   * the full-suite `pytest` failed unfiltered after the last edit and has not passed
+    #     since, while a single file then passed.
     # When enabled, finalize additionally requires that NO named pytest scope (and not the
     # whole-suite scope) is carrying an outstanding unfiltered failure -- i.e. every scope
     # that ever failed unfiltered has since been re-run unfiltered and passed.
@@ -217,13 +225,12 @@ DEFAULT_POLICY = CodexSpiralPolicy()
 # WANDERING -- re-verifying, re-deriving the change from history, style/lint fishing. This
 # policy fires ONE same-thread nudge to finalize once the task's own success check has
 # passed UNFILTERED and the trajectory has run past the learned resolved-task envelope. It
-# is trustworthy-green gated (never trusts a narrowed `-k`/`--lf` pass) and, from the live
-# A/B, additionally requires that every named pytest scope that ever failed unfiltered has
-# since been re-run unfiltered and passed -- so a green on ONE file cannot mask an
-# outstanding unfiltered failure on ANOTHER (the xarray-7400 / xarray-6857 regressions its
-# predecessor hit). The wide-failure/recovery rules are disabled so this measures the
-# post-green lever alone. It never terminally aborts a task. It supersedes the single-v1,
-# hardened-v2 and post-green-v2 trials.
+# is trustworthy-green gated (never trusts a narrowed `-k`/`--lf` pass) and additionally
+# requires that every named pytest scope that ever failed unfiltered has since been re-run
+# unfiltered and passed -- so a green on ONE file cannot mask an outstanding unfiltered
+# failure on ANOTHER (without it, a failure on another file that has not been retired
+# reads as a finished patch). The wide-failure/recovery rules are disabled so this measures
+# the post-green lever alone. It never terminally aborts a task.
 PROFILE_VERSION = "codex-native-spiral-post-green-cleared-scopes"
 
 SHIPPED_POLICY = replace(
@@ -554,8 +561,8 @@ class CodexSpiralState:
         filtered = not green_is_trustworthy(command)
         scopes = verification_scopes(command)
         if event.exit_code == 0:
-            # A green targeted test/reproducer supersedes historical failures.  This is
-            # the signal the generic spiral path lost on xarray-6599.
+            # A green targeted test/reproducer supersedes earlier failures: the failure
+            # counters below restart from zero.
             if self.last_edit_turn and self.last_green_turn > self.last_edit_turn:
                 # already green after this edit: this run re-verifies a passing state
                 self.green_reruns_since_edit += 1
@@ -574,8 +581,8 @@ class CodexSpiralState:
                     self.outstanding_failure_scopes.clear()
                 else:
                     # A NARROW green retires only its own scope(s).  It must NOT clear a
-                    # whole-suite (`_ALL_SCOPE`) failure -- that was the xarray-6857 trap,
-                    # where a green on `test_indexes.py` masked an unresolved full-suite
+                    # whole-suite (`_ALL_SCOPE`) failure: a green on one file says nothing
+                    # about the rest of the suite, so it would mask an unresolved full-suite
                     # failure.  Only a whole-suite unfiltered green clears `_ALL_SCOPE`.
                     self.outstanding_failure_scopes -= scopes
             # Record whether THIS green was a full unfiltered pass.  Only a trustworthy
@@ -615,8 +622,8 @@ class CodexSpiralState:
             blocked = (policy.post_green_finalize_require_cleared_failures
                        and self.outstanding_failure_scopes)
             # `blocked`: somewhere an unfiltered test is still red on a scope this green
-            # did not retire (the xarray-7400 / xarray-6857 regression class) -- do not
-            # finalize on that ground. The rules below may still apply.
+            # did not retire -- do not finalize on that ground. The rules below may still
+            # apply.
             if (not blocked and self.currently_green and self.last_green_trustworthy
                     and self.first_trustworthy_green_turn
                     and self.turns - self.first_trustworthy_green_turn >= grace):
@@ -972,10 +979,9 @@ class CodexResumeGuard:
 
         The SHARED task loop (`te_harness.swebench` run_task) logs `guard.segment` right
         after a continuation, and the generic `spiral.NudgeGuard` exposes it -- so a Codex
-        guard without it crashes the lane on its FIRST fire, which is exactly what happened
-        on 2026-09-12 (the sol-era nudges ran on the other harness, so nothing had ever
-        exercised this path here). `nudges_done` carries the same count and is incremented
-        in `continuation()` before the log line reads it, so the two agree by construction.
+        guard must expose it too, or the loop raises on its FIRST nudge. `nudges_done`
+        carries the same count and is incremented in `continuation()` before the log line
+        reads it, so the two agree by construction.
         `tests/test_spiral.py` pins the whole attribute contract, not just this one name.
         """
         return self.nudges_done

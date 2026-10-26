@@ -1,14 +1,11 @@
 """The canonical index must describe the whole tree, or refuse to be written.
 
 `aggregate.py --arms` limits the REWRITE, not just the reading: both CSVs are written
-whole on every invocation. Naming a subset while writing to `<root>/index` therefore
-replaced an index describing the tree with one describing a subset, at the path
-`compare_arms.py` reads, under a name that says nothing about being partial.
-
-It is not a hypothetical. A stored Codex gpt-5.6-terra tree was found holding one arm
-(`repomap`, n=3) of the eight in the tree, because the Codex lane runs one arm per
-invocation and an `--arms` was passed once. Every cell was on disk; the index the
-comparisons read said the tree contained three task-runs.
+whole on every invocation. Naming a subset while writing to `<root>/index` would therefore
+replace an index describing the tree with one describing a subset, at the path
+`compare_arms.py` reads, under a name that says nothing about being partial -- with every
+cell still on disk. The Codex lane runs one arm per invocation, which makes an `--arms`
+an easy thing to pass, so the subset write to the canonical path is refused.
 
 These tests are offline: they build a tiny tree of synthetic `row.json` files and run
 `main()` against it.
@@ -79,7 +76,7 @@ def test_whole_tree_is_the_default(tree):
 
 
 def test_subset_rewrite_of_the_canonical_index_is_refused(tree):
-    """The defect: `--arms repomap` used to leave the index holding only repomap."""
+    """`--arms repomap` must not leave the canonical index holding only repomap."""
     _run([tree])                                     # a good index exists
     before = _cells(os.path.join(tree, "index"))
 

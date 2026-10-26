@@ -87,9 +87,8 @@ def test_the_plugin_reads_every_repository_generically(tmp_path):
 
 
 def test_the_proposer_keeps_its_window_across_folds(tmp_path, monkeypatch):
-    """The plugin reloads the proposer for every session. Its window of recent sessions was not
-    saved, so each tick saw one session, and a fact -- which must cite two -- could never be
-    admitted, however many calls were paid for."""
+    """The plugin reloads the proposer for every session, so its window of recent sessions is
+    saved with its state: a fact must cite two sessions."""
     monkeypatch.setattr(dist, "PROPOSE_EVERY", 3)
     prompts = []
 
@@ -111,6 +110,34 @@ def test_the_proposer_keeps_its_window_across_folds(tmp_path, monkeypatch):
     assert "build-before-test" in d.facts
     again = dist.Distiller.load("acme/tool", root, vocab=GENERIC)
     assert [dg["iid"] for dg in again.window] == ["s0", "s1"]
+
+
+def test_the_proposer_is_shown_the_facts_it_already_has(tmp_path, monkeypatch):
+    """The plugin's prompt shows each fact it holds with its claim, so a later run does not
+    author one again under a new id."""
+    monkeypatch.setattr(dist, "PROPOSE_EVERY", 3)
+    prompts = []
+
+    def runner(prompt, model):
+        prompts.append(prompt)
+        return json.dumps({"extractors": [], "facts": [{
+            "id": "build-before-test", "claim": "make test needs make build first",
+            "injection": "`make test` runs the built binary: run `make build` first.",
+            "detector": {"scope": r"make test", "confirm": r"make build"},
+            "cite": ["s0", "s1"]}]}), 100.0
+    root = str(tmp_path / "state")
+    for i in range(5):
+        d = dist.Distiller.load("acme/tool", root, runner=runner, vocab=GENERIC)
+        d.update(_session(tmp_path, i, [
+            ("Bash", {"command": "make build"}, "built"),
+            ("Bash", {"command": "make test"}, "ok  ./... 0.01s")]), iid=f"s{i}")
+        d.save(root)
+    assert len(prompts) == 2
+    assert "Existing facts, as `id: claim`" in prompts[0] and "(none)" in prompts[0]
+    assert "  - build-before-test: make test needs make build first" in prompts[1]
+    # the experiments' prompt still names the ids alone, as the paper ran it
+    p = dist.build_proposer_prompt("acme/tool", [], {"build-before-test": "x y z"}, set(), [])
+    assert "Existing fact ids (re-emit" in p and "\nbuild-before-test\n" in p and "x y z" not in p
 
 
 def test_the_experiments_proposer_prompt_is_the_papers():

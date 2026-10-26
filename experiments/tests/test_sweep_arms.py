@@ -253,10 +253,9 @@ def test_group_sizes_match_the_manifest_the_driver_filters_to():
     names. If those two numbers disagree by even one, SKIP_DONE never fires for that group
     and every resume silently re-runs completed, already-paid-for cells.
 
-    This is not hypothetical: `workloads.task_counts()` is the PROVENANCE record and
-    deliberately does not subtract SWEBENCH_EXCLUDED, so reading it here made the planner
-    expect 32 scikit-learn tasks for a run that executes 60 (31 published-minus-
-    excluded, plus the 29-id de-saturation extension).
+    `workloads.task_counts()` is not that number: it is the PROVENANCE record and
+    deliberately neither subtracts SWEBENCH_EXCLUDED nor adds SWEBENCH_ADDED, so a group
+    with an exclusion or a de-saturation extension runs a different count than it reports.
     """
     import json
     for domain in SP.SWEEP_ARMS:
@@ -380,9 +379,10 @@ def test_the_codex_spiral_arms_have_the_shape_the_injection_arms_have():
 def test_the_codex_family_relates_to_codex_trimech_as_the_generic_one_does_to_trimech():
     """The whole point of the Codex arms is that they are the SAME experiment on a second
     agent, so the two families must have the same shape -- not merely each be internally
-    consistent. Checked property by property rather than by eye, because the asymmetry that
-    actually occurred was invisible in the configs: every structural check passed while the
-    plain name `codex-spiral` carried a spiral `codex-trimech` did not compose.
+    consistent. Checked property by property rather than by eye, because an asymmetry
+    between the families is invisible in the configs: every other structural check passes
+    when a plain single-mechanism name such as `codex-spiral` carries a mechanism setting
+    its trimech does not compose.
     """
     GEN = ("trimech", "inject-only", "untool-only", "spiral-only")
     CDX = ("codex-trimech", "codex-inject", "codex-untool", "codex-spiral")

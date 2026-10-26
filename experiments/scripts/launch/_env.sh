@@ -35,9 +35,8 @@ te_load_env() {
 # te_dryrun_skips_billed <what> — true when this is a DRYRUN, so a BILLED probe must not run.
 #
 # A dry run is how a lane is costed before spending anything, so a probe that BILLS during
-# one contradicts the whole
-# point: DRYRUN=1 on a Copilot lane used to spend up to three premium requests and ~240 s
-# before printing "nothing was run".
+# one contradicts the whole point: on a Copilot lane the auth and model probes are up to
+# three premium requests and ~240 s.
 te_dryrun_skips_billed() {
   [[ "${DRYRUN:-0}" == "1" ]] || return 1
   echo "[env] DRYRUN: skipping the billed $1 probe" >&2
@@ -253,12 +252,12 @@ te_check_routing() {
 
 # te_copilot_refused <probe-output> — did the CLI refuse the probe outright?
 #
-# Both checks below used to key on the ABSENCE of one known error string, which meant any
-# other refusal read as success. A spent subscription is exactly that case and it is not
-# rare on a long sweep: the CLI prints "You have exceeded your monthly quota", the JSON
-# stream carries {"errorType":"quota","statusCode":402,"errorCode":"quota_exceeded"}, and
-# the auth probe still EXITS 0 -- so the launcher printed `token warm` and `model serves`
-# on an account that could not run a single task, and the lane then filled its cells with
+# Both checks below look for one known error string, and its ABSENCE is not success: any
+# other refusal would read as one. A spent subscription is that case, and it is not rare on
+# a long sweep: the CLI prints "You have exceeded your monthly quota", the JSON stream
+# carries {"errorType":"quota","statusCode":402,"errorCode":"quota_exceeded"}, and the auth
+# probe still EXITS 0 -- on its own the launcher would print `token warm` and `model serves`
+# for an account that cannot run a single task, and the lane would fill its cells with
 # turns=1 / eff_tok=0 rows that nothing aborts. Keyed on the vendor's own error text and
 # structured code, so it covers both the JSON and the plain-text probe shapes.
 te_copilot_refused() {
@@ -373,12 +372,12 @@ te_check_copilot_model() {
   out="$(timeout 120 "$bin" -p "ok" --no-color --log-level none \
            --model "$model" ${effort:+--effort "$effort"} 2>&1)"
   # Before the model verdict: a refused probe says nothing about the model, and reading it
-  # as "serves" is how a spent quota reached the run banner as all-green.
+  # as "serves" would put a spent quota on the run banner as all-green.
   te_copilot_refused_die "$out" "model"
   # Two "not served" shapes, one per billing path. The subscription says "is not
   # available"; a BYOK provider says "Model 'x' not found on provider at <url> (HTTP 404)".
-  # Keying on the first alone let a BYOK lane print `serves; effort accepted` for an id the
-  # provider 404s, then write a tree of turns=1 / eff_tok=0 rows (measured 2026-09-12).
+  # Keying on the first alone would let a BYOK lane print `serves; effort accepted` for an
+  # id the provider 404s, then write a tree of turns=1 / eff_tok=0 rows.
   if te_copilot_model_unserved "$out"; then
     # The same model under the other separator, once: the Copilot CLI's own catalog spells
     # the older Opus `claude-opus-4.8` while an Anthropic-wire BYOK provider takes

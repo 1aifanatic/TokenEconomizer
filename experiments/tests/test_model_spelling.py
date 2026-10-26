@@ -129,10 +129,10 @@ def test_copilot_model_check_is_silent_on_a_served_id(stub_copilot):
     assert log.read_text().split() == ["claude-sonnet-5"]
 
 
-def test_copilot_model_check_no_longer_false_passes_a_byok_404(stub_copilot):
-    """The check used to grep only the subscription's 'is not available'; a BYOK provider
-    says 'not found on provider ... (HTTP 404)', and the launch banner printed `serves`
-    for an id every task then 404'd on (measured 2026-09-12)."""
+def test_copilot_model_check_refuses_a_byok_404(stub_copilot):
+    """A BYOK provider says 'not found on provider ... (HTTP 404)', not the subscription's
+    'is not available', so the check must read both: on the first alone the launch banner
+    would print `serves` for an id every task then 404s on."""
     env, _ = stub_copilot
     env = dict(env, COPILOT_PROVIDER_BASE_URL="https://api.anthropic.com")
     p = _sh('te_check_copilot_model claude-sonnet-9 high', env)

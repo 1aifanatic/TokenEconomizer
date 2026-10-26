@@ -48,7 +48,7 @@ FIELDS = [
     # A row whose token fields could not be read in full (the agent was killed before its
     # terminal usage event, or its debug log was unparseable). Such a row is a LOWER BOUND
     # on cost, so it must be visible in the CSV the comparisons read -- an unflagged zero
-    # was previously indistinguishable from a genuinely free task.
+    # is indistinguishable from a genuinely free task.
     "usage_incomplete", "usage_incomplete_reason", "output_tokens_missing",
     # A row whose eval script never RAN (the grading `docker exec` failed -- usually the
     # container went away under us). `resolved` is False on such a row, which is
@@ -122,21 +122,21 @@ def _run_order(rj):
 def usage_incomplete(d):
     """(is_incomplete, reason) for one row: are its token fields a LOWER BOUND?
 
-    Two sources, because the flag has to cover rows written before it existed:
+    Two sources, because the flag has to cover rows from a harness that does not set it:
 
-      * The harness now says so itself. `te_harness` sets `usage_incomplete` when the agent
-        was killed before its terminal usage event and the row had to be rebuilt from the
+      * The harness says so itself. `te_harness` sets `usage_incomplete` when the agent was
+        killed before its terminal usage event and the row had to be rebuilt from the
         transcript (input/cache exact, `output_tokens` unrecoverable), or when Copilot's
         debug log could not be parsed.
-      * ROWS STORED BEFORE THAT FIX carry no flag at all -- they recorded a flat zero for
-        every token field and for `num_turns`. They are recognised by their signature: no
-        tokens, yet the task demonstrably ran (it resolved, or it left a patch). The
-        alternative reading, a task that really cost nothing and still produced a diff, is
-        not a thing that happens. Only guarded arms could produce these, so leaving them
-        unmarked biases every economized arm's mean DOWNWARD.
+      * A row with no flag is recognised by its signature (`legacy_zero_usage`): a flat
+        zero for every token field, yet the task demonstrably ran (it resolved, or it left
+        a patch). The alternative reading, a task that really cost nothing and still
+        produced a diff, is not a thing that happens. Only guarded arms kill a rollout
+        mid-stream, so leaving such rows unmarked would bias every economized arm's mean
+        DOWNWARD.
 
-    `pricing.effective_tokens` is deliberately left alone: this reports the defect, it does
-    not paper over it. A recovered figure is a floor and gets labelled as one.
+    `pricing.effective_tokens` is deliberately left alone: this reports the lower bound, it
+    does not paper over it. A recovered figure is a floor and gets labelled as one.
     """
     if d.get("usage_incomplete"):
         return True, d.get("usage_incomplete_reason") or "harness_flagged"
@@ -169,9 +169,9 @@ def vendor_usd(d):
 
     The runners write it as `cost_usd_vendor` (Claude Code's `total_cost_usd`, copied
     from its final `result` event); only the older curated exports carry it under the
-    plain name `cost_usd`. Reading just `cost_usd` -- which this script did until the
-    fix -- left the column EMPTY for every tree this repo generates. The COLUMN keeps its
-    name so its consumers keep working; only the source key is fixed.
+    plain name `cost_usd`. Reading just `cost_usd` would leave the column EMPTY for every
+    tree this repo generates. The COLUMN is still named `cost_usd` so its consumers keep
+    working; only the source key differs.
     """
     for k in ("cost_usd_vendor", "cost_usd"):
         v = d.get(k)
@@ -191,7 +191,7 @@ def vendor_cost_missing(d):
     """(missing, reason) for one row: did a task that RAN lose its vendor dollar figure?
 
     When the agent's final `result` event arrives without `total_cost_usd` the row stores
-    None, and until this flag nothing marked it. The row is not otherwise damaged, which
+    None, and nothing but this flag marks it. The row is not otherwise damaged, which
     is what makes it dangerous: token accounting is complete (so `usage_incomplete` stays
     False and the effective-token basis is exact) and the task grades normally, so the
     row looks healthy from every other column. Summing `cost_usd` across the cell then
@@ -378,10 +378,9 @@ def main():
     # every time, so narrowing the arm list while writing to the canonical <root>/index
     # replaces an index describing the tree with one describing a subset -- at the path
     # compare_arms.py reads, under a name that says nothing about being partial. A lane
-    # that runs one arm per invocation (the Codex lane) is the easy way to do it, and a
-    # tree was once left holding one arm of eight that way. So a subset write
-    # to the canonical path is refused rather than warned about -- pass --out to put the
-    # subset somewhere of its own, or drop --arms and aggregate the tree.
+    # that runs one arm per invocation (the Codex lane) is the easy way to do it. So a
+    # subset write to the canonical path is refused rather than warned about -- pass --out
+    # to put the subset somewhere of its own, or drop --arms and aggregate the tree.
     if args.arms and args.out is None:
         dropped = [a for a in present if a not in arms]
         if dropped:

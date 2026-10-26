@@ -1,22 +1,21 @@
 """Every runner in a RUNNERS registry must accept what its make_runner forwards.
 
-This is the gap a two-lane blocker went through. `make_runner` fans out to a concrete
-runner class:
+`make_runner` fans out to a concrete runner class:
 
     RUNNERS[agent](agent=agent, scaffold=scaffold, **kwargs)      # te_harness.swebench
 
-and `CopilotSwebenchRunner.__init__` did not take `scaffold`, so every Copilot SWE-bench
-cell raised TypeError at construction -- before task 0, for every arm including `baseline`
-where the value is None. Two of the sweep's eight lanes could not run at all.
+so a runner whose `__init__` does not take one of those keywords raises TypeError at
+construction -- before task 0, for every arm on that agent, `baseline` included, where the
+value is None. The whole agent's lanes cannot run.
 
-`run_experiment.load_runner` already guards against exactly this, but it inspects the
-FACTORY's signature, and a factory declared `def make_runner(agent=None, **kwargs)` accepts
-anything by definition -- so the guard passes and the concrete class raises. The check has
-to look at the classes the registry actually dispatches to.
+`run_experiment.load_runner` guards against this too, but it inspects the FACTORY's
+signature, and a factory declared `def make_runner(agent=None, **kwargs)` accepts anything
+by definition -- so that guard passes while the concrete class raises. The check has to
+look at the classes the registry actually dispatches to.
 
 Kept to `inspect`: no CLI, no Docker, no network, no credentials, so it runs anywhere the
-rest of the suite does. That is the point -- the whole failure was a signature mismatch, and
-the offline smoke test could not see it because RUNNER=stub never reaches these classes.
+rest of the suite does. That is the point -- a signature mismatch is visible offline, and
+the offline smoke test cannot see it because RUNNER=stub never reaches these classes.
 """
 import inspect
 

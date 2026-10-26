@@ -112,10 +112,8 @@ def summarize(path, raw=False, exclude_init=False):
         # is the paid live trace-judge; spiral_nudge_writer_tokens is the v6.1 targeted-nudge
         # writer. All are real mechanism-internal LLM cost that must be amortized into the
         # honest task cost. The overhead-key set is the SINGLE definition in
-        # economizer.ledger.OVERHEAD_KEYS is now tokeneconomizer.ledger.OVERHEAD_KEYS,
-        # shared with the emit path so the two never drift.
-        # (This now INCLUDES spiral_nudge_writer_tokens, previously emitted but never summed
-        # -- a latent under-count of amortized cost, fixed per the unified-ledger decision.)
+        # tokeneconomizer.ledger.OVERHEAD_KEYS, shared with the emit path so the two never
+        # drift; every key above, spiral_nudge_writer_tokens included, is summed.
         # BASIS: rows tagged mech_tokens_basis=="effective" carry cache-aware effective
         # tokens (same basis as exec) — sum directly. Legacy rows (no tag) carry RAW
         # face-value tokens: an UNDER-count of effective (mechanism calls are uncached

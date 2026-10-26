@@ -66,7 +66,7 @@ EFFORT_LEVELS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 # `apply_patch` is a harness artifact, not a mechanism result. These are CAPABILITY names
 # rather than tool names because that is the granularity Codex config operates at.
 PROTECTED_CAPABILITIES = frozenset({
-    "deferred_wait",      # CORE in codex_untool: pruning it provoked shell-polling
+    "deferred_wait",      # CORE in codex_untool: pruning it provokes shell-polling
     "apply_patch", "exec_command", "planning", "write_stdin",
 })
 
@@ -115,9 +115,9 @@ def codex_bin():
 def codex_vendor(binary=None):
     """The host vendor triple dir holding the static-PIE ELF the container runs.
 
-    Resolved from the Node shim's install tree rather than hardcoded: the AgentEO driver
-    pinned an absolute path under one machine's nvm prefix, which is exactly the kind of
-    machine-specific path the code must not carry. TE_CODEX_VENDOR overrides.
+    Resolved from the Node shim's install tree rather than hardcoded: an absolute path under
+    one machine's nvm prefix is exactly the kind of machine-specific path the code must not
+    carry. TE_CODEX_VENDOR overrides.
 
     Raises when the ELF is absent. Docker invents an EMPTY directory for a missing bind
     mount source rather than failing, so an unchecked bad path here becomes "codex: not
@@ -279,7 +279,7 @@ def verify_model(model, routing):
 # 0.146 driver used are rejected by 0.153.1 and are NOT here:
 #     web_search_mode = "disabled"   ->  now top-level  web_search = "disabled"
 #     [tools] view_image = false     ->  now  [features] view_image = false
-# Both were silently ignored by the newer CLI, which is the whole hazard: the pruning
+# Both are silently ignored by the newer CLI, which is the whole hazard: the pruning
 # becomes a no-op and the arm measures itself as useless while still being called
 # economized. `validate_config` is the gate that keeps this honest across CLI upgrades.
 #
@@ -308,13 +308,13 @@ _TOP_LEVEL_TOGGLES = {
 _TABLE_TOGGLES = {
     "collaboration": (("agents", "enabled = false"),
                       ("features", "multi_agent = false")),
-    # Only the TOP-LEVEL `web_search = "disabled"` (in _TOP_LEVEL_TOGGLES) remains.
+    # Only the TOP-LEVEL `web_search = "disabled"` (in _TOP_LEVEL_TOGGLES) is emitted.
     # codex-cli 0.153.1 emits a deprecation ERROR ITEM into the transcript for
     # `[features].web_search` -- "deprecated because web search is enabled by default; set
-    # `web_search` to live/indexed/cached/disabled at the top level" -- observed on a live
-    # preflight 2026-09-10. An error item per task is trace noise the mechanisms then read,
-    # and a deprecation becomes a hard failure sooner or later, so the redundant table
-    # entries are dropped in favour of the spelling the CLI itself names.
+    # `web_search` to live/indexed/cached/disabled at the top level". An error item per task
+    # is trace noise the mechanisms then read, and a deprecation becomes a hard failure
+    # sooner or later, so `web` has no table entry: the spelling the CLI itself names is the
+    # only one.
     "web": (),
     "goals": (("features", "goals = false"),),
     "skills": (),
@@ -415,12 +415,11 @@ def bundled_system_skills(binary=None, home=None, timeout=45):
     back to DEFAULT_SYSTEM_SKILLS and say so. Nothing is billed."""
     binary = binary or codex_bin()
     # mkdtemp + an explicit RETRYING cleanup, not TemporaryDirectory. The killed CLI (or a
-    # child it spawned) can still be writing under CODEX_HOME when we come to remove it, and
-    # a "Directory not empty" here failed the offline suite about one run in four.
-    # `ignore_cleanup_errors=True` also makes that non-fatal, but it gives up on the first
-    # error and LEAVES the directory: 899 MB of throwaway CODEX_HOMEs had accumulated in
-    # /tmp on this host by 2026-09-13. `_rmtree_quietly` retries the transient case first
-    # and only then ignores, so the common case is actually cleaned up.
+    # child it spawned) can still be writing under CODEX_HOME when we come to remove it, so
+    # a plain removal can hit "Directory not empty". `ignore_cleanup_errors=True` would make
+    # that non-fatal, but it gives up on the first error and LEAVES the directory, so every
+    # probe would strand a throwaway CODEX_HOME in /tmp. `_rmtree_quietly` retries the
+    # transient case first and only then ignores, so the common case is actually cleaned up.
     tmp = tempfile.mkdtemp(dir=home)
     try:
         with open(os.path.join(tmp, "config.toml"), "w", encoding="utf-8") as fh:
@@ -458,11 +457,10 @@ def _kill_process_group(proc):
     """Kill everything a probe started -- not just the process `Popen` returned.
 
     `codex` on PATH is the npm package's Node shim, which execs the native ELF as a CHILD.
-    `proc.kill()` reached only the shim: the native binary, pointed at a dead port, was
-    reparented to init and sat "waiting for network" for good. Every offline suite run
-    leaked one (six were alive on this host on 2026-09-30, the oldest five days old).
-    The probes therefore start in their own session, and the whole group goes -- also when
-    the shim has already exited, because its child can outlive it."""
+    `proc.kill()` reaches only the shim: the native binary, pointed at a dead port, is
+    reparented to init and sits "waiting for network" for good. The probes therefore start
+    in their own session, and the whole group goes -- also when the shim has already
+    exited, because its child can outlive it."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, AttributeError):
@@ -509,10 +507,10 @@ def config_toggles(capabilities):
     `capabilities` is the logical mask the mechanism froze for this task. A package with no
     supported config toggle contributes nothing here rather than a guess.
     """
-    # Checked against the RAW mask, before the CONFIG_CAPABILITIES filter. Filtering first
-    # made this guard dead code -- a protected package is not in CONFIG_CAPABILITIES, so it
-    # was silently dropped and the refusal never fired. The point is to reject a mask that
-    # ASKS for something protected, not to quietly honour the part of it that is safe.
+    # Checked against the RAW mask, before the CONFIG_CAPABILITIES filter: a protected
+    # package is not in CONFIG_CAPABILITIES, so filtering first would drop it silently and
+    # the refusal would never fire. The point is to reject a mask that ASKS for something
+    # protected, not to quietly honour the part of it that is safe.
     bad = PROTECTED_CAPABILITIES.intersection(capabilities or ())
     if bad:
         # The mechanism asserts this on its own side too; assert it here as well because
@@ -725,8 +723,7 @@ def run_env(extra=None):
 # across probes in the AgentEO study, whose accounting the published Codex rows used). So
 # fresh input is input - cached - cache_write, and folding the cache fields into
 # input_tokens instead would price ~90% cached re-reads at 1.0x where the vendor bills
-# 0.10x -- the same one-directional error that made Copilot rows look cheaper than Claude
-# rows before the 2026-09-05 cache-write fix. Reasoning tokens are folded into output
+# 0.10x, a one-directional error in the cost basis. Reasoning tokens are folded into output
 # because that is how they are billed.
 _USAGE_KEYS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
                "output_tokens", "reasoning_output_tokens")
@@ -922,10 +919,10 @@ def optimizer_call(prompt, *, configured_model, routing, max_tokens=16384,
     total_in = int(usage.get("input_tokens") or 0)
     # A reasoning model can spend the whole cap on reasoning and emit a ZERO-character
     # answer -- the caller then parses nothing and acts on nothing while the call is billed
-    # in full. The Claude path hit exactly this (7 of 40 manual-distill calls at an 8192
-    # cap) and answered it by raising the cap and saying so, not by lowering effort: effort
-    # is part of the cost basis and cutting it here would price mechanism overhead below
-    # what the arm really spends. So warn, loudly, and leave the knob to the operator.
+    # in full. The remedy, here as on the Claude path, is a larger cap, never a lower
+    # effort: effort is part of the cost basis and cutting it here would price mechanism
+    # overhead below what the arm really spends. So warn, loudly, and leave the knob to the
+    # operator.
     if data.get("status") == "incomplete" or not text.strip():
         why = ((data.get("incomplete_details") or {}).get("reason")
                or ("empty response" if not text.strip() else "unknown"))

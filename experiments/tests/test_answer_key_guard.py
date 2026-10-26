@@ -6,20 +6,20 @@ worthless. That is not an arm-level concern, so the block applies to every arm i
 `baseline`.
 
 The policy is ONE case-insensitive substring, `github`, and its narrowness is the whole
-argument. Re-derived 2026-09-09 over 3,538 stored run dirs / 558 network-shell calls: it
-matched 352, every one of them reading a repository's source, history, PR diffs or `.patch`
-files, with **0 false positives** (no `pip`/`npm`/`npx`/`yarn` install was blocked) and
-**0 misses** (nothing naming a `.patch`, a `/commit/`, a `/pull/`, a mirror, or a benchmark
-repo escaped it). The corpus in `_ABUSIVE` / `_LEGITIMATE` below is drawn from those calls
-so a future widening or narrowing of the rule has to face them.
+argument. Over 3,538 stored run dirs / 558 network-shell calls, every match reads a
+repository's source, history, PR diffs or `.patch` files, with **0 false positives** (no
+`pip`/`npm`/`npx`/`yarn` install matches) and **0 misses** (nothing naming a `.patch`, a
+`/commit/`, a `/pull/`, a mirror, or a benchmark repo falls outside it). The corpus in
+`_ABUSIVE` / `_LEGITIMATE` below is drawn from those calls so a future widening or narrowing
+of the rule has to face them.
 
 It is enforced twice, because a hook is only as good as the CLI's cooperation:
 
   * the PreToolUse HOOK -- exit 2 + a reason on stderr. Honoured by all three CLIs, each on
     its own terms: Claude Code's settings.json, the Copilot CLI's, and Codex's
     `$CODEX_HOME/hooks.json` under `--dangerously-bypass-hook-trust` (verified live on
-    codex-cli 0.153.1, 2026-09-30; before that date the Codex lanes ran without it). It is
-    the layer that tells the MODEL why, which a DNS failure cannot.
+    codex-cli 0.153.1). It is the layer that tells the MODEL why, which a DNS failure
+    cannot.
   * the /etc/hosts BLOCK -- the answer-key hosts pointed at 127.0.0.1 inside the task
     container. Needs no cooperation from any CLI, so it is identical on all three lanes and
     holds when a CLI release breaks a hook contract.
@@ -40,7 +40,8 @@ from te_harness.guards import net_guard
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Real commands, taken verbatim (truncated) from the stored transcripts.
+# Answer-key fetches the rule must block: patches, PR diffs, raw files, API searches, a
+# clone and urllib, across the GitHub hosts (truncated).
 _ABUSIVE = [
     "timeout 60 curl -sSL https://github.com/django/django/commit/2cbd3967.patch -o /tmp/fix.patch",
     "cd /tmp && curl -s -m 30 'https://patch-diff.githubusercontent.com/raw/scikit-learn/scikit-learn/pull/25102.diff'",
@@ -51,7 +52,7 @@ _ABUSIVE = [
     "timeout 90 curl -s 'https://api.github.com/repos/sympy/sympy/pulls/17340/files?per_page=100'",
     "curl -sL 'https://github.com/sympy/sympy/commit/9f4fb03c.diff' -o pr12419.diff",
 ]
-# Real legitimate network traffic from the same corpus. Blocking any of these would break a
+# Legitimate network traffic the rule must let through. Blocking any of these would break a
 # lane rather than protect it.
 _LEGITIMATE = [
     "pip install -e .",
@@ -68,12 +69,12 @@ _LEGITIMATE = [
 
 
 @pytest.mark.parametrize("cmd", _ABUSIVE)
-def test_every_observed_abuse_is_blocked(cmd):
+def test_every_answer_key_fetch_is_blocked(cmd):
     assert net_guard.decide(cmd)[0] is True, cmd
 
 
 @pytest.mark.parametrize("cmd", _LEGITIMATE)
-def test_no_observed_legitimate_call_is_blocked(cmd):
+def test_no_legitimate_call_is_blocked(cmd):
     assert net_guard.decide(cmd)[0] is False, cmd
 
 
@@ -96,7 +97,7 @@ def test_every_blocked_host_is_also_caught_by_the_shell_rule():
         assert net_guard.decide(f"curl https://{host}/x")[0] is True, host
 
 
-def test_hosts_block_is_wellformed_and_covers_the_measured_abuse_set():
+def test_hosts_block_is_wellformed_and_covers_the_answer_key_hosts():
     text = net_guard.hosts_block()
     assert text.startswith(net_guard.HOSTS_MARKER)
     assert text.endswith("\n")
@@ -110,7 +111,7 @@ def test_hosts_block_is_wellformed_and_covers_the_measured_abuse_set():
     # 127.0.0.1, not 0.0.0.0: nothing listens on 443 in a task container, so the connection
     # is REFUSED at once instead of hanging until a timeout.
     assert set(entries.values()) == {"127.0.0.1"}
-    # The hosts that actually appeared in the 352 measured accesses.
+    # The hosts that serve repository pages, the API, raw files, PR diffs and archives.
     for host in ("github.com", "raw.githubusercontent.com", "api.github.com",
                  "patch-diff.githubusercontent.com", "codeload.github.com"):
         assert host in entries, host
@@ -196,10 +197,9 @@ def test_answer_key_attempts_is_none_when_there_is_no_transcript():
 def test_both_domains_count_answer_key_attempts_through_one_seam():
     """Web-Bench rows carry it too, and off the same function.
 
-    Every Codex Web-Bench row before 2026-09-30 ran without the PreToolUse hook, guarded by
-    the namespace hosts block alone, so `answer_key_attempts` is the ONLY per-row leak
-    telemetry those rows have. It was absent from every Web-Bench row -- all three agents --
-    while the Codex docs told the reader to watch it.
+    It is the agent-independent count, so on a row whose `net_guard_installed` is false --
+    every Codex Web-Bench row, guarded by the namespace hosts block -- it is the ONLY
+    per-row answer-key telemetry, and every Web-Bench row must carry it, all three agents.
     """
     from te_harness import swebench, webbench
     assert webbench.answer_key_attempts is swebench.answer_key_attempts
@@ -231,7 +231,7 @@ def test_the_merge_program_appends_once_and_keeps_what_was_there(tmp_path):
 
 
 def test_codex_arms_its_hook_in_codex_home_and_with_it_the_trust_bypass():
-    """Codex honours the hook in `$CODEX_HOME/hooks.json` -- verified live 2026-09-30 -- but
+    """Codex honours the hook in `$CODEX_HOME/hooks.json` -- verified live on 0.153.1 -- but
     only under --dangerously-bypass-hook-trust, so registering it is what turns the flag on
     for every segment of the task, fresh and resumed alike."""
     from te_harness import codex, swebench
@@ -268,11 +268,10 @@ def test_the_codex_config_declares_no_hooks_table():
 def test_stop_never_raises_when_docker_hangs(monkeypatch):
     """`_stop` runs in run_task's `finally`, so anything it raises ends the whole STREAM.
 
-    Measured 2026-09-10: on a shared box at load ~96 with rootless Docker, `docker rm -f`
-    exceeded the 120 s default and the `TimeoutExpired` escaped the finally, ending a
-    60-task sympy lane at task 3. The task was already graded and its row already built --
-    a container we failed to remove costs disk (and `_reap_exited` collects it later), not
-    results. Same rule `_start` already follows.
+    On a loaded host with rootless Docker, `docker rm -f` can outlast its 120 s timeout, and
+    a `TimeoutExpired` must not escape the finally: by then the task is graded and its row
+    built, so a container that is not removed costs disk (and `_reap_exited` collects it
+    later), not results. `_start` follows the same rule.
     """
     import subprocess as sp
     from te_harness import swebench

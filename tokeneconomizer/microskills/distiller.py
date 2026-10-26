@@ -476,14 +476,26 @@ PROPOSER_SYSTEM_GENERIC = (_GENERIC_HEAD + PROPOSER_SYSTEM[len(_PROPOSER_HEAD):]
     "repro_written, importerror, badarg, ran_tests", ", ".join(GENERIC_PREDICATES))
 
 
-def build_proposer_prompt(repo, window, existing_ids, existing_feats, raw_excerpts,
+def build_proposer_prompt(repo, window, existing, existing_feats, raw_excerpts,
                           external=(), generic=False):
+    """`existing` maps each fact id to its claim (ids alone are accepted). The plugin's
+    (`generic`) prompt shows the claims, so a fact already held is not authored again under a
+    new id; the experiments' prompt names the ids alone, as the paper ran it."""
     view = [proposer_view(d) for d in window]
+    existing = existing if isinstance(existing, dict) else dict.fromkeys(existing, "")
+    if generic:
+        known = ("\n\nExisting facts, as `id: claim` (do NOT restate or paraphrase one under a "
+                 "NEW id; re-emit an id with ONLY detector.contradict changed to revise its "
+                 "contradiction condition, else use a NEW id for a fact not listed here):\n"
+                 + ("\n".join(f"  - {i}: {c}" if c else f"  - {i}"
+                              for i, c in sorted(existing.items())) or "(none)"))
+    else:
+        known = ("\n\nExisting fact ids (re-emit an id with ONLY detector.contradict changed to "
+                 "revise its contradiction condition, else use a NEW id):\n"
+                 + (", ".join(sorted(existing)) or "(none)"))
     p = ((PROPOSER_SYSTEM_GENERIC if generic else PROPOSER_SYSTEM)
          + f"\n\nRepo: {repo}"
-         + "\n\nExisting fact ids (re-emit an id with ONLY detector.contradict changed to "
-           "revise its contradiction condition, else use a NEW id):\n"
-         + (", ".join(sorted(existing_ids)) or "(none)")
+         + known
          + "\n\nExisting feature names:\n" + (", ".join(sorted(existing_feats)) or "(none)")
          + "\n\nTask digests (chronological):\n" + json.dumps(view, indent=1))
     if raw_excerpts:
@@ -606,7 +618,8 @@ class Distiller:
         abstaining = cov and (sum(cov) / len(cov)) < ABSTAIN_GATE
         excerpts = self._abstaining_excerpts()[:RAW_SAMPLE] if abstaining else []
         external = list(self.external_facts()) if self.external_facts else []
-        prompt = build_proposer_prompt(self.repo, self.window, set(self.facts),
+        prompt = build_proposer_prompt(self.repo, self.window,
+                                       {i: f.claim for i, f in self.facts.items()},
                                        set(self.extractors), excerpts, external=external,
                                        generic=self.generic)
         raw, eff = self.runner(prompt, self.model)

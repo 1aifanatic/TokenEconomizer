@@ -2,10 +2,9 @@
 repository, session pins, carrying state over from the keys 0.1.0 used, per-checkout deny lists,
 and `te repos`.
 
-Every case here was seen on a real state root (2026-10-19): an empty `~/.git` that filed every
-project under the home directory, a clone and a worktree whose folder names split one repository
-in three, a session recorded in two places because the agent `cd`-ed, and two sessions folded
-twice under two keys.
+The cases: an empty `~/.git` is no checkout of the projects below it; a clone and a worktree of
+one repository share its key, whatever their folder names; a session that `cd`s stays under the
+repository it started in; and a session is folded once, under one key.
 """
 import io
 import json
@@ -301,8 +300,8 @@ def test_where_a_compaction_found_the_agent_does_not_move_its_session(tmp_path, 
 
 
 def test_a_repositorys_own_state_is_not_merged_away_by_a_visiting_session(tmp_path, env):
-    """Seen on the first run against real state: the only session under a repository's key had
-    started in ~ and `cd`-ed in. It moves to ~; the repository's state directory stays."""
+    """A repository's only session started in ~ and `cd`-ed in: it moves to ~, and the
+    repository's state directory stays."""
     home = env["HOME"]
     repo_dir = git_repo(os.path.join(home, "widget"), "https://github.com/acme/widget")
     repo = paths.repo_identity(repo_dir, env)

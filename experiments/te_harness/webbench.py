@@ -277,47 +277,41 @@ def _ignored(rel, globs):
 # An agent that can browse is therefore not solving the task, it is retrieving the answer,
 # and the resolve verdict measures nothing.
 #
-# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across two live
-# development trees, 32 tasks reached the network and 14 pulled
-# something patch-shaped -- `sympy/pulls/16597/files`, `django/commit/2cbd3967.patch`,
-# `sphinx-doc/commit/0eff5818.patch`, `svg-chart/test/task-4.spec.js` -- and 13 of those
-# scored RESOLVED. The published claude-opus-4.8 trees are clean (0 of 800 transcripts),
-# so this is a model-behaviour change, not a harness regression: the older model simply
-# never reached for the network, and nothing ever stopped it.
-#
 # Blocked for EVERY arm, deliberately. Leaving it to the untool mechanism would be worse
 # than useless: untool drops a tool only after observing DISUSE, so precisely the agents
 # that browse keep the ability, and the arms would differ in whether they can cheat.
 # `TE_ALLOW_NETWORK_TOOLS=1` lifts it for a run that genuinely wants a browsing agent.
+#
 # The evaluator's `fetch` aborts a request after undici's default 300s headersTimeout
-# (measured 2026-09-07 on node v22.23.2: UND_ERR_HEADERS_TIMEOUT at 300.9s). Past that the
+# (on node v22.23.2: UND_ERR_HEADERS_TIMEOUT at 300.9s). Past that the
 # evaluator has already hung up, so our answer lands on a closed socket, the attempt is LOST
 # rather than merely slow, a retry is burned, and burning the last one ends the whole stream.
 # There is therefore NO Web-Bench configuration above ~300s that can help: a larger cap does
 # not buy the agent time, it only converts a slow task into a destroyed one.
 #
 # So this CLAMPS rather than trusting the environment. `TE_TASK_TIMEOUT` is shared with
-# SWE-bench, where 3600 is correct and necessary (sympy's slowest instances pinned 1800 dead
-# on), and that value silently truncated two Web-Bench streams at task-14 before the clamp
-# existed. `TE_WEBBENCH_TASK_TIMEOUT` overrides it for this domain only.
+# SWE-bench, where 3600 is correct and necessary (sympy's slowest instances need the full
+# 1800 and more), and on Web-Bench that value would lose attempts and truncate the stream.
+# `TE_WEBBENCH_TASK_TIMEOUT` overrides it for this domain only.
 #
 # The cap is COOPERATIVE -- checked between lines of the CLI's stream, so a turn already in
 # flight runs to completion. The ceiling is therefore `cap + longest single turn`, measured
 # at +16s and +21s on two Claude models. So the ceiling must sit well below
 # 300, not just under it: the default leaves ~60s for the overshoot and the hard max ~40s.
 # A 290 max would have allowed 290+21 = 311s, i.e. straight back over the wall.
-# 2026-09-21: the "no configuration above ~300s can help" above is true of WEB-BENCH's
-# config but NOT of Node's. `HttpAgent.request` (tools/http-agent) calls bare `fetch`, so it
-# uses undici's GLOBAL dispatcher, and that dispatcher's headersTimeout is settable from
-# outside the vendored benchmark via `--import` (webbench_undici_preload.mjs). Raising it is
-# opt-in through `TE_WEBBENCH_UNDICI_ABORT`; unset, everything below is byte-identical to
-# the old fixed 300/240/260. Rows taken at different ceilings are NOT comparable -- a run
-# that raised it completes tasks a 300s run would have destroyed.
+# The "no configuration above ~300s can help" above is true of WEB-BENCH's config but NOT
+# of Node's. `HttpAgent.request` (tools/http-agent) calls bare `fetch`, so it uses undici's
+# GLOBAL dispatcher, and that dispatcher's headersTimeout is settable from outside the
+# vendored benchmark via `--import` (webbench_undici_preload.mjs). Raising it is opt-in
+# through `TE_WEBBENCH_UNDICI_ABORT`; unset, the stock ceiling applies (abort 300s, default
+# cap 240s, max cap 260s) and the evaluator is spawned unchanged. Rows taken at different
+# ceilings are NOT comparable -- a run that raised it completes tasks a 300s run would
+# have destroyed.
 WEBBENCH_UNDICI_ABORT_DEFAULT_S = 300
 WEBBENCH_TASK_TIMEOUT_HEADROOM_S = 40      # cooperative-cap overshoot (+21s worst) + margin
 WEBBENCH_TASK_TIMEOUT_DEFAULT = 240
-# Back-compat names for the STOCK ceiling: the invariant they encode (cap < abort) is
-# still the contract, it is now just evaluated per-run by the two helpers below.
+# Names for the STOCK ceiling, kept for callers that import them: the invariant they
+# encode (cap < abort) is the contract, evaluated per run by the two helpers below.
 WEBBENCH_UNDICI_ABORT_S = WEBBENCH_UNDICI_ABORT_DEFAULT_S
 WEBBENCH_TASK_TIMEOUT_MAX = (WEBBENCH_UNDICI_ABORT_DEFAULT_S
                              - WEBBENCH_TASK_TIMEOUT_HEADROOM_S)
@@ -632,7 +626,7 @@ class WebBenchRunner:
         # so a cheaper proposer would understate the overhead the arm actually incurs --
         # the economized arm would look better for having billed its own thinking at a
         # discount. One model per cell is also what the cell name claims. There is no knob:
-        # TE_OPTIMIZER_MODEL used to be one and is now refused rather than half-honoured.
+        # TE_OPTIMIZER_MODEL is refused rather than half-honoured.
         if os.environ.get("TE_OPTIMIZER_MODEL"):
             raise RuntimeError(
                 "TE_OPTIMIZER_MODEL is no longer honoured: the between-task optimizer "
@@ -669,15 +663,12 @@ class WebBenchRunner:
         # Output cap for the between-task proposer / judge / nudge-writer call, same
         # default as the SWE-bench harness so mechanism overhead is comparable across
         # domains. This is the CLAUDE base class and `optimizer_call` below reads it, so
-        # it must be set here: the Copilot subclass overrides it (that CLI has no output
-        # cap flag of its own), and the stale comment this replaces claimed the Copilot
-        # rationale for the base, leaving `self.optimizer_max_tokens` undefined. The
-        # effect was an AttributeError on the FIRST proposer tick -- task 5 of every
-        # stream -- so `inject-only` and `trimech-web` died early in each Claude Web-Bench
-        # cell, and no LIMIT<5 pilot could reach it.
+        # it must be set here; the Copilot subclass sets its own (that CLI has no output
+        # cap flag of its own). The first proposer tick is task 5 of a stream, so a pilot
+        # shorter than five tasks never reaches this call.
         self.optimizer_max_tokens = int(os.environ.get("TE_OPTIMIZER_MAX_TOKENS", "16384"))
-        # Stated, not inferred: this harness has always used the Messages API for
-        # mechanism calls, which is the transport the Copilot harness now matches.
+        # Stated, not inferred: this harness makes mechanism calls over the Messages API,
+        # the same transport the Copilot harness uses.
         self.optimizer_transport = "api"
         # MUST stay under the evaluator's ~300s undici header timeout -- the same bound
         # CopilotWebBenchRunner documents, and it binds here for the identical reason.
@@ -685,10 +676,7 @@ class WebBenchRunner:
         # so our reply lands on a closed socket (BrokenPipeError out of do_POST), the answer
         # is DISCARDED, and the task is scored a pass@1 miss for a plumbing reason. Worse,
         # it burns a retry -- and when it burns the LAST retry the evaluator ends the whole
-        # stream, so every later task comes back UNREACHED. Measured 2026-09-07 in a
-        # development run: threejs/task-14 2nd attempt clipped at
-        # Request 300.858s and took tasks 15-20 down with it; svg-chart hit the same wall
-        # from task-6 on. The old 1800s default predated a model slow enough to reach it.
+        # stream, so every later task comes back UNREACHED.
         self.task_timeout = webbench_task_timeout()
         self.retry = max(1, int(os.environ.get("TE_WEBBENCH_RETRY", "2")))
         self.max_workers = int(os.environ.get("TE_WEBBENCH_MAX_WORKERS", "4"))
@@ -928,12 +916,11 @@ class WebBenchRunner:
         other. Applies to EVERY arm: an agent that can read the grading spec makes the
         resolve verdict meaningless, which is not an arm-level concern.
 
-        **Returns a bool now, and the row records it.** It used to return a log path and
-        never raise, so the Copilot subclass -- which inherited it unchanged and therefore
-        wrote a Claude-shaped `.claude/settings.json` the Copilot CLI does not read --
-        failed *silently*: `os.makedirs` and the write both succeeded, nothing was armed,
-        and the row carried only `net_guard_blocks: 0`, which is indistinguishable from
-        "armed and never fired". Confirmed on a live copilot/calculator run 2026-09-08.
+        **Returns a bool, and the row records it.** A successful write proves nothing: a
+        Claude-shaped `.claude/settings.json` is a file the Copilot CLI never reads, so the
+        write succeeds, nothing is armed, and `net_guard_blocks: 0` is indistinguishable
+        from "armed and never fired". So each agent names its own settings path, hook key
+        and entry shape, and the result is `_verify_net_guard`'s, not the write's.
         """
         path = self.net_guard_settings_path(home, run_dir_path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -969,7 +956,7 @@ class WebBenchRunner:
         payload spelling (`tool_input` vs `toolArgs`), the interpreter, or the script
         path, and all three are exercised here. What this does NOT prove is that the CLI
         invokes the hook at all; the file location, the hook key and the matcher name are
-        what carry that, and each is now set per agent rather than inherited.
+        what carry that, and each is set per agent rather than inherited.
         """
         probe = json.dumps({"tool_name": "Bash", "toolName": "bash",
                             "tool_input": {"command": self.NET_GUARD_PROBE},
@@ -1020,8 +1007,8 @@ class WebBenchRunner:
 
         Web-Bench's analogue of SWE-bench's `patch_excludes`: there the scaffold's files
         are subtracted from the graded diff, here they must be kept out of the answer the
-        evaluator's Writer applies. With no scaffold this is empty and `_collect` behaves
-        byte-identically to the pre-scaffold form.
+        evaluator's Writer applies. With no scaffold this is empty and `_collect` drops
+        nothing on its account.
         """
         if self.scaffold is None:
             return frozenset()
@@ -1073,10 +1060,11 @@ class WebBenchRunner:
         proc.stdin.close()
 
         result, stopped, deadline = {}, False, time.time() + self.task_timeout
-        # Same accounting hazard as the SWE-bench runner, and the same fix: the break paths
-        # below kill the CLI before its terminal `result` event. See
-        # swebench._UsageRecovery. It bites harder here -- the guard is re-made per ATTEMPT
-        # (`guard_per_attempt`), so there are more chances to stop mid-stream per task.
+        # Same accounting hazard as the SWE-bench runner, handled the same way: the break
+        # paths below kill the CLI before its terminal `result` event, so usage is recovered
+        # from what streamed (swebench._UsageRecovery). It matters more here -- the guard is
+        # re-made per ATTEMPT (`guard_per_attempt`), so there are more chances to stop
+        # mid-stream per task.
         recovery, stop_reason = _UsageRecovery(), None
         for line in proc.stdout:
             line = line.strip()
@@ -1115,11 +1103,11 @@ class WebBenchRunner:
         if err.strip() and not result:
             _log(f"webbench agent stderr: {err.strip()[:300]}")
         if not result:
-            # Same fix as the SWE-bench runner: `output_tokens` survives the kill in the
-            # CLI's own session log. Here the agent runs on the HOST with $HOME relocated
-            # per task, so it is a plain read rather than a `docker exec` (swebench
-            # `_session_log_text`). It bites harder on this runner -- the guard is re-made
-            # per ATTEMPT -- so more rows per task stood to be flagged.
+            # As in the SWE-bench runner, `output_tokens` survives the kill in the CLI's
+            # own session log. Here the agent runs on the HOST with $HOME relocated per
+            # task, so it is a plain read rather than a `docker exec` (swebench
+            # `_session_log_text`). The guard is re-made per ATTEMPT on this runner, so more
+            # rows per task are stopped mid-stream and depend on this read.
             result = recovery.synthesize(stop_reason or "no_result_event",
                                          _session_log_text_host(home))
         return result
@@ -1149,7 +1137,7 @@ class WebBenchRunner:
         globs = _load_ignore_globs(self.repo, project_dir)
         supplied = set(request_files or {})
         # A scaffold's own artifacts are never part of the agent's answer. Empty with no
-        # scaffold, so the collected set is byte-identical to the pre-scaffold form. Only
+        # scaffold, so nothing extra is dropped from the collected set. Only
         # files the REQUEST did not supply are dropped: if a project genuinely ships a file
         # by one of these names, it stays the agent's to edit.
         scaffold_files = self.scaffold_answer_excludes()
@@ -1398,8 +1386,8 @@ class WebBenchRunner:
         # The agent-independent half of the same question, counted off the trace rather
         # than off the hook: `net_guard_blocks: 0` reads identically on an armed guard that
         # never fired and on a guard that was never registered, so a row needs both. It
-        # matters most on the Codex lane, where the hook is not honoured at all and
-        # `answer_key_hosts_blocked` is what does the guarding.
+        # matters most on the Codex lane, where the hook is the second layer and
+        # `answer_key_hosts_blocked` the first.
         row["answer_key_attempts"] = answer_key_attempts(run_dir_path)
         # Scaffold provenance (rtk_installed / rtk_hook_registered / scaffold_error / ...).
         # A failed install ran the task NATIVE, so these fields are what tells a real
@@ -1455,8 +1443,8 @@ class WebBenchRunner:
             verbose=os.environ.get("TE_VERBOSE", "1") == "1")
         # `never_abort` is CONSERVATIVE-MODE-ONLY and absent from the vendored guard on
         # branches without trimech-safe -- see swebench.guard_accepts() for why it is
-        # probed. This used to pass it unconditionally, which made every guarded Web-Bench
-        # run on such a branch die with a TypeError at task 0.
+        # probed. Passed to a guard that lacks the parameter, it would raise TypeError at
+        # task 0 on every guarded Web-Bench run.
         if guard_accepts("never_abort"):
             guard_kwargs["never_abort"] = bool(run_kwargs.get("spiral_never_abort"))
         return NudgeGuard(**guard_kwargs)
@@ -1470,9 +1458,9 @@ class WebBenchRunner:
         its transcript, and the evaluator's grading settings live in a config file the run
         would otherwise not remember.
         """
-        # The SAME two-step the CLI invocation performs (see `_segment`): recomputing only
-        # the untool half here recorded `excluded_applied: []` on every row and made a
-        # guarded run byte-identical to an unguarded one in its own provenance.
+        # The SAME two-step the CLI invocation performs (see `_segment`), so
+        # `excluded_applied` includes the network block: recomputing only the untool half
+        # would make a guarded run's provenance identical to an unguarded one's.
         drop = [t for t in (exclude_tools or []) if t not in self.protected_tools]
         drop = drop + [t for t in network_tool_block() if t not in drop]
         cfg = {
@@ -1633,10 +1621,9 @@ class CopilotWebBenchRunner(WebBenchRunner):
         # and recording it as one makes pricing hard-fail at the END of a paid rollout.
         self.model = copilot.normalize_model(model or os.environ.get("COPILOT_MODEL"))
         copilot.validate_priceable(self.model, self.agent)
-        # Same rule as the Claude path: the optimizer is the agent's own model. It was
-        # already CALLED that way (optimizer_call substitutes self.model for the "agent"
-        # label), but it was RECORDED as "agent" -- so run_config.json described a cost
-        # basis the run did not use.
+        # Same rule as the Claude path: the optimizer is the agent's own model, and it is
+        # RECORDED as that model, not as the "agent" label optimizer_call substitutes it
+        # for -- so run_config.json names the cost basis the run actually used.
         if os.environ.get("TE_OPTIMIZER_MODEL"):
             raise RuntimeError(
                 "TE_OPTIMIZER_MODEL is no longer honoured: the between-task optimizer "
@@ -1687,10 +1674,10 @@ class CopilotWebBenchRunner(WebBenchRunner):
             self.scaffold.preflight(self.scaffold_profile_for("/nonexistent"))
             _log(f"scaffold: {self.scaffold.name} (external baseline)")
         # 16384, matching every other runner: one cap for the mechanisms' calls across
-        # both agents and both domains. It was 8192 here alone, which is a real hazard
+        # both agents and both domains. A lower cap here alone would be a real hazard
         # rather than a tidiness point -- a cap too low truncates a judge's per-tool JSON
         # into an unparseable answer, which reads downstream as "no verdict" while still
-        # billing the call. Raising it can only remove truncations, never add them.
+        # billing the call.
         self.optimizer_max_tokens = int(os.environ.get("TE_OPTIMIZER_MAX_TOKENS", "16384"))
         # Under the evaluator's ~300s undici header timeout, for the chain-integrity reason
         # documented on the Claude agent: a segment that outlives it breaks the stream.
@@ -1739,10 +1726,9 @@ class CopilotWebBenchRunner(WebBenchRunner):
         return {"COPILOT_HOME": self.scaffold_copilot_home(run_dir_path)}
 
     # Copilot reads hooks from `$COPILOT_HOME/settings.json` -- NOT `$HOME/.claude/`, and
-    # not `hooks.json` (probed on CLI 1.0.83, 2026-09-08: a `hooks.json` at that level is
-    # ignored, a `settings.json` fires). Inheriting the Claude path wrote a file this CLI
-    # never reads, which is why every Copilot Web-Bench row was unguarded while reporting
-    # nothing wrong.
+    # not `hooks.json` (on CLI 1.0.83 a `hooks.json` at that level is ignored, a
+    # `settings.json` fires). The inherited Claude path names a file this CLI never reads,
+    # so the path, the key and the entry shape are all overridden here.
     NET_GUARD_HOOK_KEY = "preToolUse"
 
     def net_guard_settings_path(self, home, run_dir_path):
@@ -1789,13 +1775,13 @@ class CopilotWebBenchRunner(WebBenchRunner):
         net guard's `settings.json`. Run as-is, either would land in the operator's REAL
         config and stay there after the sweep.
 
-        `COPILOT_HOME` is a separate knob from `$HOME`, so the fix is to point only that at
-        a per-task dir and copy in the small auth/config files (the 29MB of `session-state`
-        is disposable). The package cache stays where it is.
+        `COPILOT_HOME` is a separate knob from `$HOME`, so only that is pointed at a
+        per-task dir, with the small auth/config files copied in (the 29MB of
+        `session-state` is disposable). The package cache stays where it is.
 
         Used on **every** arm, not only scaffolded ones -- the net guard is unconditional,
-        so there is no arm that leaves this dir untouched. (The name is historical: it was
-        scaffold-only when scaffolds were the only writer.)
+        so there is no arm that leaves this dir untouched. (The name says scaffold, but the
+        net guard writes here too.)
         """
         dest = os.path.join(run_dir_path, ".copilot-home")
         if os.path.isdir(dest):
@@ -1836,21 +1822,17 @@ class CopilotWebBenchRunner(WebBenchRunner):
         # deliberately left alone so the ~170MB package cache under $HOME/.cache/copilot is
         # not orphaned per task.
         #
-        # This used to be scaffold-only, on the reasoning that a no-scaffold arm writes
-        # nothing into the config dir and should stay byte-identical to the pre-scaffold
-        # form. The net guard ended that: it applies to every arm, it needs a hook in this
-        # file, and writing one into the operator's REAL ~/.copilot -- then leaving it
-        # there after the sweep -- is exactly the damage the scaffold branch existed to
-        # prevent. So the isolation is now unconditional, which is also one fewer
-        # behavioural difference between the arms.
+        # Unconditional, not scaffold-only: the net guard applies to every arm and needs a
+        # hook in this file, and writing one into the operator's REAL ~/.copilot -- then
+        # leaving it there after the sweep -- is exactly the damage this isolation exists
+        # to prevent. It is also one fewer behavioural difference between the arms.
         env["COPILOT_HOME"] = self.scaffold_copilot_home(os.path.dirname(workspace))
         # A scaffold installs its binary into the per-task bin dir, and on this lane the
         # AGENT's own shell has to find it -- not just the install step. rtk's hook rewrites
         # `ls -la` into `rtk ls -la` and hands that back to the CLI to run, so a bin dir
         # missing from PATH means every rewritten call dies `rtk: command not found`. That is
-        # not a silent no-op: reproduced 2026-09-13, the agent flails against the failing
-        # command (19 shell calls for one `ls`), which is the same shape as the 12x-cost
-        # Web-Bench incident in baselines/rtk._hook_binary. Harmless and empty with no
+        # not a silent no-op: the agent retries against the failing command, many shell
+        # calls for one `ls`, and the task's cost multiplies. Harmless and empty with no
         # scaffold. $HOME is still deliberately left alone (the package cache above).
         env["PATH"] = os.pathsep.join(
             [self.scaffold_bin_dir(self.agent_home(os.path.dirname(workspace))),
@@ -1967,9 +1949,11 @@ class CodexWebBenchRunner(WebBenchRunner):
     **The answer-key guard is the part that needed new machinery, and it is the reason this
     class exists rather than a two-line registration.** Web-Bench runs the agent on the HOST
     with no per-task container, so the other two agents are guarded by a PreToolUse hook --
-    which Codex provably ignores (measured on 0.153.1 with two live probes; see
-    `swebench.CodexSwebenchRunner._install_net_guard`). On SWE-bench the fallback is the
-    container's `/etc/hosts`; there is no container here. Two candidates were measured:
+    which Codex runs only from its own hook file and only under
+    `--dangerously-bypass-hook-trust` (see `_install_net_guard` below), so here it is the
+    second layer, not the first. On SWE-bench the primary layer is the container's
+    `/etc/hosts`; there is no container here, and of the two host-side ways to get the same
+    block only one works:
 
       * **Codex's own sandbox** (`codex sandbox`) denies network exactly as wanted -- but on
         0.153.1 it also denies every write, and `sandbox_workspace_write.writable_roots` /
@@ -1977,15 +1961,15 @@ class CodexWebBenchRunner(WebBenchRunner):
         `--strict-config` and as `-c` overrides. An agent that cannot write cannot do a
         Web-Bench task, so this is unusable on this build.
       * **An unprivileged user+mount namespace** carrying the same `/etc/hosts` block the
-        SWE-bench container gets. Measured here: `github.com` resolves to 127.0.0.1 and curl
+        SWE-bench container gets. Inside it `github.com` resolves to 127.0.0.1 and curl
         fails, `registry.npmjs.org` still resolves, writes still work, and files created
         inside are owned by the real user outside. This is what
         the lane uses, so the Codex Web-Bench row is guarded by the same DNS layer as the
         Codex SWE-bench row -- and needs no cooperation from the CLI, which is the property
-        the hook lacked.
+        no hook has.
 
-    `net_guard_installed` is therefore False on this lane, honestly, and
-    `answer_key_hosts_blocked` is the field that says the lane is guarded.
+    A row records both layers: `net_guard_installed` for the hook, and
+    `answer_key_hosts_blocked` for the namespace block, the primary one.
     """
 
     # Built once: `unshare` must exist and unprivileged user namespaces must be permitted,
@@ -2045,8 +2029,7 @@ class CodexWebBenchRunner(WebBenchRunner):
         # Fields the INHERITED lifecycle reads. They are set here rather than left to the
         # base __init__ (which this class does not call, because it resolves the Anthropic
         # key) and a test pins the whole set, since the failure mode is an AttributeError
-        # raised after the evaluator has started and the first task has been paid for --
-        # which is exactly how the missing one was found, on a live run.
+        # raised after the evaluator has started and the first task has been paid for.
         self.routing_base = self.routing["base_url"]
         self.optimizer_transport = "api"    # codex.optimizer_call, always over /v1/responses
         self.claude = None                  # no Claude binary on this lane
@@ -2103,13 +2086,13 @@ class CodexWebBenchRunner(WebBenchRunner):
         return os.path.join(home, "hooks.json")
 
     # Set per task by `_install_net_guard`; `_segment` passes the trust bypass only when it
-    # is True, so an unarmed task runs exactly the argv it always did.
+    # is True, so an unarmed task runs without it.
     _net_guard_armed = False
 
     def _install_net_guard(self, home, run_dir_path=None):
         """The shared installer, pointed at Codex's hook file -- and Codex honours it.
 
-        Verified live on codex-cli 0.153.1 (2026-09-30): with this file and
+        Verified live on codex-cli 0.153.1: with this file and
         `--dangerously-bypass-hook-trust` the guard refused a GitHub-bound command before it
         ran and logged it, while a control command ran. Without the bypass Codex skips every
         hook nobody has approved in /hooks, which an unattended run cannot do -- so arming
@@ -2328,8 +2311,8 @@ class CodexWebBenchRunner(WebBenchRunner):
         row["turns_basis"] = "codex_steps"
         row["codex_config_capabilities"] = list(self._capabilities)
         row["codex_lean_instructions_tokens"] = int(self._lean_instructions_tokens or 0)
-        # This lane's honest guard fields: the hook is not honoured, the hosts block is.
-        row["net_guard_installed"] = False
+        # Both layers as they were this task: the hook (`net_guard_installed`, which the
+        # shared lifecycle set from whether it armed) and the namespace hosts block.
         row["answer_key_hosts_blocked"] = bool(self.answer_key_ns)
         if self.scaffold_name == "rtk":
             row.update(codex.rtk_compliance(os.path.join(out_dir, "transcript.jsonl")))
@@ -2341,8 +2324,8 @@ class CodexWebBenchRunner(WebBenchRunner):
     # snapshots, session rollouts -- which is ~38 MB PER TASK-RUN and would put ~19 GB of
     # throwaway CLI state in the results tree over a five-project, five-seed sweep. The
     # SWE-bench lane has no equivalent problem because its CODEX_HOME lives inside the task
-    # container and dies with it; this restores that parity. TE_KEEP_WORKSPACES=1 keeps
-    # everything, the same knob that keeps the workspace itself.
+    # container and dies with it; pruning here gives the host lane the same footprint.
+    # TE_KEEP_WORKSPACES=1 keeps everything, the same knob that keeps the workspace itself.
     _AGENT_HOME_KEEP = ("config.toml", "instructions.md", "AGENTS.md", "RTK.md")
 
     def _prune_agent_home(self, run_dir_path):

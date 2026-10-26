@@ -21,9 +21,9 @@ Two integration modes, and the row says which one ran (`rtk_mode`):
 token-compressed proxies. The scaffold's whole job is to make sure the hook is actually
 registered, which is the step the tool itself will not do for you: `rtk init -g` in
 non-interactive mode DECLINES to patch the agent's settings, prints a "MANUAL STEP" notice,
-and exits NONZERO (observed rc=1). Trusting it produces an arm where rtk is installed, `rtk --version` works,
-every provenance field looks healthy -- and the hook never fires, so the arm is native with
-extra steps. So the hook is written explicitly and the row records whether that took.
+and exits 0 (rtk 0.45.0). Trusting it produces an arm where rtk is installed, `rtk --version`
+works, every provenance field looks healthy -- and the hook never fires, so the arm is native
+with extra steps. So the hook is written explicitly and the row records whether that took.
 
 The binary is staged on the HOST and copied in, because the sealed task container has no
 GitHub access: `install.sh` and the release tarball are both unreachable from inside. The
@@ -83,13 +83,10 @@ class RtkScaffold(Scaffold):
     # /usr/local/bin, already on every PATH -- but on a host-run agent (Web-Bench) bin_dir
     # is a per-task directory, and a bare `rtk` resolves to nothing.
     #
-    # Measured 2026-09-05, Web-Bench/prisma/task-1 with the bare spelling: the debug log
-    # carried `rtk: command not found` x31 and the CLI reported the preToolUse hook
-    # erroring, while `rtk_installed` and `rtk_hook_registered` both read true. The agent
-    # flailed against the failing hook -- 612 `task` subagent calls, 553 `create`, 412
-    # `bash` -- and the task cost 75 turns / 1.79M tokens / 778 s against a 6-turn,
-    # 140k-token, 86 s baseline. So this is worse than a silent no-op: a bare hook command
-    # actively corrupts the run at ~12x the cost.
+    # A hook command that does not resolve is worse than a silent no-op: every shell call
+    # gets `rtk: command not found` and the CLI reports the preToolUse hook erroring, while
+    # `rtk_installed` and `rtk_hook_registered` both read true. The agent then works around
+    # the failing hook, and the task costs many times its native run.
     @staticmethod
     def _hook_binary(profile):
         return f"{profile.bin_dir}/rtk"
@@ -184,8 +181,8 @@ class RtkScaffold(Scaffold):
         # the settings/plugin write took; it says nothing about whether the agent can run
         # the command. Resolve it the way the agent's hook subprocess will -- by absolute
         # path, under a PATH that does NOT include bin_dir -- so a hook that cannot execute
-        # is a flag on the row rather than 31 `command not found` lines inside a run that
-        # still reports healthy.
+        # is a flag on the row rather than a `command not found` on every shell call inside
+        # a run that still reports healthy.
         probe = ctx.exec_(f"env PATH=/usr/bin:/bin {hook_bin} --version", timeout=60)
         notes["rtk_hook_exec_ok"] = probe.returncode == 0
         # 3c. Registered AND executable is still not REWRITING -- see _probe_hook_rewrites.
@@ -266,11 +263,10 @@ class RtkScaffold(Scaffold):
                                           "toolArgs":{"command":...}}     <- Copilot's own
 
         **rtk parses only the first.** Handed the second it exits 0 with EMPTY stdout, which
-        the CLI reads as "no opinion" and runs the command unchanged. That is what the
-        previous implementation did: it shipped a plugin whose `hooks.json` used the
-        `preToolUse` spelling, so rtk was installed, the plugin reported "installed
-        successfully", the hook fired on every call -- and rewrote nothing. Every Copilot
-        `rtk` / `trimech-rtk` row before 2026-09-13 is that no-op.
+        the CLI reads as "no opinion" and runs the command unchanged. A hook on that channel
+        -- or in a plugin whose `hooks.json` uses the `preToolUse` spelling, which hands the
+        hook the same Copilot shape -- installs cleanly and fires on every call, and rewrites
+        nothing.
 
         On the hooks-dir channel the loop is closed end to end: the model asked for
         `ls -la src`, the CLI executed `rtk ls -la src`, and the agent got rtk's compressed
@@ -311,8 +307,8 @@ class RtkScaffold(Scaffold):
 
         `rtk_hook_registered` says the config was written and `rtk_hook_exec_ok` that the
         binary runs; neither catches a hook that parses nothing and returns an empty
-        verdict, which is exactly how the Copilot arm was silently native for a week. This
-        is the effect-level check: feed the hook the payload its channel delivers and look
+        verdict, which leaves the arm native while both read true. This is the
+        effect-level check: feed the hook the payload its channel delivers and look
         for the rewrite in its answer. Cheap, offline, and it fails loudly if a future rtk
         changes its reply shape.
         """

@@ -52,11 +52,11 @@ _CATALOG_RE = re.compile(
 #
 #          "tools": [ "bash:66921ccc", "read_bash:71c40652", ... ]
 #
-# With (1) and (2) both gone on 1.0.83 the catalog parsed EMPTY, and an empty catalog is
-# indistinguishable from "no tools loaded": pruning silently did nothing. So every source is
-# tried and the richest wins (descriptions beat names, more tools beat fewer). The flat form
-# carries names only, which is enough for evidence pruning; a tool judge reasoning over
-# descriptions gets nothing from it.
+# (1) and (2) are both gone on 1.0.83, and an empty catalog is indistinguishable from "no
+# tools loaded", which would leave pruning a no-op. So every source is tried and the richest
+# wins (descriptions beat names, more tools beat fewer). The flat form carries names only,
+# which is enough for evidence pruning; a tool judge reasoning over descriptions gets nothing
+# from it.
 _CATALOG_FLAT_BLOCK_RE = re.compile(r'"tools"\s*:\s*\[(.*?)\]', re.DOTALL)
 _CATALOG_FLAT_ITEM_RE = re.compile(r'"([a-z][a-z0-9_]*):[0-9a-f]{6,}"')
 

@@ -108,18 +108,14 @@ def test_evidence_untool_drops_after_streak(tmp_path):
 
 
 # ---- the mask must be EARNED, never a prior ---------------------------------
-# The stored Web-Bench arms were produced by an older `--untool` flag that applied
-# `untool_exclusions()` -- the static INAPPLICABLE_TOOLS set -- from the FIRST
-# rollout of the stream. Measured consequences: the mask was live at the `init` task before
-# any task had completed, it cost zero LLM tokens so the honest ledger charged nothing for
-# it, and the keep-set was byte-identical across all 15 cells (5 projects x 3 seeds). The
-# stored Web-Bench cost win is therefore largely an unpaid, unlearned prior rather than the
-# evidence-gated mechanism, and it is not comparable to the SWE-bench arms.
-#
-# The current code does not do this: the static surface is still exported on the adapters but
-# no longer reachable from the stage. These tests pin that shut, in BOTH domains, so it
-# cannot regress silently -- the failure mode is invisible in aggregate numbers and only
-# shows up as a suspiciously large cost win.
+# The mask comes only from observed disuse: none before the first task has completed, and
+# never one drawn from the adapters' static `untool_exclusions()` / INAPPLICABLE_TOOLS
+# surface, which is still exported but not reachable from the stage. A static prior would be
+# live from the first rollout, cost zero LLM tokens (so the honest ledger would charge nothing
+# for it) and give a byte-identical keep-set in every cell -- an unpaid, unlearned saving
+# rather than the evidence-gated mechanism. These tests pin that in BOTH domains, because the
+# difference is invisible in aggregate numbers and shows up only as a suspiciously large cost
+# win.
 from te_bench.adapters import WebBenchAdapter                    # noqa: E402
 from tokeneconomizer.toolprune import tools as reflect                  # noqa: E402
 from fixtures import write_claude_transcript_with_catalog               # noqa: E402
@@ -146,14 +142,13 @@ def _finish(stage, tmp_path, i, used, catalog=_CATALOG):
 
 
 def test_first_task_of_a_stream_is_never_masked_swebench(tmp_path):
-    """No evidence can exist before the first task, so the agent must see the full catalog.
-    This is the property the stored Web-Bench runs violated."""
+    """No evidence can exist before the first task, so the agent must see the full catalog."""
     stage = _stage(tmp_path, SwebenchAdapter(tasks_path=None))
     assert stage.build_tools({"instance_id": "w-0"}, 0) == []
 
 
 def test_first_task_of_a_stream_is_never_masked_webbench(tmp_path):
-    """Same guarantee on the Web-Bench adapter -- the domain where it actually broke."""
+    """Same guarantee on the Web-Bench adapter."""
     stage = _stage(tmp_path, WebBenchAdapter("zustand"))
     assert stage.build_tools({"instance_id": "task-1"}, 0) == []
 
@@ -174,8 +169,8 @@ def test_mask_appears_only_after_the_catalog_is_learned(tmp_path):
 def test_static_inapplicable_prior_is_not_applied(tmp_path):
     """An adapter that declares EVERYTHING inapplicable must not change the mask.
 
-    This is the specific regression: the stage must consult observed usage, never the
-    adapter's static `inapplicable_tools` / `hardcoded_exclusions` surface.
+    The stage must consult observed usage, never the adapter's static
+    `inapplicable_tools` / `hardcoded_exclusions` surface.
     """
     class _GreedyPrior(WebBenchAdapter):
         def inapplicable_tools(self):
@@ -193,16 +188,16 @@ def test_static_inapplicable_prior_is_not_applied(tmp_path):
 
 
 def test_untooling_is_off_entirely_without_an_evidence_threshold(tmp_path):
-    """`evidence=0` (the old bare `--untool`) must mean NO mask, not a static one."""
+    """`evidence=0` must mean NO mask, not a static one."""
     stage = _stage(tmp_path, WebBenchAdapter("zustand"), evidence=0)
     _finish(stage, tmp_path, 0, ["Bash"])
     assert stage.build_tools({"instance_id": "task-2"}, 1) is None
 
 
 # ---- network tools are blocked on every arm ---------------------------------------------
-# Both benchmarks' answers are on the public internet, and on 2026-09-07 the live opus-5 /
-# sonnet-5 trees were caught fetching gold patches and grading specs. These pin the block so
-# it cannot be quietly dropped, and pin the escape hatch so it stays deliberate.
+# Both benchmarks' answers -- gold patches, grading specs -- are on the public internet, a
+# fetch away from the agent. These pin the block so it cannot be quietly dropped, and pin the
+# escape hatch so it stays deliberate.
 
 def test_network_tools_are_blocked_by_default(monkeypatch):
     from te_harness import webbench as wb, swebench as sb
@@ -226,11 +221,11 @@ def test_network_tools_are_not_protected():
 
 
 # ---- the Web-Bench PreToolUse network guard ----------------------------------------------
-# Derived from the traces, not from taste: across 774 stored transcripts the agent made 335
-# network calls (226 package-manager, 109 loopback) and NONE mentioned GitHub, while every
-# observed abuse did. These pin both halves of that separation.
+# Derived from the traces, not from taste: across 774 stored transcripts the network calls a
+# task needs (335: 226 package-manager, 109 loopback) never mention GitHub, and every route
+# to the benchmark's answer key does. These pin both halves of that separation.
 
-def test_net_guard_blocks_the_observed_abuse():
+def test_net_guard_blocks_answer_key_fetches():
     from te_harness.guards.net_guard import decide
     for cmd in (
         "curl -sL https://raw.githubusercontent.com/bytedance/web-bench/main/"
@@ -267,7 +262,7 @@ def test_net_guard_reads_both_agents_payload_spellings():
 
 
 def test_net_guard_blocks_end_to_end_on_a_copilot_shaped_payload():
-    """The regression that matters: rc=2 on the Copilot spelling, not just the Claude one."""
+    """End to end, the hook exits rc=2 on the Copilot spelling, not just the Claude one."""
     import json, subprocess, sys
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = {k: v for k, v in os.environ.items() if k != "TE_ALLOW_NETWORK_TOOLS"}
@@ -301,11 +296,11 @@ def test_net_guard_fails_open_on_unreadable_input(tmp_path):
 
 
 # ---- the guard is installed on BOTH harnesses, not just Web-Bench ------------------------
-# Masking WebSearch/WebFetch never covered the route that mattered on SWE-bench: measured
-# across 1,824 stored rows, 120 reached the network through `Bash` against 47 through a web
-# tool, and 16 fetched an answer-key-shaped URL (14 of them resolved). `Bash` is protected
-# and can never be masked, so the PreToolUse hook is the only seam -- and for SWE-bench it
-# has to be installed INSIDE the task container, where the agent actually runs.
+# Masking WebSearch/WebFetch does not cover the agent's main route to the network on
+# SWE-bench, which is `Bash` (across 1,824 stored rows, 120 reached the network through it
+# against 47 through a web tool). `Bash` is protected and can never be masked, so the
+# PreToolUse hook is the only seam -- and for SWE-bench it has to be installed INSIDE the
+# task container, where the agent actually runs.
 
 def _method_calls(cls_name, method, path="te_harness/swebench.py"):
     """The attribute names `cls_name.method` calls on self, via AST (no Docker needed)."""
@@ -335,8 +330,8 @@ def test_the_swebench_guard_honours_the_same_escape_hatch(monkeypatch):
 
 
 def test_the_recorded_tool_mask_is_the_one_the_cli_was_given(monkeypatch):
-    """`run_config.tools.excluded_applied` used to omit the network block on every row,
-    which made a guarded run byte-identical to an unguarded one in its own provenance."""
+    """`run_config.tools.excluded_applied` must include the network block: without it a
+    guarded run is byte-identical to an unguarded one in its own provenance."""
     import ast
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for path in ("te_harness/swebench.py", "te_harness/webbench.py"):

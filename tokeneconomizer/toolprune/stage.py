@@ -167,11 +167,10 @@ class ToolingStage(Stage):
             srow["untool_evidence_reaudit"] = bool(self._ev_reaudit)
             if not self._exclude_tools and self.adapter is not None:
                 # Source-aware where the adapter supports it: an empty catalog is
-                # indistinguishable from "this agent loaded no tools", and that ambiguity
-                # is exactly how a Copilot CLI upgrade silently turned pruning into a
-                # no-op for a whole sweep (trace.catalog_sources). Record which source won
-                # so the next migration shows up in the rows, and say so out loud the first
-                # time nothing parses.
+                # indistinguishable from "this agent loaded no tools", which would leave
+                # pruning a no-op unnoticed (trace.catalog_sources). Record which source won
+                # so a change of log format shows up in the rows, and say so out loud the
+                # first time nothing parses.
                 getter = getattr(self.adapter, "parse_catalog_with_source", None)
                 if getter is not None:
                     cat, src = getter(run_dir_path, self.agent)

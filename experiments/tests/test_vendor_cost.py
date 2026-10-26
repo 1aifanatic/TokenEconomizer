@@ -1,17 +1,18 @@
 """The vendor-dollar column: read the key the runners actually write, and flag its absence.
 
-Two defects, both of which made a cost comparison quietly wrong rather than loudly broken:
+Two things a cost comparison depends on; either one, missed, makes it quietly wrong rather
+than loudly broken:
 
-  * `aggregate.py` emitted `cost_usd` from `d.get("cost_usd")`, but every runner writes the
-    figure as `cost_usd_vendor`. The column was therefore EMPTY in every tree this repo
+  * `aggregate.py` emits `cost_usd` from the key every runner writes, `cost_usd_vendor`.
+    Reading `d.get("cost_usd")` alone would leave the column EMPTY in every tree this repo
     generates, while looking like a column that simply had no data yet.
 
-  * A row whose agent reported no `total_cost_usd` stored None and was marked by nothing:
+  * A row whose agent reported no `total_cost_usd` stores None, and nothing else marks it:
     `usage_incomplete` stays False (the token breakdown is complete and the effective-token
     basis is exact) and the task grades normally, so the row reads as healthy. Summing the
     dollar column then under-counts, because the row's tokens are in the denominator while
     its dollars are not -- and because the misses cluster on the longest trajectories, the
-    error lands on the most expensive tasks.
+    error lands on the most expensive tasks. `vendor_cost_missing` flags it.
 
 These tests are offline: they call the two pure functions with synthetic rows.
 """

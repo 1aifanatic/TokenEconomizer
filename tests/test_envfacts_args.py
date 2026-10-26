@@ -226,8 +226,8 @@ def test_a_cd_into_the_start_directory_by_absolute_path_is_no_cd():
 
 
 def test_a_cd_up_to_the_repository_from_a_subdirectory_is_no_cd():
-    """Seen live on Pi: a session started in `pkg/` ran `cd <repository> && pytest -q`, which
-    was learned as a form of its own, spelled with that machine's path."""
+    """A session started in `pkg/` that runs `cd <repository> && pytest -q` runs the plain
+    form: a `cd` up to the repository is no `cd`, and no form is spelled with a machine's path."""
     kw = dict(cwd="", root="/r/pkg", top="/r")
     assert observe.classify_command("cd /r && pytest -q", **kw)[0].form == "pytest"
     assert observe.classify_command("cd .. && pytest -q", **kw)[0].form == "pytest"
@@ -311,8 +311,8 @@ def test_an_option_the_runner_rejects_is_not_a_failing_form(tmp_path):
 
 
 def test_a_run_whose_output_was_filtered_away_does_not_show_a_form_works(tmp_path):
-    """Seen live: `python runtests.py x 2>&1 | grep -E "^(OK|FAILED|Ran )"` at the root printed
-    nothing -- the "can't open file" was filtered out -- and counted as the form working."""
+    """`python runtests.py x 2>&1 | grep -E "^(OK|FAILED|Ran )"` at the root prints nothing --
+    the "can't open file" is filtered out -- and an empty output does not show a form works."""
     tasks = [[_at(_edit(i), ROOT), _at(_sh("python -m pytest tests/app", "Exit code 1\n"
                                            "/venv/bin/python: No module named pytest"), ROOT),
               _at(_sh(f"python runtests.py app{i} 2>&1 | grep -E '^(OK|FAILED|Ran )'",
@@ -322,9 +322,9 @@ def test_a_run_whose_output_was_filtered_away_does_not_show_a_form_works(tmp_pat
 
 
 def test_a_working_form_that_leaves_the_shell_where_it_is_is_the_one_named(tmp_path):
-    """Seen live: the fact named `cd tests && python runtests.py`, agents typed it, and their
-    shell stayed in `tests/` -- every later `cd tests && ...` failed. A form that does not move
-    the shell is named whenever one has worked, however rarely."""
+    """A form that moves the shell (`cd tests && python runtests.py`), typed by an agent whose
+    shell keeps its directory, leaves it in `tests/`, where every later `cd tests && ...` fails.
+    A form that does not move the shell is named whenever one has worked, however rarely."""
     tasks = [[_at(_edit(i), ROOT), _at(_sh(f"python runtests.py app{i}", CANT_OPEN), ROOT),
               _at(_sh(f"cd tests && python runtests.py app{i}", OK), ROOT),
               _at(_sh(f"cd tests && python runtests.py app{i}.tests", OK), ROOT)]

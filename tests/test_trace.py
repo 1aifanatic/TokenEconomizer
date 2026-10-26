@@ -119,7 +119,7 @@ def test_usage_checkpoint_source_is_still_read(tmp_path):
 
 
 def test_no_source_reports_none_not_empty_catalog(tmp_path):
-    """The regression that hid the bug: {} must be distinguishable from 'no tools'."""
+    """No source must be distinguishable from an empty catalog: {} is not 'no tools'."""
     (tmp_path / "copilot_debug.log").write_text("nothing useful here")
     cat, src = _trace.parse_catalog_with_source(str(tmp_path), "copilot")
     assert cat == {}

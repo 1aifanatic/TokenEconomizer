@@ -188,9 +188,7 @@ def _moves_shell(form):
 def _usage(form, args=" …"):
     """A form as a claim shows it. One that starts with `cd DIR &&` is shown as a subshell: an
     agent whose shell keeps its directory between calls (Claude Code) that typed the bare
-    `cd` would run every later command in DIR -- seen live, where "`cd tests && python
-    runtests.py …` works" was followed by `cd: tests: No such file or directory` and `can't
-    open file 'runtests.py'` over and over."""
+    `cd` would run every later command in DIR, where the next `cd DIR` fails."""
     return f"`({form}{args})`" if _moves_shell(form) else f"`{form}{args}`"
 
 

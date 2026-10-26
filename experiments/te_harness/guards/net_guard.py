@@ -3,23 +3,21 @@
 
 Web-Bench is a PUBLIC repository. `bytedance/web-bench` ships, for every project, the exact
 Playwright spec each task is graded by -- so an agent that can reach GitHub is not solving
-the task, it is reading the answer key. Measured 2026-09-07 in development runs: three
-Web-Bench tasks curled their own grading spec
-(`raw.githubusercontent.com/bytedance/web-bench/main/projects/<p>/test/task-N.spec.js`) and
-two of them then passed.
+the task, it is reading the answer key: each spec is one `curl` of
+`raw.githubusercontent.com/bytedance/web-bench/main/projects/<p>/test/task-N.spec.js` away.
 
-ALL THREE AGENTS SHARE THIS HOOK, and the payload spelling is no longer a guess. Codex's
-`PreToolUse` contract was read out of the CLI's own embedded JSON schema
+ALL THREE AGENTS SHARE THIS HOOK, and the payload spelling is read off each CLI, not
+guessed. Codex's `PreToolUse` contract was read out of the CLI's own embedded JSON schema
 (`pre-tool-use.command.input` in the 0.153.1 binary): the required fields are `cwd`,
 `hook_event_name`, `model`, `permission_mode`, `session_id`, `tool_input`, `tool_name`,
 `tool_use_id`, `transcript_path`, `turn_id` -- i.e. `tool_name`/`tool_input`, Claude Code's
-spelling exactly. So `hook_command` reads Codex payloads with the branch it already had.
+spelling exactly. So `hook_command` reads Codex payloads with the Claude Code branch.
 
 ONE REFUSAL PROTOCOL, exit status 2 with the reason on stderr. Verified against all three
-live CLIs -- Claude Code and Copilot on 2026-09-08, Codex on 2026-09-30.
+live CLIs.
 
 CODEX CALLS IT TOO -- configured the way Codex reads hooks. Verified live on codex-cli 0.153.1
-(2026-09-30, gpt-5.6-sol): with `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks":
+(gpt-5.6-sol): with `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks":
 [{"type": "command", "command": "<python> net_guard.py"}]}]}}` in `$CODEX_HOME/hooks.json`
 and `--dangerously-bypass-hook-trust` on the command line, Codex refused `echo
 https://github.com/probe` before running it ("Command blocked by PreToolUse hook: Blocked:
@@ -27,39 +25,34 @@ https://github.com/probe` before running it ("Command blocked by PreToolUse hook
 `tool_input: {"command": "echo https://github.com/probe"}` -- a string, read by the first
 branch of `hook_command`.
 
-The 2026-09-09 probes that concluded Codex ignores the hook got three things wrong, not the
-CLI: they keyed the event kebab-case (`pre-tool-use`) where Codex wants PascalCase, gave the
-handler an argv list where it wants a command string, and ran without the trust bypass --
-and Codex skips every hook a person has not approved in /hooks, which an unattended run
-cannot do. Rows stored before 2026-09-30 on the Codex lanes therefore carry
-`net_guard_installed: false` and were guarded by the DNS layer below alone.
+All three parts of that configuration are required: Codex keys the event PascalCase
+(`PreToolUse`, not `pre-tool-use`), wants the handler as a command string rather than an argv
+list, and skips every hook a person has not approved in /hooks -- which an unattended run
+cannot do, hence the trust bypass.
 
-WHY A HOOK AND NOT A TOOL MASK. `WebSearch`/`WebFetch` are masked out separately, but the
-agent simply used `curl` inside `Bash` -- and `Bash` is in `PROTECTED_TOOLS`, so it can
-never be dropped. The only place left to intervene is ahead of the shell.
+WHY A HOOK AND NOT A TOOL MASK. `WebSearch`/`WebFetch` are masked out separately, but an
+agent can run `curl` inside `Bash` just as well -- and `Bash` is in `PROTECTED_TOOLS`, so it
+can never be dropped. The only place left to intervene is ahead of the shell.
 
-WHY THIS PATTERN AND NOTHING WIDER. Derived from the traces, not from taste. Originally:
-across 774 stored transcripts the agent made 335 network calls, 226 package-manager and 109
-loopback to its own dev server, NONE mentioning GitHub, while every abusive call did.
+WHY THIS PATTERN AND NOTHING WIDER. Derived from the traces, not from taste. Over 3,538
+stored run dirs and their 558 network-shell calls, one case-insensitive substring separates
+answer-key reads from everything else exactly:
 
-RE-DERIVED 2026-09-09 on the full corpus -- 3,538 stored run dirs, 558 network-shell calls:
-
-    352  matched `github`   (63%)   every one of them reading a repository's source,
-                                    history, PR diffs or `.patch` files
+    all matches                     read a repository's source, history, PR diffs or
+                                    `.patch` files
       0  false positives            no dependency install (pip 180, npx 14, yarn, npm)
-                                    was blocked
+                                    and no loopback call to the agent's own dev server
+                                    matches
       0  misses                     no call naming a `.patch`, a `/commit/`, a `/pull/`,
                                     a mirror (gitee/gitlab/codeload/jsdelivr) or a
-                                    benchmark repo escaped the rule
+                                    benchmark repo falls outside the rule
 
-So one case-insensitive substring still separates the two sets exactly, on a corpus 4.5x
-larger than the one it was derived from. That is the whole argument for keeping it this
-narrow: the alternative -- disabling web access outright -- also deletes the tool surface
-that the untooling mechanism is measured on, and charges the baseline for a restriction the
-cheat route never needed.
+That is the whole argument for keeping it this narrow: the alternative -- disabling web
+access outright -- also deletes the tool surface that the untooling mechanism is measured
+on, and charges the baseline for a restriction the answer-key route does not need.
 
 This is deliberately NOT bullet-proof: an IP literal, a redirect, a mirror or a base64'd
-URL all walk past both layers. It defends the pattern that actually occurred, and the row
+URL all walk past both layers. It defends the plain-URL route, and the row
 telemetry is what makes a future model routing around it visible -- `net_guard_blocks`
 counts hook refusals, and `answer_key_attempts` counts answer-key-shaped commands found in
 the transcript afterwards, which is agent-independent and therefore the number to watch on
@@ -76,20 +69,20 @@ DENY = re.compile(r"github", re.I)
 # THE SAME POLICY, ENFORCED WHERE THE AGENT CANNOT SPELL AROUND IT.
 #
 # The hook above is only as good as the CLI's cooperation, and each CLI cooperates on its own
-# terms: a per-agent file, key and matcher, and on Codex a trust bypass as well. Each of those
-# has failed silently at least once -- the Copilot lane's hook file sat in a directory its CLI
-# never reads, and every Codex row before 2026-09-30 ran unhooked on a misread contract --
-# while the provenance fields read healthy.
+# terms: a per-agent file, key and matcher, and on Codex a trust bypass as well. Any one of
+# those set wrongly leaves the hook unarmed while the provenance fields read healthy --
+# Copilot reads its hook file only from `$COPILOT_HOME/settings.json`, and Codex skips a hook
+# it has not been told to trust.
 #
 # So the primary control is DNS, installed into the task container's /etc/hosts. It needs no
-# cooperation from any CLI, is identical on all three agents, and catches every route the
-# corpus actually used -- curl, wget, `git clone`, `python -c "import urllib.request"` --
-# because all of them resolve a hostname first. Verified in a real SWE-bench container:
+# cooperation from any CLI, is identical on all three agents, and catches every route that
+# names a host -- curl, wget, `git clone`, `python -c "import urllib.request"` -- because
+# all of them resolve a hostname first. Verified in a real SWE-bench container:
 # each of those fails with "Connection refused" afterwards, while pypi.org,
 # files.pythonhosted.org and a real `pip download` still work.
 #
-# The host list is the `github` rule written out. Only hosts that appear in the measured
-# abuse set, plus the sibling CDNs that serve the same content:
+# The host list is the `github` rule written out: the GitHub hosts that serve repository
+# pages, the API, archives, raw files, release objects, PR diffs and gists:
 ANSWER_KEY_HOSTS = (
     "github.com", "www.github.com", "api.github.com", "codeload.github.com",
     "raw.githubusercontent.com", "objects.githubusercontent.com",
@@ -133,7 +126,7 @@ def hook_command(payload):
       Claude Code   {"tool_name": "Bash", "tool_input": {"command": ...}}
       Copilot CLI   {"toolName": "bash", "toolArgs":   {"command": ...}}
 
-    Captured off a live `preToolUse` hook on Copilot CLI 1.0.83, 2026-09-08.
+    Captured off a live `preToolUse` hook on Copilot CLI 1.0.83.
 
     Reading only `tool_input` is the worst failure available here, which is why this is a
     named function with its own test rather than an inline `.get`: the hook installs
@@ -141,7 +134,7 @@ def hook_command(payload):
     returns not-blocked and it exits 0. Every provenance field reads healthy, the block
     count is 0 -- indistinguishable from "armed and never fired" -- and nothing is guarded.
     That is exactly the failure `net_guard_installed` and this block count exist to make
-    visible, so it must not be reintroduced by a key name.
+    visible, so the key list below must carry every agent's spelling.
     """
     if not isinstance(payload, dict):
         return ""

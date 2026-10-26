@@ -56,8 +56,8 @@ _SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed
 
 
 def _no_reply(host, out):
-    """Note a side call that came back empty: the paid helpers otherwise fail silently -- seen
-    with Copilot, which does not pass a BYOK provider's variables to the hooks that start it.
+    """Note a side call that came back empty, which nothing else would show -- as under
+    Copilot's BYOK, which does not pass the provider's variables to the hooks that start it.
     A CLI that said it is not signed in pauses the host's side calls."""
     import time
     from .paths import state_root

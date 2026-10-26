@@ -4,8 +4,8 @@
     OPENAI_BASE_URL   OpenAI's own regional endpoint, for a region-scoped key; the global
                       endpoint otherwise
 
-Nothing else selects an endpoint. Pinned here, each of which failed silently at least once
-while every launch banner stayed green:
+Nothing else selects an endpoint. Pinned here, because a launch banner stays green when any
+of them is wrong:
 
   * the RESOLUTION, including that no other variable moves the lane off the OpenAI API;
   * the REQUEST CONTRACT config.toml expresses, and that it carries the key by NAME only;
@@ -85,8 +85,8 @@ def test_web_is_blocked_on_every_arm_including_an_empty_mask():
     top, tables = codex.config_toggles([])
     # The TOP-LEVEL spelling only. codex-cli 0.153.1 deprecated `[features].web_search`
     # ("web search is enabled by default; set `web_search` to disabled at the top level")
-    # and emits an error item into the transcript when it is present, so the redundant
-    # table entries were dropped -- see codex._TABLE_TOGGLES["web"].
+    # and emits an error item into the transcript when it is present, so no table entry is
+    # written -- see codex._TABLE_TOGGLES["web"].
     assert 'web_search = "disabled"' in top
     assert not any(t == "features" and "web_search" in line for t, line in tables)
     assert not any(t == "tools" and "web_search" in line for t, line in tables)
@@ -138,8 +138,8 @@ def test_row_usage_decomposes_the_grand_input_total():
     """`input_tokens` INCLUDES both cache fields; fresh input is what is left.
 
     Folding the cache fields into input_tokens instead would price cached re-reads at 1.0x
-    where the vendor bills 0.10x -- the same one-directional error that made Copilot rows
-    look cheaper than Claude rows before the cache-write fix.
+    where the vendor bills 0.10x -- a one-directional error that would make this lane's rows
+    look more expensive than the other lanes' on identical work.
     """
     row = codex.row_usage(_stream(
         {"type": "thread.started", "thread_id": "th-1"},
@@ -395,9 +395,9 @@ def _assert_reaped(pidfile):
 
 @pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
 def test_the_skills_probe_kills_the_cli_it_started_not_just_the_shim(tmp_path):
-    """`proc.kill()` reached only the Node shim; the native CLI it had started sat
-    "waiting for network" for good, one leaked per offline suite run (six alive on this host
-    on 2026-09-30). The probe now owns a process group and kills all of it."""
+    """`proc.kill()` reaches only the Node shim, and the native CLI the shim started would
+    sit "waiting for network" for good on an offline host. The probe owns a process group
+    and kills all of it."""
     shim, pidfile = _fake_cli(tmp_path, (
         'mkdir -p "$CODEX_HOME/skills/.system/alpha"\n'
         'touch "$CODEX_HOME/skills/.system/alpha/SKILL.md"\n'
@@ -449,8 +449,7 @@ def test_lean_instructions_drops_only_the_pruned_sections_and_keeps_the_rest_ver
     assert "# Working with the user" not in lean and "Channels." not in lean
     assert "When you run out of context, continue." in lean          # compaction paragraph kept
     # the stopping rule is operational and is kept too: without it the agent has no
-    # statement of how a turn ends, and every untool cell ran more model calls than its
-    # baseline.
+    # statement of how a turn ends, and runs more model calls than its baseline.
     assert "You end your turn by sending a final message." in lean
     for kept in ("You are Codex.", "# Rules for getting work done\n\n- use rg",
                  "## Autonomy and persistence\n\nAct.", "# Using skills", "### How to use skills"):
@@ -569,11 +568,10 @@ def test_mcp_tool_calls_counts_completed_items_and_keeps_a_sample_of_what_it_can
     completion, per server/tool; an item whose tool name sits somewhere unexpected is counted
     as unrecognised and ONE raw sample is kept.
 
-    The shape below is the one codex-cli 0.153.1 actually emits, observed live on 2026-09-13
-    (`item.completed`, item keys: id, type, server, tool, arguments, result, error, status) --
-    and the first such call on that lane was Codex's OWN `list_mcp_resources` on server
-    `codex`, which is exactly why the count is split per server: `mcp_tool_calls` includes it,
-    `serena_tool_calls` does not."""
+    The shape below is the one codex-cli 0.153.1 emits (`item.completed`, item keys: id,
+    type, server, tool, arguments, result, error, status). Codex also makes calls of its OWN,
+    such as `list_mcp_resources` on server `codex`, which is why the count is split per
+    server: `mcp_tool_calls` includes it, `serena_tool_calls` does not."""
     from te_harness import codex
     import json
     p = str(tmp_path / "t.jsonl")
@@ -600,11 +598,11 @@ def test_mcp_tool_calls_counts_completed_items_and_keeps_a_sample_of_what_it_can
 
 def test_the_codex_lane_hosts_every_scaffold_and_wires_an_mcp_one_through_the_config(
         tmp_path, monkeypatch):
-    """The refusal table is gone: rtk runs in its own Codex mode, repomap writes AGENTS.md,
-    and serena -- an MCP server -- is written into config.toml after setup, because `_start`
-    wrote the config before the scaffold existed. Both halves pinned: no scaffold name is
-    refused at construction, and a scaffold that returns `mcp_servers` causes exactly one
-    config rewrite carrying that spec."""
+    """The Codex lane refuses no scaffold: rtk runs in its own Codex mode, repomap writes
+    AGENTS.md, and serena -- an MCP server -- is written into config.toml after setup,
+    because `_start` writes the config before the scaffold exists. Both halves pinned: no
+    scaffold name is refused at construction, and a scaffold that returns `mcp_servers`
+    causes exactly one config rewrite carrying that spec."""
     from te_harness import swebench
     assert not hasattr(swebench, "_CODEX_UNAVAILABLE_SCAFFOLDS")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

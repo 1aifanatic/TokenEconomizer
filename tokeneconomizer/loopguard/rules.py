@@ -24,18 +24,16 @@ DEFAULT_THRESHOLDS = {
     "error_outputs": 6,       # sustained error density
     "stagnation": 0.20,       # >=20% of failures are repeats of an earlier one
     "envelope_margin": 1.25,  # restart/abort only beyond margin x the resolved-turn pctl
-    "envelope_pct": 90,       # use the p90 of resolved turns (NOT max) — robust to a
-                              # single very-long resolve poisoning the gate (see
-                              # EnvelopeTracker). max-based envelope was disabled by one
-                              # 115-turn xarray resolve; p90 ignores the lone outlier.
+    "envelope_pct": 90,       # use the p90 of resolved turns (NOT max): one very long
+                              # resolve would set a max-based envelope far out (see
+                              # EnvelopeTracker); p90 ignores the lone outlier.
     "envelope_min_samples": 5,  # need >=5 resolved tasks before trusting the percentile
     "judge_confidence": 0.7,  # LLM trace-judge must be >=this confident to drive an abort
     "backstop_mult": 2.5,     # HARD backstop: beyond this multiple of the envelope, a
                               # stuck trajectory aborts REGARDLESS of the judge's verdict.
-                              # Empirically the judge spared xarray-7019/7179 at 5.8x the
-                              # envelope (177-204 turns vs envelope 35, stagnation 0.3-0.4)
-                              # by misreading multi-file thrashing as "exploration"; the
-                              # judge must not be able to veto a screaming outlier.
+                              # A judge can read multi-file thrashing far past the envelope
+                              # as "exploration"; it must not be able to veto such an
+                              # outlier.
     # ---- cheap GATE to the judge (Tier-0): permissive "worth a paid look?" trigger.
     # Sensitive on purpose (catch candidates); the judge supplies precision. Far cheaper
     # to evaluate than the judge, and far more permissive than is_stuck (which is the
@@ -131,8 +129,8 @@ def assess_abort(state, envelope=None, judge=None, thr=None):
 
     # HARD BACKSTOP (checked BEFORE the judge): an extreme outlier — far past the
     # envelope AND stuck by the strict heuristic — aborts regardless of any judge
-    # verdict. The judge cannot veto this; it exists because the LLM judge empirically
-    # rationalized 5.8x-envelope thrashing (xarray-7019/7179) as "exploration".
+    # verdict. The judge cannot veto this; it exists because an LLM judge can read thrashing
+    # far past the envelope as "exploration".
     # `backstop_turns` (learned, cap-aware) is preferred when the tracker supplied it, so
     # the backstop stays REACHABLE under a tight turn cap; else fall back to the
     # multiplier-on-envelope form (the Copilot-scale behavior).
@@ -168,8 +166,8 @@ def assess_abort(state, envelope=None, judge=None, thr=None):
         if v.get("stuck") is False:
             return False, "judge-productive"
         # judge AMBIGUOUS (stuck=None): do NOT abort on the (possibly under-calibrated,
-        # early-stream) envelope alone — that killed resolvable tasks like xarray-7120 at
-        # turn 28 when the p90 envelope was only 27. Ambiguity => SPARE; the hard backstop
+        # early-stream) envelope alone: a resolvable task can run just past an envelope
+        # learned from few turns. Ambiguity => SPARE; the hard backstop
         # (2.5x envelope AND is_stuck, checked above) remains the only envelope-driven kill,
         # and it sits well beyond any resolvable task's length.
         return False, "judge-ambiguous-spared"

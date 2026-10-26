@@ -309,7 +309,7 @@
     ]
   },
   "excluded": {
-    "scikit-learn__scikit-learn-14710": "eval.sh does not terminate under te_harness: timed out at TE_EVAL_TIMEOUT=1800 and again at 3600, and the uncaught TimeoutExpired ended the sklearn stream at task 21 of 32 both times (that cell never produced more than 20 graded rows). The timeout is now caught (te_harness swebench.py _grade), so it would cost one full eval_timeout per run rather than the cell; excluded to stop paying that. NOT ungradeable in principle -- it graded in the published runs, so results that include it and results that exclude it are not directly comparable on scikit-learn."
+    "scikit-learn__scikit-learn-14710": "eval.sh does not terminate under te_harness within TE_EVAL_TIMEOUT (1800 s, nor 3600 s), so every run of it costs one full eval_timeout (te_harness swebench.py _grade catches the timeout); excluded to stop paying that. NOT ungradeable in principle -- it graded in the published runs, so results that include it and results that exclude it are not directly comparable on scikit-learn."
   },
   "added": {
     "scikit-learn/scikit-learn": [

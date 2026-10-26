@@ -298,18 +298,18 @@ def lift_overhead(row, srow):
     """Copy mechanism-overhead fields a mechanism reported on `srow` into `row`.
 
     row.json is the only artifact aggregate.py reads, so an overhead field that exists
-    solely on the stream row is invisible to the cost basis. `untool_judge_tokens` was
-    exactly that: `tooling.after_task` writes the per-task instruction-aware tool judge's
-    spend to `srow` alone, so every arm with judge=True -- untool-only and all four trimech
-    variants -- had that line item silently dropped from `cost_effective_tokens`. The bias
-    is one-directional: a baseline runs no judge, so only the arms under test are
-    flattered. Same shape as the usage_incomplete trap in aggregate.py.
+    solely on the stream row is invisible to the cost basis. `untool_judge_tokens` is one:
+    `tooling.after_task` writes the per-task instruction-aware tool judge's spend to `srow`
+    alone, so without the lift every arm with judge=True -- untool-only and all four
+    trimech variants -- would drop that line item from `cost_effective_tokens`. The bias
+    would be one-directional: a baseline runs no judge, so only the arms under test would
+    be flattered. Same shape as usage_incomplete in aggregate.py.
 
     A value the runner already put on `row` WINS: the harness sets spiral_judge_tokens
     itself during run_task, and `srow` may carry a stale or zeroed copy of it.
 
-    Driven by ledger.OVERHEAD_KEYS so a newly added overhead field cannot silently
-    reintroduce the gap. Returns `row` for convenience.
+    Driven by ledger.OVERHEAD_KEYS so a newly added overhead field cannot silently open
+    the same gap. Returns `row` for convenience.
     """
     for k in ledger.OVERHEAD_KEYS:
         if k not in row and srow.get(k) is not None:

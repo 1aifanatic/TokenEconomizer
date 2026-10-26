@@ -41,7 +41,7 @@ resolving to whichever machine happened to write this file):
                          (default $TOKENECONOMIZER_RESULTS/logs/optimizer_calls.jsonl;
                          unset and with no results root, they are not recorded)
   TE_SWEBENCH_MAX_CPUS   CPU cap for the task container, cores      (default 16; 0 = no
-                         cap, the pre-2026-09-05 behaviour). Also sets the matching
+                         cap). Also sets the matching
                          OMP/MKL/OPENBLAS/NUMEXPR/LOKY thread caps -- see _cpu_limit_args
   TE_KEEP_CONTAINERS     '1' leaves containers up for post-mortem  (default: remove)
   TE_VERBOSE             '1' prints per-task progress
@@ -175,8 +175,7 @@ def guard_accepts(param):
     some versions and not in others. Passing a parameter it does not accept raises TypeError
     inside `_make_guard`/`run_task` -- i.e. at task 0, before a single row is written --
     so every optional guard parameter must be probed rather than assumed. Both domain
-    runners go through this one helper so the two cannot drift apart again; webbench.py
-    passed `never_abort` unconditionally and had exactly that failure mode.
+    runners go through this one helper so the two cannot drift apart.
     """
     try:
         return param in inspect.signature(
@@ -218,23 +217,21 @@ def _install_signal_cleanup():
 # --------------------------------------------------------------------------------------
 # The official images install the instance's dependencies into the `testbed` conda env and
 # activate it from /root/.bashrc. No lane here runs with HOME=/root, and no CLI's shell
-# sources that file, so a bare `python` / `pytest` in the agent's shell resolved to the
-# BASE interpreter (Python 3.11, no project deps) while TASK_TEMPLATE told the agent the
-# env was active. A bare `python` then failed to import the project's own package, each
-# failure costing a multi-step detour before the agent found
-# /opt/miniconda3/envs/testbed/bin/python -- or gave up running tests.
+# sources that file, so without activation a bare `python` / `pytest` in the agent's shell
+# resolves to the BASE interpreter (Python 3.11, no project deps), which cannot import the
+# project's own package, while TASK_TEMPLATE tells the agent the env is active.
 #
-# The fix that works for EVERY shell shape (measured: `bash -lc`, `bash -c`, any HOME) is
-# to prepend the env's bin dir to PATH in the agent PROCESS environment; the CLIs hand
-# their environment to the shells they spawn. BASH_ENV hooks do not reach Claude Code's
-# shell, so they are not used. Recorded on every row as `env_activation`, because rows
-# taken before and after this change are not comparable on cost and must not be pooled.
+# Prepending the env's bin dir to PATH in the agent PROCESS environment works for EVERY
+# shell shape (measured: `bash -lc`, `bash -c`, any HOME); the CLIs hand their environment
+# to the shells they spawn. BASH_ENV hooks do not reach Claude Code's shell, so they are
+# not used. Recorded on every row as `env_activation`, because rows with and without it
+# are not comparable on cost and must not be pooled.
 _CONDA_ENVS_DIR = "/opt/miniconda3/envs"
 _PREFERRED_ENV = "testbed"
 
 
 def env_activation_enabled():
-    """TE_ENV_ACTIVATION=0 reproduces the pre-2026-09-11 (inactive-env) behaviour."""
+    """TE_ENV_ACTIVATION=0 leaves the project env inactive (the image's own PATH)."""
     return os.environ.get("TE_ENV_ACTIVATION", "1") != "0"
 
 
@@ -282,7 +279,7 @@ def optimizer_log_path():
 # made after task N is charged to task N, exactly as the ledger charges `optimizer_tokens`.
 # `agent` is part of it because the log is ONE file per results root while `cell`
 # (`<arm>/<repo>_s<seed>`) names no tree: a Claude lane and a Copilot lane over the same
-# arm and repo collide on the key, and a per-cell groupby silently merged them.
+# arm and repo collide on the key, and a per-cell groupby without `agent` would merge them.
 _OPT_CTX = {}
 
 
@@ -322,8 +319,8 @@ _OPT_KINDS = (
     # makes once per runner construction. It goes through the same seam, so it lands in
     # this log -- and it does so BEFORE any task, so `_OPT_CTX` is empty and its row also
     # carries cell=None. Labelling it is what lets a per-cell overhead groupby exclude it;
-    # left unlabelled it was the MAJORITY of a short run's log (measured 15 of 27) while
-    # reading as "unrecognised prompt", which is a different and much more alarming thing.
+    # unlabelled, it can be most of a short run's log while reading as "unrecognised
+    # prompt", which is a different and much more alarming thing.
     ("preflight",    "Reply with the single word: ok"),
 )
 
@@ -440,13 +437,11 @@ def _import_swebench():
 # An agent that can browse is therefore not solving the task, it is retrieving the answer,
 # and the resolve verdict measures nothing.
 #
-# This is NOT hypothetical and NOT historical. Measured 2026-09-07: across two live
-# development trees, 32 tasks reached the network and 14 pulled
-# something patch-shaped -- `sympy/pulls/16597/files`, `django/commit/2cbd3967.patch`,
-# `sphinx-doc/commit/0eff5818.patch`, `svg-chart/test/task-4.spec.js` -- and 13 of those
-# scored RESOLVED. The published claude-opus-4.8 trees are clean (0 of 800 transcripts),
-# so this is a model-behaviour change, not a harness regression: the older model simply
-# never reached for the network, and nothing ever stopped it.
+# This is not hypothetical: given the tools, newer models do reach for the network on these
+# tasks and pull something patch-shaped -- a fixing PR's files, a commit's `.patch`, a
+# project's test spec -- and a patch retrieved that way grades RESOLVED like any other.
+# Whether an agent browses is a matter of model behaviour, so only removing the tools
+# makes the verdict independent of it.
 #
 # Blocked for EVERY arm, deliberately. Leaving it to the untool mechanism would be worse
 # than useless: untool drops a tool only after observing DISUSE, so precisely the agents
@@ -510,10 +505,10 @@ def _cpu_limit_args():
 
     An unlimited container sees every core on the HOST -- `nproc` inside one on a 384-core
     box reports 384 -- and the agent's own verification step routinely runs the repo's test
-    suite, which for scientific repos is parallel by default. Measured here 2026-09-05:
-    one agent-issued `pytest -k "... or common"` on scikit-learn held **249 cores for
-    183 s** (cpu-time/elapsed), peaking at 294 of 384. That is the agent checking its work,
-    not the grader, so it recurs on any task where the model picks a broad selector.
+    suite, which for scientific repos is parallel by default: one agent-issued
+    `pytest -k "... or common"` on scikit-learn holds ~250 cores for minutes
+    (cpu-time/elapsed) on a 384-core host. That is the agent checking its work, not the
+    grader, so it recurs on any task where the model picks a broad selector.
 
     `--cpus` ALONE IS NOT ENOUGH, and this is the part that is easy to get wrong: it caps
     total CPU but does not change what `nproc` reports, so joblib would still size its
@@ -521,7 +516,7 @@ def _cpu_limit_args():
     The thread caps are what actually bound the pool, and they must match the quota.
 
     Default 16: this harness is written for shared hosts, where an uncapped lane is
-    antisocial. `TE_SWEBENCH_MAX_CPUS=0` restores the previous unlimited behaviour. The
+    antisocial. `TE_SWEBENCH_MAX_CPUS=0` removes the cap. The
     value is recorded in run_config.json -> `cpu_limit` because it shapes wall-clock (and,
     via TE_TASK_TIMEOUT / TE_EVAL_TIMEOUT, can shape resolve).
     """
@@ -565,7 +560,7 @@ class ClaudeSwebenchRunner:
         # so a cheaper proposer would understate the overhead the arm actually incurs --
         # the economized arm would look better for having billed its own thinking at a
         # discount. One model per cell is also what the cell name claims. There is no knob:
-        # TE_OPTIMIZER_MODEL used to be one and is now refused rather than half-honoured.
+        # TE_OPTIMIZER_MODEL is refused rather than half-honoured.
         if os.environ.get("TE_OPTIMIZER_MODEL"):
             raise RuntimeError(
                 "TE_OPTIMIZER_MODEL is no longer honoured: the between-task optimizer "
@@ -583,7 +578,7 @@ class ClaudeSwebenchRunner:
         # An external tool scaffold (rtk / serena / repomap) -- a BASELINE, not a
         # mechanism. Resolved and preflighted here so a misconfigured one (no host cache
         # for rtk's binary, no aider for the repo map) kills the lane before task 0
-        # instead of writing 277 rows that merely look like a scaffold result.
+        # instead of writing a whole stream of rows that merely look like a scaffold result.
         self.scaffold_name = scaffold or None
         self.scaffold = scaffolds_pkg.get(self.scaffold_name)
         if self.scaffold is not None:
@@ -608,21 +603,20 @@ class ClaudeSwebenchRunner:
         # The mechanisms' judges answer with one JSON entry PER TOOL, which runs past a
         # small cap; a truncated answer is not a partial verdict but an unparseable one, so
         # the mechanism silently returns "drop nothing" while still billing for the call.
-        # 2048 sat right at the observed response length -- hence 8192.
-        # 8192 then truncated 7 of 40 manual-distill (injection) calls: the cap covers
-        # THINKING + response, and each of those spent all 8192 on thinking and emitted a
-        # ZERO-character answer -- so the manual paid full freight for nothing. Thinking is
-        # p50 ~4.8k but the observed distribution is CENSORED at the cap, so 16384 is a
-        # doubling with room for the JSON, not a measured ceiling; the truncation warning
-        # below is what says it was still not enough. Nudge-judge calls are unaffected
-        # (max 713 output tokens observed), so this only widens the injection path.
+        # The cap covers THINKING + response, and a manual-distill (injection) call can
+        # spend all of an 8192 cap on thinking and emit a ZERO-character answer, paying full
+        # freight for nothing. Thinking is p50 ~4.8k but the observed distribution is
+        # CENSORED at 8192, so 16384 is a doubling with room for the JSON, not a measured
+        # ceiling; the truncation warning below is what says it is still not enough.
+        # Nudge-judge calls stay far below it (max 713 output tokens observed), so the cap
+        # binds only on the injection path.
         self.optimizer_max_tokens = int(os.environ.get("TE_OPTIMIZER_MAX_TOKENS", "16384"))
         self.task_timeout = int(os.environ.get("TE_TASK_TIMEOUT", "1800"))
         self.eval_timeout = int(os.environ.get("TE_EVAL_TIMEOUT", "1800"))
         self.keep = os.environ.get("TE_KEEP_CONTAINERS") == "1"
-        # Stated rather than left to run_config's getattr default: this harness has
-        # ALWAYS made its mechanism calls as plain Messages requests, and that is the
-        # transport the Copilot harness now matches. Naming it here means the field
+        # Stated rather than left to run_config's getattr default: this harness makes its
+        # mechanism calls as plain Messages requests, the transport the Copilot harness
+        # uses too whenever its provider speaks it. Naming it here means the field
         # describes a decision instead of an absence.
         self.optimizer_transport = "api"
         self._preflight_optimizer_endpoint()
@@ -650,17 +644,15 @@ class ClaudeSwebenchRunner:
     def _reap_exited(self, name):
         """Remove EXITED containers from earlier attempts at this same cell.
 
-        Container names used to be one-per-(instance, arm), so `docker rm -f <name>` in
-        `_start` doubled as cleanup: a re-run of a cell collected whatever a previously
-        killed run had left behind. Names are now unique per task-run (see
-        `_container_name`), which is what makes two lanes safe -- but it also means that
-        exact-name removal no longer reaps anything, and a hard-killed driver would leak a
-        container per attempt.
+        Names are unique per task-run (see `_container_name`), which is what makes two
+        lanes on one cell safe -- but it also means the exact-name `docker rm -f <name>` in
+        `_start` never reaps what a previously killed run left behind, and a hard-killed
+        driver would leak a container per attempt.
 
         So reap by the readable stem instead, and ONLY containers that have exited. A
-        RUNNING container sharing this stem is the whole point of the rename: it belongs to
-        a live lane working the same cell, and force-removing it is precisely the bug this
-        replaced. Best-effort throughout -- failing to reap is untidy, not incorrect.
+        RUNNING container sharing this stem belongs to a live lane working the same cell,
+        and force-removing it would delete that lane's container mid-task. Best-effort
+        throughout -- failing to reap is untidy, not incorrect.
         """
         stem = name.rsplit("-", 1)[0]
         try:
@@ -756,9 +748,10 @@ class ClaudeSwebenchRunner:
                 cmd += ["-v", spec]
         _LIVE_CONTAINERS.add(name)
         # Container start is the one step whose latency is set by the HOST, not by us: on
-        # a loaded shared box `docker run -d` can take many minutes, and a timeout here
-        # kills the whole lane mid-stream (the container then finishes starting and is
-        # orphaned). Configurable, and generous by default.
+        # a loaded shared box `docker run -d` can take many minutes. A timeout here costs
+        # the task (`run_task` records it unresolved, `container_start_failed`, and the
+        # stream goes on) and can leave the container to finish starting on its own.
+        # Configurable, and generous by default.
         p = _run(cmd + [image_for(instance_id), "-lc", "sleep infinity"],
                  timeout=int(os.environ.get("TE_DOCKER_START_TIMEOUT", "900")))
         if p.returncode != 0:
@@ -777,16 +770,13 @@ class ClaudeSwebenchRunner:
     # a host-side settings.json is never read by the CLI in the container.
     #
     # WHY THIS AND NOT THE TOOL MASK. `network_tool_block()` drops WebSearch/WebFetch, but
-    # measured across 1,824 stored SWE-bench rows the shell was the BIGGER route: 120 rows
-    # reached the network through `Bash` against 47 through a web tool, and 16 rows fetched
-    # an answer-key-shaped URL (`.patch`, `/commit/`, `api.github.com/search/...`) of which
-    # 14 resolved -- one of them curling the instance's own fix commit as `/tmp/fix.patch`.
+    # the shell is the BIGGER route to the network: an answer-key-shaped URL (`.patch`,
+    # `/commit/`, `api.github.com/search/...`) is one `curl` away, no web tool needed.
     # `Bash` is in PROTECTED_TOOLS and can never be masked, so the hook is the only seam.
     # Derived from the AGENT PROFILE's home, never hardcoded: the Claude container runs
-    # HOME=/tmp/agent-home and the Copilot one HOME=/home/agent, and a literal path here
-    # meant the Copilot runner inherited a directory its `_start` never created --
-    # `docker cp` failed, and EVERY Copilot SWE-bench row read `net_guard_installed:
-    # false` (measured 0/60 armed across both stored copilot_swebench_* trees).
+    # HOME=/tmp/agent-home and the Copilot one HOME=/home/agent, so a literal path here
+    # would hand the Copilot runner a directory its `_start` never creates, and `docker cp`
+    # would fail on every task.
     @property
     def NET_GUARD_SCRIPT(self):
         return f"{self.scaffold_profile.home}/net_guard.py"
@@ -836,9 +826,9 @@ class ClaudeSwebenchRunner:
             # Registration succeeding says the config file was written or the plugin
             # installed -- neither of which means the CLI reads it, that the matcher name
             # is right, or that the guard can find the command in the payload it is handed
-            # (the two CLIs spell that differently -- guards/net_guard.hook_command). Each
-            # of those failed silently at least once while every provenance field read
-            # healthy, so the only trustworthy check is a real refusal.
+            # (the two CLIs spell that differently -- guards/net_guard.hook_command). Any
+            # of those can fail silently while every provenance field reads healthy, so the
+            # only trustworthy check is a real refusal.
             self._verify_net_guard(name, pys[0])
             return True
         except Exception as e:
@@ -854,7 +844,7 @@ class ClaudeSwebenchRunner:
         well -- and it sees only the shell tool. A layer that needs none of that is what
         makes the guard hold when one of those assumptions breaks with a CLI release.
 
-        This layer catches every route the stored corpus actually used, because all of them
+        This layer catches every fetch route an agent has here, because all of them
         resolve a hostname first: `curl`, `wget`, `git clone`, and
         `python -c "import urllib.request"`. Verified in a real SWE-bench container: each
         fails with "Connection refused" afterwards while pypi.org, files.pythonhosted.org
@@ -1068,18 +1058,16 @@ class ClaudeSwebenchRunner:
         """Remove the task container. NEVER raises -- cleanup is untidy, not incorrect.
 
         This is called from `run_task`'s `finally`, so anything it raises escapes the
-        per-task error handling and kills the whole STREAM. That is not hypothetical: on a
-        shared box at load ~96 with rootless Docker, `docker rm -f` exceeded the 120s
-        default and `subprocess.TimeoutExpired` propagated out of the finally, ending a
-        60-task sympy lane at task 3 with 57 tasks unrun (2026-09-10).
+        per-task error handling and kills the whole STREAM -- and on a loaded shared box
+        with rootless Docker, `docker rm -f` can outlast a 120 s timeout.
 
         The same reasoning `_start` already carries -- "a host that cannot start containers
         must not take the STREAM down with it" -- applies at least as strongly here, where
         the task is already graded and its row already built. A leaked container is
         reaped later by `_reap_exited`, so failing to remove one costs disk, not results.
 
-        The timeout is also generous now and configurable: removal on a loaded rootless
-        daemon is bounded by the HOST, not by us.
+        The timeout is also generous and configurable (TE_DOCKER_STOP_TIMEOUT): removal on
+        a loaded rootless daemon is bounded by the HOST, not by us.
         """
         if self.keep:
             _log(f"keeping container {name} (TE_KEEP_CONTAINERS=1)")
@@ -1211,8 +1199,8 @@ class ClaudeSwebenchRunner:
         `session_output_tokens` deduplicates by message id, so double-counting is not
         possible from the overlap.
 
-        Never raises and never fails a task: an unreadable log just means the row keeps the
-        old, honest `output_tokens=0` and stays flagged.
+        Never raises and never fails a task: an unreadable log just means the row keeps an
+        honest `output_tokens=0` and stays flagged.
         """
         home = self.scaffold_profile.home
         try:
@@ -1284,13 +1272,13 @@ class ClaudeSwebenchRunner:
     def _container_name(self, instance_id, arm, run_dir_path):
         """Docker container name for ONE task-run. Must be unique across live lanes.
 
-        This was `te-<instance>-<arm>` and carried no agent, model or seed -- so a Claude
-        lane and a Copilot lane on the same (instance, arm) resolved to the same name, and
-        since `_start` opens with `docker rm -f <name>` the second lane DELETED the first
-        one's container mid-grade. Nothing reported it: the grading `docker exec` came back
-        empty, `eval.log` was written empty, and `get_eval_report` scored the empty log as
+        `_start` opens with `docker rm -f <name>`, so a name carrying no agent, model or
+        seed (`te-<instance>-<arm>`) would let a Claude lane and a Copilot lane on the same
+        (instance, arm) resolve to one name, and the second lane would DELETE the first
+        one's container mid-grade. Nothing would report it: the grading `docker exec` comes
+        back empty, and `get_eval_report` scores an empty `eval.log` as
         `patch_successfully_applied: false` -- a row that reads like a bad model rather than
-        a lost container, on a lane that still exited 0.
+        a lost container, on a lane that still exits 0.
 
         The run directory already encodes timestamp, stream index, agent, instance, arm,
         seed and mode, so a short digest of it is unique per task-run. The readable stem is
@@ -1329,11 +1317,10 @@ class ClaudeSwebenchRunner:
         self._write_run_config(run_dir_path, task, arm, injected, exclude_tools,
                                max_turns, run_kwargs, guard)
 
-        # A host that cannot start containers must not take the STREAM down with it.
-        # TimeoutExpired/RuntimeError from `docker run -d` used to propagate out of
-        # run_task and kill the launcher at whichever task it hit -- a wedged rootless
-        # daemon ended django s2 at task 0 of 40, and an intermittent 300s stall on
-        # xarray-6599 lost a whole baseline cell. Record the task as an unresolved,
+        # A host that cannot start containers must not take the STREAM down with it: a
+        # TimeoutExpired/RuntimeError from `docker run -d` propagating out of run_task would
+        # kill the launcher at whichever task it hit, and a wedged rootless daemon or an
+        # intermittent stall can hit any task. Record the task as an unresolved,
         # explicitly-flagged error and let the stream continue; a run where every task
         # carries start_error is a legible infrastructure failure, not a silent crash.
         net_guard_installed, net_guard_blocks = False, 0
@@ -1363,7 +1350,7 @@ class ClaudeSwebenchRunner:
             # being replaced by it -- see `_install_net_guard`.
             net_guard_installed = self._install_net_guard(name)
             # The DNS layer, on every agent. Independent of the hook above and of each CLI's
-            # hook contract, which is per agent and has broken silently before.
+            # hook contract, which is per agent and can break silently with a CLI release.
             hosts_blocked = self._install_answer_key_hosts(name)
             with open(transcript, "w", encoding="utf-8") as fh:
                 result = self._segment(name, prompt, fh, exclude_tools, max_turns, guard,
@@ -1382,11 +1369,10 @@ class ClaudeSwebenchRunner:
             # Patch extraction and grading get the SAME protection container start has,
             # and for the same reason: a host-side stall must not take the STREAM down.
             # `_graded_diff` is a `docker exec ... git diff` with a 300 s cap, and on a
-            # loaded shared box it does stall -- one did on 2026-09-13, at task 57 of a
-            # 60-task baseline, and the TimeoutExpired propagated out of run_task and ended
-            # the cell with four tasks unrun after 65 minutes of paid work. The agent's turn
-            # is already bought by this point, so the honest thing is to keep the row, say
-            # what happened on it, and let the stream continue: a task with
+            # loaded shared box it can stall; a TimeoutExpired propagating out of run_task
+            # would end the cell with every remaining task unrun. The agent's turn is
+            # already bought by this point, so the honest thing is to keep the row, record
+            # why it has no grade, and let the stream continue: a task with
             # `grading_error` is filterable, an ended stream is not recoverable.
             patch, resolved, report = "", False, {}
             try:
@@ -1439,7 +1425,7 @@ class ClaudeSwebenchRunner:
         can be long, and the state file already holds its text.
         """
         # The SAME two-step the CLI invocation performs (see `_segment`): recomputing only
-        # the untool half here recorded `excluded_applied: []` on every row and made a
+        # the untool half here would record `excluded_applied: []` on every row and make a
         # guarded run byte-identical to an unguarded one in its own provenance.
         drop = [t for t in (exclude_tools or []) if t not in self.protected_tools]
         drop = drop + [t for t in network_tool_block() if t not in drop]
@@ -1505,13 +1491,13 @@ class ClaudeSwebenchRunner:
             return False, {"empty_patch": True}
         script = self.grader.eval_script(instance_id)
         host_log = os.path.join(run_dir_path, "eval.log")
-        # A hung eval must not take the STREAM down with it. TimeoutExpired from these
-        # docker execs used to propagate out of run_task and kill the launcher mid-stream:
-        # scikit-learn-14710 ended the sklearn cell at task 21 of 32 TWICE (at eval_timeout
-        # 1800 and again at 3600), so that cell has never produced more than 20 graded rows.
-        # One pathological instance is a scored failure, not a reason to lose the other 11
-        # tasks behind it. Whatever the script printed before the cap is still written to
-        # eval.log, so the hang stays diagnosable.
+        # A hung eval must not take the STREAM down with it: a TimeoutExpired from these
+        # docker execs propagating out of run_task would kill the launcher mid-stream, and
+        # an instance whose eval never terminates (scikit-learn-14710, see
+        # workloads.SWEBENCH_EXCLUDED) would end its cell at any eval_timeout. One
+        # pathological instance is a scored failure, not a reason to lose the tasks behind
+        # it. Whatever the script printed before the cap is still written to eval.log, so
+        # the hang stays diagnosable.
         try:
             w = self._exec(name, "cat > /tmp/eval.sh <<'TE_EOF'\n" + script + "\nTE_EOF\n"
                                  "chmod +x /tmp/eval.sh")
@@ -1530,9 +1516,9 @@ class ClaudeSwebenchRunner:
             _log(f"{instance_id}: EVAL TIMEOUT after {self.eval_timeout}s -> unresolved "
                  f"(stream continues; see eval.log)")
             return False, {"eval_timeout": self.eval_timeout}
-        # An eval that produced NOTHING did not grade the patch -- it failed to run. The
-        # usual cause is that the container disappeared under us (see _container_name),
-        # and `docker exec` then exits nonzero with the reason on ITS stderr while the
+        # An eval that produced NOTHING did not grade the patch -- it failed to run. A
+        # container that disappeared under us (see _container_name) produces exactly this:
+        # `docker exec` exits nonzero with the reason on ITS stderr while the
         # in-container `2>&1` captures nothing. Scoring that empty log would hand
         # get_eval_report a file with no APPLY_PATCH_PASS marker, which comes back as
         # `patch_successfully_applied: false, resolved: false` -- indistinguishable from a
@@ -1555,8 +1541,8 @@ class ClaudeSwebenchRunner:
     def _eval_exec_failed(self, instance_id, host_log, out, rc, stderr, phase):
         """Record a grading exec that never ran, loudly and distinguishably.
 
-        Returns the eval_report dict. `resolved` is still False -- but the row now says
-        the task was NOT GRADED rather than graded-and-missed, so aggregate.py and a
+        Returns the eval_report dict. `resolved` is still False -- but the row says the
+        task was NOT GRADED rather than graded-and-missed, so aggregate.py and a
         human reading the row can tell the two apart.
         """
         err = (stderr or "").strip()[-500:]
@@ -1590,8 +1576,7 @@ def preflight_optimizer_endpoint(*, configured_model, label, remedy, api_key="",
 
     Shared by every runner whose mechanism calls use this wire -- the Claude runners, and a
     Copilot runner on an Anthropic-typed BYOK provider -- so the check cannot drift between
-    them; the two Claude runners went without it until 2026-09-07 and 83 rows were billed
-    on a 401 before anyone looked at the ledger.
+    them.
 
     ONLY for an arm that will actually make such a call: `baseline`, `baseline-low`,
     `baseline-medium` and the scaffold arms make none, so probing for them would bill a call
@@ -1794,14 +1779,15 @@ class _UsageRecovery:
 
     Claude Code reports its token breakdown ONLY in the stream's terminal
     `{"type":"result"}` event. Both break paths in `_segment` -- a spiral guard stop and a
-    TE_TASK_TIMEOUT -- kill the CLI mid-stream, so that event never arrives and the segment
-    returned `{}`. `_row_from_result({})` then produced a row of ZEROS: every token field
-    and `num_turns` recorded as 0 for a rollout that had really run for tens of turns and
-    hundreds of thousands of tokens.
+    TE_TASK_TIMEOUT -- kill the CLI mid-stream, so that event never arrives. Read as `{}`,
+    such a segment would make `_row_from_result` produce a row of ZEROS: every token field
+    and `num_turns` 0 for a rollout that really ran for tens of turns and hundreds of
+    thousands of tokens.
 
-    Because only economized arms install a guard, the understatement was ONE-DIRECTIONAL:
-    it made those arms look cheaper than they were and could never touch a baseline.
-    Grading was unaffected (that reads the patch), but turn-based claims were not.
+    Because only economized arms install a guard, that understatement would be
+    ONE-DIRECTIONAL: it would make those arms look cheaper than they are and could never
+    touch a baseline. Grading is unaffected (that reads the patch), but turn-based claims
+    are not.
 
     What is recoverable, and what is not:
 
@@ -1821,7 +1807,7 @@ class _UsageRecovery:
     A recovered row is therefore honest but incomplete, and says so: `usage_incomplete` is
     set, with `output_tokens_missing` and `num_turns_recovered` naming which parts are
     soft. Such a row is a LOWER BOUND on cost -- aggregations must not read it as exact,
-    and must never again read an unflagged zero as free.
+    and must never read an unflagged zero as free.
     """
 
     def __init__(self):
@@ -1849,8 +1835,8 @@ class _UsageRecovery:
 
         The flag is cleared only on PROOF of completeness: every message id the stream saw
         also appears in the session log. Anything less stays flagged. Getting that backwards
-        would reintroduce the exact defect this class exists to prevent -- an unflagged row
-        that reads like a measurement and is not.
+        would produce exactly what this class exists to prevent -- an unflagged row that
+        reads like a measurement and is not.
         """
         if not self._by_msg:
             return {}
@@ -1931,7 +1917,7 @@ def _row_from_result(result):
         "cost_usd_vendor": (result or {}).get("total_cost_usd"),
         # Degradation markers. Present and False on a healthy row, so "no flag" means
         # "not checked by this harness version" rather than "verified complete" -- and a
-        # zero-token row can never again be silently indistinguishable from a free one.
+        # zero-token row is never silently indistinguishable from a free one.
         "usage_incomplete": bool((result or {}).get("usage_incomplete")),
         "output_tokens_missing": bool((result or {}).get("output_tokens_missing")),
         "num_turns_recovered": bool((result or {}).get("num_turns_recovered")),
@@ -1990,11 +1976,11 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
         # and recording it as one makes pricing hard-fail at the END of a paid rollout.
         self.model = copilot.normalize_model(model or os.environ.get("COPILOT_MODEL"))
         copilot.validate_priceable(self.model, self.agent)
-        # Same rule as the Claude path: the optimizer is the agent's own model. It was
-        # already CALLED that way (optimizer_call substitutes self.model for the "agent"
-        # label), but it was RECORDED as "agent" -- so run_config.json described a cost
-        # basis the run did not use. A pinned id records as itself; an unpinned model is
-        # the CLI's own router, which is what the task ran on too, and records as "auto".
+        # Same rule as the Claude path: the optimizer is the agent's own model, and it is
+        # RECORDED as such -- optimizer_call substitutes self.model for the "agent" label,
+        # so recording "agent" would describe a cost basis the run did not use. A pinned id
+        # records as itself; an unpinned model is the CLI's own router, which is what the
+        # task ran on too, and records as "auto".
         if os.environ.get("TE_OPTIMIZER_MODEL"):
             raise RuntimeError(
                 "TE_OPTIMIZER_MODEL is no longer honoured: the between-task optimizer "
@@ -2052,9 +2038,8 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
         self.cli_version = copilot.cli_version(self.copilot)
         self.grader = _Grader(grading_path)
         # An output cap applies on the API transport only -- `copilot -p` has no such flag,
-        # so on the CLI branch this stays a value nothing reads (it used to be omitted
-        # entirely for exactly that reason). Same default and same env var as the Claude
-        # harness, so the two agents' mechanism calls are capped alike.
+        # so on the CLI branch this stays a value nothing reads. Same default and same env
+        # var as the Claude harness, so the two agents' mechanism calls are capped alike.
         self.optimizer_max_tokens = int(os.environ.get("TE_OPTIMIZER_MAX_TOKENS", "16384"))
         self.task_timeout = int(os.environ.get("TE_TASK_TIMEOUT", "1800"))
         self.eval_timeout = int(os.environ.get("TE_EVAL_TIMEOUT", "1800"))
@@ -2130,10 +2115,10 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
 
           * **Which file.** `$COPILOT_HOME/settings.json`, which in the container is
             `/home/agent/.copilot/settings.json` (HOME is `/home/agent`, seeded per task
-            and thrown away with the container). The inherited implementation wrote
-            `.claude/settings.json`, which this CLI never reads -- so it succeeded,
-            reported armed, and guarded nothing. Note `hooks.json` at that level is
-            **not** read; only `settings.json` is.
+            and thrown away with the container). This CLI never reads
+            `.claude/settings.json`, so a guard written there would report armed and guard
+            nothing. Note `hooks.json` at that level is **not** read; only
+            `settings.json` is.
           * **The spelling.** `preToolUse` and matcher `bash` -- camelCase and lower-case,
             against Claude's `PreToolUse` and `Bash`, and a flat entry rather than
             Claude's nested `hooks` list. A wrong matcher never fires.
@@ -2275,9 +2260,9 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
         # vendor cost stays null rather than a fabricated zero.
         row.setdefault("cost_usd_vendor", None)
         # Same degradation predicate as the Claude path, so one filter covers both agents.
-        # Copilot never needed _UsageRecovery -- it reads the whole log dir back AFTER the
-        # kill (`cat {logdir}/*.log`), which is why the audit found zero affected Copilot
-        # rows in 2,571. Its own failure mode is a log dir it could not parse, which
+        # Copilot needs no _UsageRecovery -- it reads the whole log dir back AFTER the
+        # kill (`cat {logdir}/*.log`), so a guard or timeout stop costs it no usage. Its
+        # own failure mode is a log dir it could not parse, which
         # `row_usage` already reports as tokens_source="stream_output_only" with None (not
         # 0) in the unaccounted fields.
         src = row.get("tokens_source")
@@ -2310,9 +2295,8 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
         return row, out_dir
 
 
-# Scaffolds whose mechanism this lane cannot deliver, and why. Refused at construction:
-# each would install successfully and then do nothing, which reads as a scaffold result.
-# Every scaffold is hostable on this lane, each through the channel Codex actually has:
+# Every scaffold is hostable on the Codex lane, each through the channel Codex actually has
+# -- none installs successfully and then does nothing, which would read as a scaffold result:
 #   rtk     -- its own Codex mode (`rtk init -g --codex`, instruction files under CODEX_HOME;
 #              the hook mode is one this CLI ignores), measured by `rtk_compliance`;
 #   repomap -- project instructions, which the profile declares as AGENTS.md;
@@ -2320,8 +2304,6 @@ class CopilotSwebenchRunner(ClaudeSwebenchRunner):
 #              than an argv flag: the profile's `mcp_args` is empty on purpose and
 #              `_apply_scaffold` rewrites the config with the scaffold's spec. Measured by
 #              `serena_tool_calls`, because a configured server is not a used one.
-# A refusal table used to live here for rtk and serena; both refusals were about wiring this
-# harness had not done, not about the tools.
 
 
 class CodexSwebenchRunner(ClaudeSwebenchRunner):
@@ -2497,13 +2479,12 @@ class CodexSwebenchRunner(ClaudeSwebenchRunner):
         if p.returncode != 0:
             raise RuntimeError(f"docker run failed for {instance_id}: {p.stderr[-500:]}")
         # The agent home too: the net guard's script is `docker cp`'d into it, and docker cp
-        # into a directory that does not exist fails -- the way the Copilot lane once ran
-        # unguarded for a whole sweep.
+        # into a directory that does not exist fails.
         _run(["docker", "exec", name, "mkdir", "-p", codex.C_HOME, self.scaffold_profile.home])
         # The contract is written HERE, not as a side effect of arming the net guard.
         # `_install_net_guard` returns early when TE_ALLOW_NETWORK_TOOLS=1 lifts the guard,
-        # and with the write hanging off `_register_net_guard` that lane got NO config.toml
-        # at all -- no provider block, so every task failed to reach any endpoint. The
+        # so a write hanging off `_register_net_guard` would leave that lane with NO
+        # config.toml at all -- no provider block, so no task could reach any endpoint. The
         # guard's hook goes in hooks.json beside this file, never into it.
         self._write_config(name)
         self._activate_project_env(name)
@@ -2558,11 +2539,10 @@ class CodexSwebenchRunner(ClaudeSwebenchRunner):
         PreToolUse hook: Blocked: this benchmark's grading specs are public on GitHub ..." --
         and logged the refusal, while a control command in the same turn ran normally.
 
-        The 2026-09-09 conclusion that Codex ignores the hook was a configuration error, not
-        the CLI: those probes keyed the event kebab-case (`pre-tool-use`; Codex reads
-        PascalCase `PreToolUse`, as Claude Code does), gave the handler an argv list rather
-        than a command string, and ran without the trust bypass. Codex rows stored before
-        2026-09-30 therefore ran without the hook, guarded by the hosts block alone.
+        Three details are load-bearing, and without any one of them the guard never runs:
+        the event is keyed PascalCase `PreToolUse`, as Claude Code reads it (not kebab-case
+        `pre-tool-use`); the handler is a command string, not an argv list; and the run
+        passes the trust bypass.
 
         The rest is the shared lifecycle's: the script is copied in, the interpreter found,
         and the guard made to refuse its probe before the lane reports itself armed.
@@ -2774,9 +2754,9 @@ class CodexSwebenchRunner(ClaudeSwebenchRunner):
 
 
 # Which runner each --agent label selects. A label with no entry is an error rather than a
-# silent fallback: the old zero-arg factory always returned the Claude runner, so
-# `--agent copilot` ran Claude Code and filed the rows under a copilot/ tree -- wrong
-# numbers rather than a crash, which is the worst failure mode a benchmark can have.
+# silent fallback: falling back to the Claude runner would run Claude Code under
+# `--agent copilot` and file the rows under a copilot/ tree -- wrong numbers rather than
+# a crash, which is the worst failure mode a benchmark can have.
 RUNNERS = {
     "claude": ClaudeSwebenchRunner,
     "copilot": CopilotSwebenchRunner,

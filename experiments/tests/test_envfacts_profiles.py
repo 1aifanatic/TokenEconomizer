@@ -121,9 +121,9 @@ def test_envfacts_alone_still_needs_no_runner(tmp_path):
 def test_codex_arms_carry_the_intended_profiles():
     """Since 2026-09-12 the Codex injection DEFAULT is the composed profile.
 
-    The free layer's value on this benchmark came from the inactive-project-environment
-    defect; with that fixed it abstains, so `codex-inject` carries the paid proposer and
-    the LLM-free variant is the named ablation `codex-inject-envfacts`.
+    With the project environment active on every lane the free layer mostly abstains, so
+    `codex-inject` carries the paid proposer and the LLM-free variant is the named ablation
+    `codex-inject-envfacts`.
     """
     from te_bench.arms import ARMS, ARM_ORDER
     from te_bench import mechanism_arms as ci

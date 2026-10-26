@@ -156,10 +156,9 @@ def estimate(domain, arms, repos, seeds, sec_per_task, usd_per_task, limit=0, ma
     """Task-runs, wall-clock and dollars for the requested slice.
 
     `limit` mirrors the launcher's LIMIT (cap tasks per cell, 0 = all). It has to be
-    honoured here or the estimate describes a run nobody asked for: a LIMIT=1 pilot used to
-    be costed at the full stream -- "task-runs= 40 ... ~$14" for a cell that runs ONE task
-    -- which is the wrong direction for a number whose whole job is to be checked before
-    spending money.
+    honoured here or the estimate describes a run nobody asked for: a LIMIT=1 pilot would
+    be costed at the full stream for a cell that runs ONE task, which is the wrong
+    direction for a number whose whole job is to be checked before spending money.
     """
     sizes = group_sizes(domain, manifest)
     unknown = [r for r in repos if r not in sizes]

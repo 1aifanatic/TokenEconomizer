@@ -462,6 +462,7 @@ def test_the_pi_host_reads_what_the_extension_sends():
 
 # ---- the guard sees edits made through the shell ---------------------------------------------
 from tokeneconomizer import loopguard as guard  # noqa: E402
+from tokeneconomizer.loopguard import turn  # noqa: E402
 
 
 @pytest.mark.parametrize("cmd,want", [
@@ -515,8 +516,8 @@ def test_shell_edits_reach_the_state_the_judge_reads_and_the_ended_green_proxy()
 
 
 def test_reading_a_file_full_of_asserts_is_not_a_failure():
-    """Seen live on Pi: a passing 13-call turn that read its test file three times counted four
-    error outputs and two repeated identical failures, and opened the paid judge's gate."""
+    """A test file read back is full of `assert` and `Error`: reading it, three times over, is
+    no failure and no repeated failure, and opens no gate to the judge."""
     test_file = "def test_total():\n    assert total([1, 2]) == 3\n    raise ValueError('no')\n"
     g = guard.TurnGuard(turn_key="t")
     for _ in range(3):
@@ -646,9 +647,8 @@ def test_copilot_logs_read_through_the_existing_trace_seam(tmp_path):
 
 
 def test_a_copilot_call_into_the_session_directory_is_the_plain_form(tmp_path):
-    """Seen live: Copilot's models type `cd <repo> && ` before every command, so the repeated
-    `cd /w/repo && python -m unittest` and a one-off bare form were two forms, and the bare one
-    won as the form that leaves the shell where it is."""
+    """Copilot's models type `cd <repo> && ` before every command: `cd /w/repo && python -m
+    unittest` is the same form as the bare one."""
     from tokeneconomizer.microskills.observe import PYTHON_GIT, observe_task
     p = copilot_events(str(tmp_path / "s" / "events.jsonl"), [
         ("bash", {"command": "cd /w/repo && pytest -q"},
@@ -718,8 +718,8 @@ def test_a_copilot_side_call_is_a_bare_completion_priced_from_its_own_log(tmp_pa
 @pytest.mark.real_sidecalls
 def test_a_side_call_with_no_reply_is_noted_and_keeps_to_a_bare_completion(tmp_path,
                                                                            monkeypatch):
-    """Seen live: under Copilot's BYOK the provider's variables do not reach the hooks, so the
-    side call ran signed out, answered nothing, and the plugin said nothing either."""
+    """Under Copilot's BYOK the provider's variables do not reach the hooks, so a side call can
+    run signed out and answer nothing: that is noted, and the call stays a bare completion."""
     import subprocess
     from tokeneconomizer.plugin import sidecall
     monkeypatch.setenv("TOKENECONOMIZER_HOME", str(tmp_path / "te"))
@@ -908,7 +908,7 @@ def test_a_small_envelopes_backstop_never_preempts_the_nudge():
                                  "./runtests.py basic", ".venv/bin/pytest -q tests/test_a.py",
                                  "cd web && ./node_modules/.bin/jest src", "/usr/bin/python3 -m pytest",
                                  "/w/venv/bin/pytest -q", "~/.local/bin/pytest -q",
-                                 "python3 /w/repo/tests/runtests.py basic"])
+                                 "python3 /w/repo/tests/runtests.py basic", "node --test test/"])
 def test_a_runner_named_by_path_counts_as_a_verification(cmd):
     """A failing run after the last edit means the turn did not end green, whatever path the
     runner was called by -- otherwise long failing turns feed the envelope and the guard
@@ -923,6 +923,97 @@ def test_a_runner_named_by_path_counts_as_a_verification(cmd):
                                  "vim tests/runtests.py.bak"])
 def test_a_file_named_like_a_runner_is_not_a_verification(cmd):
     assert not guard.VERIFY_RE.search(cmd)
+
+
+TAP_FAILING = "# tests 9\n# suites 0\n# pass 8\n# fail 1\n# cancelled 0"
+
+
+def test_a_test_run_whose_status_was_replaced_is_judged_by_its_output():
+    """A pipe, `||` or a report of the status gives the command line another command's status:
+    `npm test 2>&1 | tail -n 8` exits with `tail`'s 0 whatever the tests did."""
+    g = guard.TurnGuard(turn_key="t")
+    for _ in range(3):
+        g.fold("bash", {"command": "npm test 2>&1 | tail -n 8"}, TAP_FAILING, 0)
+    assert (g.whole.error_outputs, g.whole.repeated_fail_sigs) == (3, 2)
+    assert not g.resolved_proxy()
+    # Codex records a call as `bash -lc '<script>'`
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("bash", {"command": "/bin/bash -lc 'cd /w && timeout 60 go test ./... 2>&1 | tail -3'"},
+           "--- FAIL: TestAdd (0.00s)\nFAIL\tacme/x\t0.01s", 0)
+    assert g.whole.error_outputs == 1 and not g.resolved_proxy()
+    for cmd in ('python3 -m unittest tests.test_x; echo "exit=$?"', "npm test || true"):
+        g = guard.TurnGuard(turn_key="t")
+        g.fold("bash", {"command": cmd}, "FAILED (failures=1)\nexit=1", 0)
+        assert g.whole.error_outputs == 1 and not g.resolved_proxy()
+    # under pipefail the status is the tests' own; `| grep` finding nothing is no failure
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("bash", {"command": "set -o pipefail; npm test | tail -n 8"}, TAP_FAILING, 0)
+    g.fold("bash", {"command": "pytest -q | grep FAILED"}, "", 1)
+    assert g.whole.error_outputs == 0 and g.resolved_proxy()
+
+
+def test_a_test_run_followed_by_other_commands_is_judged_by_its_runners_summary():
+    """`pytest -q; git diff` exits with `git`'s status, and its output holds the diff too: the
+    runner's own summary line says how the tests went."""
+    diff = "diff --git a/m.py b/m.py\n+    raise ValueError('no')\n"
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("bash", {"command": "pytest -q; git diff"},
+           "F.\n1 failed, 1 passed in 0.12s\n" + diff, 0)
+    assert g.whole.error_outputs == 1 and not g.resolved_proxy()
+    # passing tests, whatever the later command's status or the words in its output
+    for code in (1, 0, None):
+        g = guard.TurnGuard(turn_key="t")
+        g.fold("bash", {"command": "pytest -q\ngit diff --exit-code"}, "2 passed in 0.10s\n" + diff,
+               code)
+        assert g.whole.error_outputs == 0 and g.resolved_proxy()
+
+
+@pytest.mark.parametrize("out, failed", [
+    ("1 failed, 4 passed, 2 warnings in 1.23s", True), ("== 1 error in 0.12s ==", True),
+    ("2 passed, 1 warning in 0.30s", False), ("no tests ran in 0.01s", None),
+    ("Ran 3 tests in 0.1s\n\nFAILED (failures=1)", True), ("Ran 3 tests in 0.1s\n\nOK", False),
+    ("tests finished: 10 passed, 1 failed, in 3.20 seconds", True), (TAP_FAILING, True),
+    ("# pass 9\n# fail 0", False), ("Tests:       1 failed, 3 passed, 4 total", True),
+    ("  3 passing (20ms)\n  1 failing", True), ("--- FAIL: TestAdd (0.00s)", True),
+    ("ok  \tacme/x\t0.012s", False), ("test result: FAILED. 1 passed; 1 failed", True),
+    ("test result: ok. 3 passed; 0 failed", False), ("5 examples, 1 failure", True),
+    ("Tests run: 4, Failures: 0, Errors: 1", True), ("[INFO] BUILD SUCCESS", False),
+    ("+    raise ValueError('no')", None), ("ok 1 - add", None)])
+def test_a_runners_summary_gives_its_verdict(out, failed):
+    assert turn.runner_verdict(out) is failed
+
+
+@pytest.mark.parametrize("cmd", ["tar -xOf pkg.tgz pkg/x.py | sed -n 1,80p",
+                                 "cat tests/test_x.py | head -40", "grep -rn pytest src | head",
+                                 "python -m pytest x.py --collect-only -q | rg test_",
+                                 "bin/test --help | head", "python repro.py 2>&1 | tail",
+                                 "pytest -q; git diff --stat", "pytest -q\npython - <<'PY'\nx\nPY"])
+def test_any_other_command_keeps_its_exit_status(cmd):
+    """Piped reads of source, and a test run among other commands with no runner's summary in
+    the result, keep the status the agent reported: `assert` and `Error` in such output are no
+    verdict."""
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("bash", {"command": cmd}, "def f():\n    assert x\n    raise ValueError('no')\n", 0)
+    assert g.whole.error_outputs == 0
+
+
+@pytest.mark.parametrize("out, failing", [
+    (TAP_FAILING, True), ("# pass 9\n# fail 0", False), ("not ok 3 - rates", True),
+    ("  2 failing", True), ("5 examples, 0 failures", False), ("5 examples, 2 failures", True),
+    ("Tests run: 4, Failures: 1, Errors: 0", True), ("Tests run: 4, Failures: 0, Errors: 0", False),
+    ("--- FAIL: TestAdd (0.00s)", True), ("ok  \tacme/x\t0.01s", False)])
+def test_other_ecosystems_failing_test_summaries_count_as_failures(out, failing):
+    g = guard.TurnGuard(turn_key="t")
+    g.fold("bash", {"command": "make test"}, out, None)
+    assert (g.whole.error_outputs == 1) is failing
+
+
+def test_a_unittest_failure_is_known_by_its_traceback():
+    """unittest's `FAIL: test_x (...)` is not Go's `FAIL`: a Django failure is known by its
+    traceback, not its test name, so the same failure in another test still repeats."""
+    from tokeneconomizer.loopguard.state import _failure_sig
+    out = "FAIL: test_x (validators.tests.T)\nTraceback (most recent call last):\n  ..."
+    assert _failure_sig(out) == _failure_sig("Traceback (most recent call last):")
 
 
 def test_codex_exec_and_copilot_p_are_told_from_their_terminal_uis(tmp_path, monkeypatch):

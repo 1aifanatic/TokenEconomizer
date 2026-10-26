@@ -98,7 +98,7 @@ echo "[smoke] workload manifest narrows to ONE group (ids repeat across groups)"
 # Web-Bench numbers every project's stream 'init', 'task-1', ... so ids are unique only
 # WITHIN a project. Filtering on ids alone silently returns every project's tasks
 # interleaved -- which, for a sequentially dependent stream, is not a bigger run but a
-# meaningless one. Two synthetic groups sharing all three ids catch that regression.
+# meaningless one. Two synthetic groups sharing all three ids make that visible.
 WB_ROOT="$WORK/wb/projects"
 mkdir -p "$WB_ROOT/alpha" "$WB_ROOT/beta"
 for proj in alpha beta; do

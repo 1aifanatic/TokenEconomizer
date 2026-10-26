@@ -205,11 +205,10 @@ def test_defensive_profile_is_selectable_and_unpaid(tmp_path):
 def test_both_guards_expose_everything_the_shared_task_loop_reads():
     """The Codex guard is driven by the SAME `run_task` loop as the generic one.
 
-    On 2026-09-12 that loop's `_log(... guard.segment)` crashed the codex-spiral lane on its
-    very first nudge: `CodexResumeGuard` had no `segment`. Nothing had caught it because the
-    only live Codex nudges on record were produced by a different harness. Rather than pin
-    one name, read the attributes the loop actually touches out of its source and require
-    both guard classes to carry them.
+    The loop logs `guard.segment` on every nudge (`_log(... guard.segment)`), so the guard
+    must expose it, and every other attribute the loop reads. Rather than pin one name,
+    read the attributes the loop actually touches out of its source and require both guard
+    classes to carry them.
     """
     import inspect, re
     from te_harness import swebench as sw
@@ -236,11 +235,10 @@ def test_both_guards_expose_everything_the_shared_task_loop_reads():
 
 def test_the_codex_envelope_is_advanced_in_the_unit_its_trigger_compares(tmp_path):
     """`CodexEnvelopeTracker` is documented in tool events and the guard's trigger compares
-    `state.turns` (command + edit). The stage used to feed it the row's `num_turns`, which
-    for Codex is agent STEPS (messages + tool calls) and runs ~1.45x larger -- measured on
-    the 2026-09-12 baselines, that raised the gate ~45% and left only 3 of 60 scikit-learn
-    tasks able to reach it, against 10 of 60 at the documented unit. The controller ran and
-    could not fire.
+    `state.turns` (command + edit). The row's `num_turns` is, for Codex, agent STEPS
+    (messages + tool calls) and runs ~1.45x larger, so an envelope learned from it sits
+    ~45% above the count it is compared to and few tasks ever reach the gate. The stage
+    must feed the tracker the trigger's own unit.
     """
     from tokeneconomizer.config import SpiralConfig
     from te_bench.spiral_stage import SpiralStage

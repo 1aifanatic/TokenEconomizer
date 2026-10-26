@@ -223,9 +223,8 @@ def d_text(d):
 
 
 def test_an_environment_fact_forms_in_a_repository_where_every_session_edits_one_file(tmp_path):
-    """Seen live on all four agents: in a small repository every session touched the same
-    module, so a fact needing confirmations on different files never formed. Whether `pytest`
-    is missing does not depend on which file a session edits."""
+    """Whether `pytest` is missing does not depend on which file a session edits: in a small
+    repository where every session touches the same module, the fact still forms."""
     def same_file(tmp_path, i):
         return _task(tmp_path, i, [
             _edit("pkg/stock.py"),

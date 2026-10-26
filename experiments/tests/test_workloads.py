@@ -244,8 +244,7 @@ def test_driver_task_list_is_not_stale():
 
 # ---- Web-Bench's per-segment cap must stay under the evaluator's request abort ------------
 # TE_TASK_TIMEOUT is shared with SWE-bench, where 3600 is correct; on Web-Bench anything past
-# the evaluator's ~300s undici abort loses whole attempts and truncates the stream. Measured
-# 2026-09-07: it silently killed two threejs streams at task-14 before the clamp existed.
+# the evaluator's ~300s undici abort loses whole attempts and truncates the stream.
 
 def test_webbench_task_timeout_is_clamped_under_the_evaluator_abort():
     from te_harness.webbench import (webbench_task_timeout, WEBBENCH_TASK_TIMEOUT_MAX,
@@ -266,14 +265,14 @@ def test_webbench_task_timeout_defaults_and_overrides():
 
 
 def test_swebench_task_timeout_is_untouched_by_the_webbench_clamp():
-    """SWE-bench genuinely needs 3600 (sympy pinned 1800 dead-on); the clamp is domain-local."""
+    """SWE-bench genuinely needs 3600 (sympy tasks run to 1800 s); the clamp is domain-local."""
     import te_harness.swebench as sb
     assert "WEBBENCH_TASK_TIMEOUT_MAX" not in dir(sb)
 
 
 # ---- the abort ceiling is raisable, because the evaluator's bare `fetch` uses undici's
 # GLOBAL dispatcher, which `--import te_harness/webbench_undici_preload.mjs` can reset.
-# Opt-in only: unset, every value below is what the fixed 300/260 constants produced.
+# Opt-in only: unset, the abort ceiling stays at undici's stock 300 s and the cap at 260 s.
 
 def test_webbench_undici_abort_defaults_to_the_stock_ceiling_and_adds_no_env():
     from te_harness.webbench import (webbench_undici_abort, webbench_undici_env,

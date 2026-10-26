@@ -174,8 +174,7 @@ CODEX_SWEBENCH_RUNS: tuple[tuple[str, str], ...] = (
 # Every project runs `task-1` .. `task-20`; `calculator` and `table` additionally open with an
 # `init` scaffold task (hence 21).
 #
-# The five are chosen on TWO MEASURED criteria, both learned the expensive way (2026-09-07,
-# a $29 lane that retired two projects):
+# The five are chosen on TWO MEASURED criteria:
 #
 #   grounding  -- the distiller admits a fact only if it can cite >= MIN_CITE=2 confirming
 #     task-ids from the agent's own trajectory (microskills/distiller.py `_admit`), and the
@@ -185,8 +184,8 @@ CODEX_SWEBENCH_RUNS: tuple[tuple[str, str], ...] = (
 #
 #   wall-clock -- Web-Bench's evaluator aborts an agent request at undici's 300s default
 #     (see webbench_task_timeout). A project whose tasks want more than ~150s of REQUEST time
-#     cannot finish its stream. Measured: the suite norm is ~76s/task; `svg-chart` ran
-#     174-200s/task and died at task-5 of 20 in two arms of three. It was retired for that.
+#     cannot finish its stream. Measured: the suite norm is ~76s/task; `svg-chart` runs
+#     174-200s/task, too slow to finish a 20-task stream, and is out for that.
 #
 # `calculator` is KEPT deliberately as the short static control: dropping it would collapse
 # the 4x spread in stream length that made the starvation effect visible.
@@ -325,11 +324,9 @@ def instances(domain, group=None):
 # and total_tasks() deliberately do NOT subtract it, so the historical record stays intact.
 SWEBENCH_EXCLUDED: dict[str, str] = {
     "scikit-learn__scikit-learn-14710":
-        "eval.sh does not terminate under te_harness: timed out at TE_EVAL_TIMEOUT=1800 "
-        "and again at 3600, and the uncaught TimeoutExpired ended the sklearn stream at "
-        "task 21 of 32 both times (that cell never produced more than 20 graded rows). "
-        "The timeout is now caught (te_harness swebench.py _grade), so it would cost one "
-        "full eval_timeout per run rather than the cell; excluded to stop paying that. "
+        "eval.sh does not terminate under te_harness within TE_EVAL_TIMEOUT (1800 s, nor "
+        "3600 s), so every run of it costs one full eval_timeout (te_harness swebench.py "
+        "_grade catches the timeout); excluded to stop paying that. "
         "NOT ungradeable in principle -- it graded in the published runs, so results "
         "that include it and results that exclude it are not directly comparable on "
         "scikit-learn.",
@@ -373,10 +370,9 @@ SWEBENCH_EXCLUDED: dict[str, str] = {
 # the gold patch applying cleanly, every FAIL_TO_PASS passing and zero PASS_TO_PASS
 # regressions, so none is underspecified or ungradeable under this harness.
 #
-# Eval wall-clock ran 14-187 s (median 32 s), which also clears the failure mode that put
-# scikit-learn-14710 in SWEBENCH_EXCLUDED: every added instance terminates roughly an order
-# of magnitude inside the default TE_EVAL_TIMEOUT=1800, so none of them can take a stream
-# down the way that one did.
+# Eval wall-clock ran 14-187 s (median 32 s): every added instance terminates roughly an
+# order of magnitude inside the default TE_EVAL_TIMEOUT=1800, unlike scikit-learn-14710,
+# whose eval does not terminate (see SWEBENCH_EXCLUDED).
 #
 # Screen script and per-instance records: $DATA/swebench/gold_screen.py and
 # $DATA/swebench/gold_screen_added.jsonl. Re-run it if you extend this table again; a new

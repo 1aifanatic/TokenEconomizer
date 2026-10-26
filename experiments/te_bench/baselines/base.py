@@ -40,8 +40,8 @@ class AgentProfile:
     """The per-agent facts a scaffold needs. Runners expose one as `scaffold_profile`.
 
     `kind` is the coarse switch for genuinely agent-specific wiring (RTK registers a
-    PreToolUse hook through Claude's settings.json and through a Copilot plugin -- there is
-    no common spelling). Everything else is data.
+    PreToolUse hook through Claude's settings.json and through Copilot's
+    `$COPILOT_HOME/hooks/` directory -- there is no common spelling). Everything else is data.
     """
 
     def __init__(self, kind, home, instructions_file, nav_tools, mcp_args,

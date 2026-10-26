@@ -61,7 +61,7 @@ def test_a_report_reads_the_budget_back(tmp_path):
 
 
 def test_zero_leaves_the_cgroup_alone(tmp_path):
-    """An operator who wants the old unlimited behaviour must get it exactly, not a huge
+    """An operator who wants no budget must get the unlimited cgroup exactly, not a huge
     number that still throttles."""
     base = _tree(tmp_path)
     r = _run(tmp_path, "0")

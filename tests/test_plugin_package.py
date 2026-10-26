@@ -313,8 +313,7 @@ def test_the_plugin_directory_is_also_a_pi_package():
 
 def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_path):
     """Claude Code installs a COPY of plugin/ into its cache, even from a local checkout, so the
-    core must be reachable from inside plugin/. Seen live: without plugin/lib the installed copy's
-    hooks answered `{}` and every command crashed."""
+    core must be reachable from inside plugin/."""
     import shutil
     assert os.listdir(os.path.join(PLUGIN, "lib")) == ["tokeneconomizer"]
     link = os.path.join(PLUGIN, "lib", "tokeneconomizer")
@@ -331,9 +330,8 @@ def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_pat
 
 
 def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp_path):
-    """Codex installs a COPY of plugin/ that drops the `lib` symlink (seen live on 0.153.1), so
-    `codex plugin marketplace add <clone>` gave a plugin whose hooks answered `{}` and whose `te`
-    crashed. The copy now reads the marketplace's `source` from Codex's config.toml."""
+    """Codex installs a COPY of plugin/ that drops the `lib` symlink (0.153.1), so the copy
+    finds the core through the marketplace's `source` in Codex's config.toml."""
     import shutil
     home = tmp_path / "codex"
     copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"

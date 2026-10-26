@@ -1,20 +1,19 @@
 """A row must never claim a grade the eval script did not produce.
 
-Two defects sat behind one symptom here, and both were silent:
+Two things must hold for a graded row to be trusted:
 
-  * The task container was named `te-<instance>-<arm>`, carrying no agent, model or seed,
-    while both SWE-bench runners open with `docker rm -f <name>`. Two lanes on the same
-    (instance, arm) -- exactly what you get running the Claude and Copilot lanes for
-    the same arm at once -- resolved to one name, and the second lane deleted the first
+  * The task container's name is unique per task-run. Both SWE-bench runners open with
+    `docker rm -f <name>`, so a name carrying no agent, model or seed would be shared by
+    two lanes on the same (instance, arm) -- exactly what running the Claude and Copilot
+    lanes for the same arm at once produces -- and the second lane would delete the first
     one's container mid-grade.
-  * `_grade` then wrote an empty `eval.log` and handed it to `get_eval_report`, which
-    scored the absent APPLY_PATCH_PASS marker as `patch_successfully_applied: false,
-    resolved: false`. The lane exited 0. The row was indistinguishable from a model that
-    tried the task and missed.
+  * A grading exec that did not run is reported as an absence, not a miss. Handed an
+    empty `eval.log`, `get_eval_report` scores the absent APPLY_PATCH_PASS marker as
+    `patch_successfully_applied: false, resolved: false` on a lane that exits 0 -- a row
+    indistinguishable from a model that tried the task and missed.
 
-So the container name must be unique per task-run, and a grading exec that did not run
-must be reported as an absence rather than a miss -- and excluded from the denominator of
-any resolve rate, because a task nobody evaluated is not a task the agent failed.
+An ungraded row is also excluded from the denominator of any resolve rate, because a task
+nobody evaluated is not a task the agent failed.
 """
 import importlib.util
 import os
@@ -153,10 +152,10 @@ def test_stream_only_overhead_is_copied_into_the_row():
     """The driver must lift overhead a mechanism reported on `srow` into `row`.
 
     `tooling.after_task` writes the per-task tool judge's spend to the STREAM row only,
-    and aggregate.py reads nothing but row.json -- so untool-only and every trimech
-    variant had that line item silently dropped from cost_effective_tokens. Measured on a
-    6-task sympy cell: 11,244 tokens, 4.2% of the cell's reported cost, and one-directional
-    because a baseline runs no judge.
+    and aggregate.py reads nothing but row.json -- so without the lift, untool-only and
+    every trimech variant would leave that line item out of cost_effective_tokens. It is not
+    small (11,244 tokens, 4.2% of a 6-task sympy cell's cost), and the omission is
+    one-directional, because a baseline runs no judge.
     """
     from tokeneconomizer import ledger
     row = RX.lift_overhead({"tokens_total": 1000},
@@ -172,7 +171,7 @@ def test_the_copy_never_clobbers_a_value_the_runner_already_set():
 
 
 def test_lift_overhead_covers_every_declared_overhead_key():
-    """Keyed off OVERHEAD_KEYS, so a new overhead field cannot reintroduce the gap."""
+    """Keyed off OVERHEAD_KEYS, so a newly declared overhead field reaches row.json too."""
     from tokeneconomizer import ledger
     srow = {k: 7 for k in ledger.OVERHEAD_KEYS}
     row = RX.lift_overhead({}, srow)
@@ -189,12 +188,11 @@ def test_lift_overhead_ignores_non_overhead_stream_fields():
 def test_a_grading_stall_flags_the_row_instead_of_ending_the_stream():
     """Patch extraction gets the guard container start already has.
 
-    `_graded_diff` is a `docker exec ... git diff` under a 300 s cap. On 2026-09-13 one
-    stalled at task 57 of a 60-task baseline and the TimeoutExpired propagated out of
-    `run_task`, ending the cell with four tasks unrun after 65 minutes of paid work -- the
-    exact failure the container-start guard exists to prevent, one step later in the same
-    function. The agent's turn is already bought by then, so the row must survive, say what
-    happened, and let the stream continue.
+    `_graded_diff` is a `docker exec ... git diff` under a 300 s cap, and on a loaded shared
+    box it can stall. A TimeoutExpired propagating out of `run_task` would end the cell with
+    every remaining task unrun -- the failure the container-start guard exists to prevent,
+    one step later in the same function. The agent's turn is already bought by then, so the
+    row must survive, record why it has no grade, and let the stream continue.
     """
     import inspect, re
     from te_harness import swebench

@@ -16,8 +16,8 @@ and none of them are shared with Claude Code:
      zeros, and every cost number downstream is wrong rather than missing. The real
      input/cache/output breakdown is only in the CLI's own debug log, which is why every
      Copilot invocation here runs with `--log-level all --log-dir ...` and mines the
-     result. `sum_openai_usage` is ported verbatim from the AgentEO study's
-     `swebench/agents.py`, which is the accounting the published Copilot rows used.
+     result. `sum_openai_usage` is ported from the AgentEO study's `swebench/agents.py`,
+     the accounting the published Copilot rows used, with cache writes split out.
   4. **A Copilot-flavoured optimizer call.** The mechanisms' between-task proposer/judge/
      nudge-writer is a paid LLM call. On the native Copilot path there is no Anthropic key
      to make it with, so it goes through the same `copilot -p` binary -- tools denied and
@@ -169,15 +169,14 @@ PROVIDER_SECRET_VARS = ("COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_BEARER_TOK
 # `--deny-tool` withholds PERMISSION: the tool stays in the model's schema and the CLI
 # simply refuses to run it. `--excluded-tools` removes it from what is offered to the model
 # at all. The optimizer call is a pure text completion that needs no tool, so it wants the
-# second -- and for a long time it passed only the first.
+# second.
 #
 # Measured on this host (2026-09-07), one real judge-shaped prompt of 2,423 chars:
 #   --deny-tool only        22,460 billed prompt tokens -> 29,040 effective
 #   + --excluded-tools       5,550 billed prompt tokens ->  7,832 effective
-# The 16,910-token difference is the tool schema, re-sent on EVERY mechanism call. On the
-# 60-task sklearn trimech cell that was ~12,500 of the 17,577 tokens/task of mechanism
-# overhead the ledger charged the arm -- overhead that bought nothing, since the call is
-# forbidden to use a tool either way.
+# The 16,910-token difference is the tool schema, which permission alone re-sends on EVERY
+# mechanism call -- overhead the ledger charges the arm and that buys nothing, since the
+# call is forbidden to use a tool either way.
 #
 # Both are kept: permission AND schema. Denying a tool that is not offered is harmless, and
 # leaving the deny list in place means a CLI that ignores one flag still refuses the tool.
@@ -216,11 +215,10 @@ def anthropic_optimizer_endpoint(env=None):
     one-shot text completions that need none of it. Measured on this host, the same
     2,4xx-char judge prompt costs ~1,730 effective tokens over the Messages API and ~4,700
     through the trimmed CLI -- and the CLAUDE harness has always used the API for exactly
-    these calls (swebench.ClaudeSwebenchRunner.optimizer_call). So the CLI transport was
-    also an ASYMMETRY between the two agents' mechanism overhead, one-directional and in
-    the same class as the cache-write split fixed on 2026-09-05: it inflated Copilot's
-    overhead against Claude's on identical work, biasing the comparison the sweep exists
-    to make.
+    these calls (swebench.ClaudeSwebenchRunner.optimizer_call). So the CLI transport is
+    also an ASYMMETRY between the two agents' mechanism overhead, and a one-directional
+    one: it inflates Copilot's overhead against Claude's on identical work, biasing the
+    comparison the sweep exists to make.
 
     WHAT IT MUST NOT DO is change the cost basis. `ledger.overhead` charges these calls to
     the same basis as the task rows, so the endpoint has to bill whatever the TASKS bill.
@@ -417,23 +415,19 @@ def sum_openai_usage(log_text):
     Returns None when no usage blocks are present, so callers can leave the token fields
     null rather than record a confident zero.
 
-    CACHE WRITES (2026-09-05). This was ported verbatim from the AgentEO study's
-    swebench/agents.py, which read only `cached_tokens` and left cache_creation None on the
-    grounds that the API did not expose it. It does now --
-    `prompt_tokens_details.cache_creation_tokens` -- and because `prompt_tokens` counts
-    cache reads, cache writes and fresh input alike, folding the writes into
-    `input_tokens` priced them at 1.0x when the vendor bills 1.25x.
+    CACHE WRITES. The API reports them as `prompt_tokens_details.cache_creation_tokens`
+    (the AgentEO study's swebench/agents.py, which this follows otherwise, reads only
+    `cached_tokens`), and because `prompt_tokens` counts cache reads, cache writes and fresh
+    input alike, folding the writes into `input_tokens` would price them at 1.0x when the
+    vendor bills 1.25x. On a cache-heavy session nearly all of what would be booked as fresh
+    input is cache writes, so effective tokens would be understated -- ONE-DIRECTIONALLY
+    and CLAUDE-vs-COPILOT ASYMMETRICALLY, since the Claude path records the split from the
+    CLI's own result event -- making Copilot rows look cheaper than Claude rows on
+    identical work, which biases the exact comparison the sweep exists to make.
 
-    Before the fix nearly all of what was booked as fresh input was cache writes, so
-    effective tokens were understated. That error was ONE-DIRECTIONAL and CLAUDE-vs-COPILOT ASYMMETRIC -- the Claude path records the split
-    correctly from the CLI's own result event -- so it made Copilot rows look cheaper than
-    Claude rows on identical work, biasing the exact comparison the sweep exists to make.
-
-    `tokens_total` is untouched (it is prompt+completion either way); only the split moves.
-    A log with no `cache_creation_tokens` yields 0 and the old arithmetic exactly, so older
-    logs re-parse to their previous values. Stored rows written before this change still
-    carry the old split and are NOT comparable on cost to rows written after it -- they can
-    be corrected in place, because every run dir keeps the `copilot_debug.log` this parses.
+    `tokens_total` does not depend on the split (it is prompt+completion either way). A log
+    with no `cache_creation_tokens` yields 0 and the AgentEO arithmetic exactly. Every run
+    dir keeps the `copilot_debug.log` this parses, so a row's split can be recomputed from it.
     """
     key = '"usage": {'
     i, n = 0, len(log_text)

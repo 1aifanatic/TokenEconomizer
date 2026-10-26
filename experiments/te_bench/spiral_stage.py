@@ -116,9 +116,9 @@ class SpiralStage(Stage):
                 row.get("codex_spiral_paid_judge_tokens") or 0)
             # Advance the envelope in the unit the TRIGGER uses: the guard's own
             # command+edit count, not the row's `num_turns` (agent steps = messages + tool
-            # calls, ~1.45x larger). Feeding steps raised the gate ~45% and left the
-            # controller unable to fire on most tasks; `CodexEnvelopeTracker` documents the
-            # tool-event unit and now actually receives it. Fall back to `num_turns` only
+            # calls, ~1.45x larger). A gate learned in steps sits ~45% above the count it is
+            # compared to, and most tasks never reach it; `CodexEnvelopeTracker` documents
+            # the tool-event unit and receives it here. Fall back to `num_turns` only
             # when a row predates the field, and say so through the telemetry rather than
             # silently mixing units.
             tool_turns = row.get("codex_spiral_tool_turns")

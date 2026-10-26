@@ -27,13 +27,11 @@ ENVFACTS = dict(enabled=True, profile="envfacts")
 # the generic cadence -- the environment facts are already stated, so the proposer's calls
 # are rarer and its budget goes to facts beyond them.
 #
-# Why the paid layer is the default now. The free layer's interpreter fact formed because
-# of one harness defect: the project environment was not active, so `python` resolved to
-# the base interpreter. The harness now activates the environment on every lane, and
-# replaying the layer over a post-fix baseline forms NO interpreter fact at all -- only the
-# network-boundary line. With the defect gone the free layer abstains and the
-# open-vocabulary proposer is what is left to find repository facts; its spend is charged
-# to the arm.
+# Why the paid layer is the default. The harness activates the project environment on
+# every lane, so `python` resolves to the project interpreter and the free layer forms NO
+# interpreter fact -- over a baseline it states only the network-boundary line. The free
+# layer therefore mostly abstains, and the open-vocabulary proposer is what is left to find
+# repository facts; its spend is charged to the arm.
 ENVFACTS_PLUS = dict(enabled=True, profile="envfacts+distiller", propose_every=10)
 # The Codex lane's injection profiles by name: the default, and its LLM-free ablation
 # (arm `codex-inject-envfacts`).
@@ -180,9 +178,8 @@ MECHANISM_ARMS = {
         "standalone",
         lambda: cfg(spiral=SpiralConfig(**CODEX_SPIRAL))),
     # Untooling + the spiral, i.e. `codex-trimech` minus injection. It reads the same two
-    # dicts trimech does, so it stays that as the parameters move; when its spiral half was
-    # pinned to post-green independently it was quietly a different arm from the one its
-    # name promised.
+    # dicts trimech does, so it stays that as the parameters move; a spiral half pinned
+    # independently would make it a different arm from the one its name promises.
     "codex-combo": arm(
         "standalone",
         lambda: cfg(tooling=ToolingConfig(**CODEX_UNTOOL),
@@ -230,7 +227,7 @@ MECHANISM_ARMS = {
     #     instructions file, so the resumed segment inherits the untooled contract and the
     #     prompt prefix already in its history. Nothing is re-sent and nothing is re-paid.
     #
-    # Two compounding effects to expect in the row, neither of them a defect:
+    # Two compounding effects to expect in the row, both by construction:
     #   * the proposer's spend lands in `optimizer_tokens` (this is a PAID arm);
     #   * a task the guard nudges reports no usage for the killed segment, so
     #     `codex.merge_usage` poisons the merge and the row is flagged `usage_incomplete`.

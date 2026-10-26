@@ -5,9 +5,8 @@ the harness's existing seams; a scaffold here is somebody else's off-the-shelf t
 (`rtk`, Serena, aider's repo map) installed into the sealed agent's container so its cost
 and resolve can be measured on the same honest basis.
 
-They sit in the core package, beside the mechanisms they are the comparison for, and the
-two invariants that makes people nervous about are both kept structurally rather than by
-convention:
+They sit with the experiments, beside the mechanisms they are the comparison for, and two
+invariants are kept structurally rather than by convention:
 
   * **Nothing here reaches a container.** Every container interaction arrives as a callable
     on `ScaffoldContext` (`exec_`, `copy_in`, `read_bytes`, `host_run`), supplied by

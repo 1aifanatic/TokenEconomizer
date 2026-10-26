@@ -271,11 +271,11 @@ isolated `PI_CODING_AGENT_DIR`):
   the change, so one left out would be recorded as removed. Unchanged, it adds nothing after
   the first prompt.
 * Pi's bash result carries a real exit code (`structuredContent.exit_code`), which the
-  ended-green proxy uses; its session file is a tree, and only the active branch is read.
-* Not exercised live: a nudge (`sendMessage` with `deliverAs: "steer"`) and a stop
-  (`ctx.abort()`, since removed: the plugin no longer stops a turn) — the dispatcher's side is
-  covered by the offline tests, Pi's by its API. Tool pruning does not apply: Pi declares four
-  tools by default.
+  ended-green proxy uses (unless another command's status replaced it: 2026-10-26, below); its
+  session file is a tree, and only the active branch is read.
+* Not exercised live here: a nudge (`sendMessage` with `deliverAs: "steer"`, since exercised:
+  2026-10-21 and 2026-10-26, below) and a stop (`ctx.abort()`, since removed: the plugin no
+  longer stops a turn). Tool pruning does not apply: Pi declares four tools by default.
 
 **Pi 1.2.0 — verified live, 2026-10-14** (Haiku 4.5 through Pi's built-in OpenRouter provider,
 set as the default provider and model in an isolated `PI_CODING_AGENT_DIR`, as a Pi user's own
@@ -313,15 +313,6 @@ this plugin's guide step by step (Claude Code 2.1.300, Codex 0.153.1, Copilot CL
   charged to the ledger, without recursing into the plugin.
 * Pi's real git install (a local git daemon standing in for GitHub): cloned, `npm install`ed,
   listed, loaded; `pi update --extensions` fast-forwarded it; `pi remove` removed it.
-
-What the run found, now fixed: Claude Code 2.1.300's `api-request-blob` entries doubled every
-call read from its transcript; a working form was credited from runs that needed a
-`VAR=value` it leaves out, once per failure × success, and never debited; Pi's and Copilot's
-logs gave no per-call directory, so `cd <repo> && …` was learned as a separate form; the guard
-counted file reads as failures; an absolute-path test runner was not a verification; facts
-needed sessions that edited different files and, once injected, decayed (the fold never knew
-what the session was given); a Codex install copy had no package; side calls failed silently
-and left sessions in Claude Code's history; `te` without `--host` showed Claude Code's state.
 
 **Again as a new user, interactively, 2026-10-21** -- one fresh home for all four agents (Claude
 Code 2.1.306, Codex 0.163.0, Copilot CLI 1.0.101, Pi 1.3.0; every model through OpenRouter),
@@ -369,17 +360,15 @@ thresholds), in its terminal UI and headless.
 * Then, since Claude Code hid its own line, the plugin there also asks the model to repeat the
   notice word for word (`hosts.relay`). Claude Haiku 5.5 opened its next message and its final
   reply with it, in the terminal UI and under `claude -p`, whose text output then began with it.
-  On the way, found and fixed: Claude Code rejects an answer to a failed call that names
-  `PostToolUse` ("Hook returned incorrect event name: expected 'PostToolUseFailure' but got
-  'PostToolUse'") and drops it, so a redirect or notice that fell on a failed call, as in a
-  failing test run, was lost there; an answer now names the event it answers. Answering a failed
-  call, the hook's own line also showed under the call without Ctrl+O.
+  Claude Code drops an answer to a failed call that names `PostToolUse` ("Hook returned
+  incorrect event name: expected 'PostToolUseFailure' but got 'PostToolUse'"), so an answer
+  names the event it answers. Answering a failed call, the hook's own line also showed under the
+  call without Ctrl+O.
 * Telling headless from interactive: Claude Code's environment says so, and Pi's extension; Codex
   only in its rollout's first record (`source: "exec"`); Copilot only in its own command line
   (`copilot -p`), its payloads, environment and session log being the same in both modes.
-* Found and fixed: Codex 0.163.0 edits with `apply_patch <<'PATCH'` and runs the tests in the
-  same command, and the guard counted none of its twelve edits, so it never fired; and
-  `copilot -p` was told the interactive way to stop.
+* Codex 0.163.0 edits with `apply_patch <<'PATCH'` and runs the tests in the same command; the
+  guard counts those edits (`loopguard.shell_edits`).
 
 **Prompt caching, 2026-10-21.** A prompt cache matches a request's prefix: the tools, the
 system prompt, then the conversation in order. What the plugin changes must leave a cached
@@ -398,7 +387,7 @@ OpenRouter (cache breakpoints, which move every turn, left out of the comparison
   resume --last` and `copilot --continue` sent the old history with exactly the new tool list,
   so a conversation resumed while its cache is warm writes its whole history to the cache again
   instead of reading it. The fold runs just after a session ends, when its cache is warmest and
-  resuming it likeliest, so `auto` now holds a new list as pending, and a detached
+  resuming it likeliest, so `auto` holds a new list as pending, and a detached
   `te toolprune apply-pending` writes it once every session of the repository has been idle for
   `toolprune_quiet_minutes` (60; a hook call or a write to the session's own log counts as
   activity), or once it has waited a day. End to end on Claude Code, the window set to one
@@ -410,18 +399,16 @@ OpenRouter (cache breakpoints, which move every turn, left out of the comparison
   running session alone.
 * A resumed conversation must carry the facts it started with, byte for byte. Claude Code and
   Codex replay them from their own logs (Claude Code changes the message from a block list to a
-  string of the same text). Two did not, and both are fixed:
-  * Copilot rebuilds a resumed conversation's first message without what `SessionStart` added:
-    the facts were gone and that message missed the cache. The plugin now records the text a
-    session started with and gives it again on a Copilot resume, which rebuilds the message
-    exactly; a session that started without facts gets none.
-  * Pi rebuilds its system message from the conversation's own entries, and the extension left
-    its section out on a resume, which Pi recorded as removed. Pi also reports `pi -c` and
-    `--session` as `startup`, not `resume`, and stores a section wrapped in `<name>` tags. The
-    extension now decides by whether the branch already holds messages, and gives such a
-    conversation back the section it carries, unwrapped (`carriedSection`): two resumes after a
-    fact was retired on disk kept the original system message, and a new session took the
-    current facts.
+  string of the same text). Copilot and Pi rebuild it, and the plugin gives them the same text:
+  * Copilot rebuilds a resumed conversation's first message without what `SessionStart` added.
+    The plugin records the text a session started with and gives it again on a Copilot resume,
+    which rebuilds the message exactly; a session that started without facts gets none.
+  * Pi rebuilds its system message from the conversation's own entries, and records a section
+    left out as removed. It reports `pi -c` and `--session` as `startup`, not `resume`, and
+    stores a section wrapped in `<name>` tags. The extension decides by whether the branch
+    already holds messages, and gives such a conversation back the section it carries, unwrapped
+    (`carriedSection`): two resumes after a fact was retired on disk kept the original system
+    message, and a new session took the current facts.
 
 **Counting prompts, 2026-10-24** (on the `experimental` branch, since merged into `main`). Can the mechanisms learn from the
 prompts of a session rather than from whole sessions, so a long first session counts for more?
@@ -445,9 +432,7 @@ prompts of a session rather than from whole sessions, so a long first session co
   once and its later prompts use the working form the conversation already shows, so the fact
   fired in a quarter of the prompts that exercised it and never cleared the firing gate (40%
   over at least 4): in a stream of four-prompt sessions it was never injected, where per
-  session it is injected at the fifth start. A replay that split prompts into sessions of
-  their own had shown the opposite only because each such start recorded the fact as given.
-  The facts still count sessions.
+  session it is injected at the fifth start. The facts count sessions.
 * The loop guard already counts prompt-turns: each turn that ends green feeds the envelope at
   its `Stop`, and the guard acts within the same session once it has five.
 
@@ -465,12 +450,9 @@ a second clone of it, in another repository, and in a plain folder.
 * Copilot's unused MCP server was turned off after five sessions and announced at the next start;
   the clone got the list at the end of its own next session.
 * Pi's proposer ran after the second and fifth sessions, through `pi --print`, and was charged.
-
-What the run found, now fixed: a session started in a subdirectory that ran
-`cd <repository> && pytest` learned that as a form of its own, spelled with the machine's path (a `cd` up to the
-repository now lands relative to it); and under BYOK Copilot's proposer asked to sign in every
-third session, leaving an empty session behind each time (a CLI that answers it is not signed
-in now pauses the plugin's model calls on that agent, and the next session start says so once).
+* A session started in a subdirectory that runs `cd <repository> && pytest` runs the plain
+  form, learned relative to the repository. Under BYOK, a CLI that answers it is not signed in
+  pauses the plugin's model calls on that agent, and the next session start says so once.
 
 **The judge decides, 2026-10-25** (Claude Code 2.1.310, Claude Haiku 5.5 through OpenRouter, for
 the agent and for the judge; thresholds lowered so a loop forms quickly, the backstop raised to
@@ -490,11 +472,35 @@ admitted four facts -- where the build script, the tests and the manifest are, a
 sessions given them still read the same files first, so in a repository this small they saved
 nothing.
 
-What the run's preparation found, now fixed: the proposer's window of recent sessions was not
-saved with its state. The experiments keep one proposer in memory over a stream; the plugin
-reloads it for every session, so each run saw only the session that had just ended, and a fact,
-which must cite two, could never be admitted. Every proposer call before this was spent for
-nothing.
+The experiments keep one proposer in memory over a stream; the plugin reloads it for every
+session, so its window of recent sessions is saved with its state.
+
+**Pi, every mechanism, 2026-10-26** (Pi 1.3.0, Claude Haiku 5.5 through OpenRouter, for the
+agent and the judge; `microskills=on`). Eight sessions in the same Node repository, then turns
+told to re-run a test that cannot pass, with the judge's gate lowered to three calls. `/te
+status` ran inside Pi and named tool pruning as not available there; each session was folded
+within seconds of its exit; three proposer runs gave three distinct facts, in Pi's recorded
+system prompt from the fifth session on; a resumed conversation (`pi -c`) carried the same
+section, and its requests read the cache. The judge ran in the background as a bare `pi
+--print`, found a turn of identical failures stuck, and its redirect reached the agent as a
+steering message (a `custom_message` of type `tokeneconomizer`), after which it stopped
+re-running the test and found the missing fixture. With every run piped (`npm test 2>&1 | tail
+-n 8`), each counted as failing and the judge found the turn stuck (0.90).
+
+**How the guard reads a test run, 2026-10-26.** A command line's exit status is its last
+command's, so it may not be the test run's: `npm test 2>&1 | tail -n 8` exits with `tail`'s,
+`npm test || true` and `python -m unittest; echo "exit=$?"` with 0, and `pytest -q; git diff`
+with `git`'s. For such a run the runner's own summary line decides (pytest's `1 failed, 4
+passed in 0.5s`, unittest's `FAILED (failures=1)` or `OK`, TAP's `# fail 1`, jest's, mocha's,
+Go's, cargo's, rspec's, JUnit's; `loopguard.turn.runner_verdict`). Without one, a run whose
+status a pipe, `||` or a report of it replaced is read by its output, as on an agent that
+reports no status (Claude Code); a run followed by other commands keeps the status the agent
+reported. Replayed through the guard, the recorded SWE-bench sessions end well in 85.6% of
+turns on Claude Code (13,312 sessions), 84.5% on Copilot (6,710) and 87.8% on Codex (2,653), and
+the judge's gate opens in 18.1%, 15.8% and 5.8% of them.
+
+The plugin's proposer prompt lists each fact it holds with its claim, so a fact it has is not
+authored again under a new id; the experiments' prompt names the ids alone, as the paper ran it.
 
 ## 4. State and privacy
 
@@ -570,9 +576,6 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   redirect but the backstop's, which still counts.
 * **Pi** — tool pruning is not planned there, since Pi declares only four tools by default.
 * **Known gaps:**
-  * A test run whose exit code the model masks (`python3 -m unittest; echo "exit=$?"`, seen on
-    Copilot) reads as passing where the agent reports exit codes (Copilot, Codex, Pi), so a turn
-    of such runs counts as ended green and is never flagged.
   * `codex exec` prints no hook messages, so a headless Codex run shows no notice; `te status`
     counts it afterwards. On Claude Code the notice reaches the conversation and `claude -p`'s
     output only because the model repeats it, which a model may word differently or leave out;

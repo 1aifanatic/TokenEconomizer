@@ -1,11 +1,12 @@
-"""The accounting fix: a rollout killed mid-stream must not be recorded as free.
+"""Usage recovery: a rollout killed mid-stream must not be recorded as free.
 
 Claude Code reports its token breakdown only in the stream's terminal `result` event, and
 both of `_segment`'s break paths -- a spiral guard stop and TE_TASK_TIMEOUT -- kill the CLI
-before it arrives. The segment used to return `{}`, so `_row_from_result` wrote a row of
-zeros for a rollout that had really burned hundreds of thousands of tokens over tens of
-turns. Only economized arms install a guard, so the understatement was one-directional and
-flattered exactly the arms under test.
+before it arrives. A segment that returned `{}` would make `_row_from_result` write a row of
+zeros for a rollout that really burned hundreds of thousands of tokens over tens of turns,
+so the segment rebuilds its usage from the stream it did see. Only economized arms install
+a guard, so the understatement would be one-directional and flatter exactly the arms under
+test.
 
 These tests are offline: they exercise the pure accounting functions with synthetic stream
 events, no Docker and no agent. `te_harness` imports nothing heavy at module level (the
@@ -32,7 +33,7 @@ def _feed(events):
     return rec
 
 
-# ---- the bug itself ------------------------------------------------------------------
+# ---- turns and tokens recovered from the stream --------------------------------------
 def test_killed_stream_is_not_recorded_as_free():
     row = _row_from_result(_feed([
         _assistant("m1", 2, 4000, 3000, 5),
@@ -42,7 +43,7 @@ def test_killed_stream_is_not_recorded_as_free():
     assert row["cache_creation_input_tokens"] == 4500
     assert row["cache_read_input_tokens"] == 10000
     assert row["tokens_total"] > 0, "a killed rollout must never record zero cost"
-    assert row["num_turns"] == 2, "turns are recoverable; 0 was the old bug"
+    assert row["num_turns"] == 2, "turns are recoverable from the stream, so never 0"
     assert row["usage_incomplete"] is True
     assert row["usage_incomplete_reason"] == "spiral_guard_stop"
 
@@ -89,7 +90,7 @@ def test_healthy_row_carries_the_flags_as_false():
     assert row["usage_incomplete"] is False
     assert row["output_tokens_missing"] is False
     assert row["num_turns_recovered"] is False
-    assert row["output_tokens"] == 40, "a healthy row must be untouched by the fix"
+    assert row["output_tokens"] == 40, "a healthy row must be untouched by the recovery"
 
 
 # ---- the spiral case: one bad segment degrades the whole task -------------------------
@@ -121,11 +122,11 @@ def test_merge_reason_names_every_degraded_segment():
     assert _merge_usage(a, b)["usage_incomplete_reason"] == "spiral_guard_stop+task_timeout"
 
 
-# ---- the guard-parameter probe (the webbench TypeError) -------------------------------
+# ---- the guard-parameter probe --------------------------------------------------------
 def test_guard_accepts_probes_the_vendored_signature():
-    """`never_abort` exists in some vendored versions of the guard and not in others.
-    webbench.py passed it unconditionally, which killed every guarded Web-Bench run at
-    task 0 before a row was written. Both runners now go through this one probe."""
+    """`never_abort` exists in some vendored versions of the guard and not in others, and
+    passing a keyword the guard does not take raises at task 0, before a row is written. So
+    neither runner passes it unconditionally: both go through this one probe."""
     from te_bench import nudge_guard as spiral_vendor
     from te_harness.swebench import guard_accepts
     assert guard_accepts("envelope") is True
@@ -137,8 +138,8 @@ def test_guard_accepts_probes_the_vendored_signature():
 
 
 def test_webbench_guard_constructs_on_this_checkout():
-    """The regression itself: `_make_guard` must not raise whatever the vendored guard's
-    signature is. It takes no `self` state, so it is callable unbound."""
+    """`_make_guard` must not raise whatever the vendored guard's signature is. It takes no
+    `self` state, so it is callable unbound."""
     from te_harness.webbench import WebBenchRunner
     guard = WebBenchRunner._make_guard(None, {
         "spiral_guard": True, "spiral_nudge": True, "spiral_never_abort": True,
@@ -212,7 +213,7 @@ def test_an_in_flight_turn_keeps_the_row_flagged():
     assert row["usage_incomplete_reason"] == "task_timeout"
 
 
-def test_no_session_log_falls_back_to_the_old_honest_behaviour():
+def test_no_session_log_falls_back_to_a_flagged_zero():
     """An unreadable log must degrade to `output_tokens=0` + flagged, never to a crash."""
     rec = _feed([_assistant("m1", 2, 4000, 3000, 5)])
     for text in (None, "", "garbage"):

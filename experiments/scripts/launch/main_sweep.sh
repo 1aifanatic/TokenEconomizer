@@ -146,7 +146,7 @@ echo "[main_sweep] agent=$AGENT model=$MODEL tag=$MODEL_TAG domain=$DOMAIN"
 echo "[main_sweep] dest=$DEST"
 echo "[main_sweep] cells=${#PLAN[@]} seeds='$SEEDS' runner=$RUNNER skip_done=$SKIP_DONE"
 # --limit must be forwarded or the estimate describes the FULL stream while the run is
-# capped: a LIMIT=1 pilot printed "task-runs= 40 ... ~$14" for one task.
+# capped.
 "$PY" "$HERE/../sweep_plan.py" --domain "$DOMAIN" "${WORKLOAD_ARGS[@]}" "${ARM_ARGS[@]}" \
   "${REPO_ARGS[@]}" --seeds $SEEDS --limit "$LIMIT" --format estimate | sed 's/^/[main_sweep] /'
 

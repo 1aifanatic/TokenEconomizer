@@ -41,8 +41,8 @@ class EnvelopeTracker:
 
     Thresholds: `thresholds()` derives the FULL detector threshold dict from the SAME
     resolved-task history, so the guard adapts to the agent/repo's actual turn scale
-    instead of the hardcoded Copilot-scale DEFAULT_THRESHOLDS (which never fired on Claude
-    Code's <=80-turn runs — its backstop landed above the turn cap). Turn-scale gates
+    instead of the hardcoded Copilot-scale DEFAULT_THRESHOLDS, whose backstop lies above
+    Claude Code's 80-turn cap. Turn-scale gates
     scale DOWN to the learned distribution; signal gates keep DEFAULT as a FLOOR so the
     learned dict is never MORE trigger-happy than the hand-tuned one (resolve-safety). Fed
     only by RESOLVED tasks (same causal rule as the envelope), so a task's own outcome can
@@ -101,8 +101,8 @@ class EnvelopeTracker:
         thr = dict(base)
         env = self.envelope
         # cap-aware backstop: reachable even under a tight turn cap. The Copilot-scale
-        # `backstop_mult * envelope` landed ABOVE Claude's 80-turn cap (~110 turns) so it
-        # never fired; clamp it under 0.9*cap so an extreme outlier still aborts in-cap.
+        # `backstop_mult * envelope` (~110 turns) lies above Claude's 80-turn cap, so it is
+        # clamped under 0.9*cap and an extreme outlier still aborts in-cap.
         if env is not None:
             bt = env * thr["backstop_mult"]
             if max_turns:

@@ -6,8 +6,8 @@ have to be pinned here and nowhere else: the request contract must name HOST pat
 container path would silently name a file that does not exist), and the answer-key layers
 must live in the per-task CODEX_HOME and a namespace, because there is no container to hold
 them -- the PreToolUse hook in `$CODEX_HOME/hooks.json` (which Codex honours under
-`--dangerously-bypass-hook-trust`, verified live 2026-09-30), and the hosts block, which
-needs no cooperation from the CLI at all.
+`--dangerously-bypass-hook-trust`, verified live on codex-cli 0.153.1), and the hosts block,
+which needs no cooperation from the CLI at all.
 """
 import os
 import subprocess
@@ -36,7 +36,7 @@ def _stub(tmp_path, caps=(), ns=True):
 # ---- the answer-key layer ---------------------------------------------------------------
 def test_the_hook_is_armed_in_the_task_codex_home(tmp_path):
     """`$CODEX_HOME/hooks.json`, Claude Code's shape, and only reported armed once the guard
-    has refused its probe -- the shared installer's rule, now on this lane too."""
+    has refused its probe -- the shared installer's rule, on this lane as on the others."""
     import json
     r = _stub(tmp_path)
     home = tmp_path / "run" / ".codex-home"
@@ -54,9 +54,25 @@ def test_the_hook_is_armed_in_the_task_codex_home(tmp_path):
     assert len(json.loads((home / "hooks.json").read_text())["hooks"]["PreToolUse"]) == 1
 
 
+def test_a_row_records_the_hook_as_it_armed_and_the_hosts_block_beside_it(tmp_path,
+                                                                         monkeypatch):
+    """The hook is this lane's second layer and the namespace hosts block its first: a row
+    records each as it was for the task, the hook's from the shared lifecycle."""
+    r = _stub(tmp_path)
+    r.scaffold_name = None
+    monkeypatch.setattr(wb.CodexWebBenchRunner, "_prune_agent_home", lambda self, d: None)
+    for armed in (True, False):
+        monkeypatch.setattr(wb.WebBenchRunner, "run_task",
+                            lambda self, task, **kw: ({"net_guard_installed": armed},
+                                                      str(tmp_path)))
+        row, _ = r.run_task({"id": "t"}, arm="baseline", injected=None, exclude_tools=None,
+                            run_dir_path=str(tmp_path))
+        assert row["net_guard_installed"] is armed and row["answer_key_hosts_blocked"] is True
+
+
 def test_only_an_armed_task_runs_with_the_trust_bypass(tmp_path, monkeypatch):
     """Codex skips every hook nobody approved in /hooks, so an armed task must pass
-    --dangerously-bypass-hook-trust; an unarmed one keeps exactly the argv it always had.
+    --dangerously-bypass-hook-trust; an unarmed one must run without it.
     Either way the hook's log path reaches the agent's environment."""
     seen = []
 
@@ -215,8 +231,8 @@ def test_the_codex_controller_is_selected_not_the_generic_guard(tmp_path):
 
 def test_only_rtk_is_hostable_and_it_is_the_instruction_mode(tmp_path, monkeypatch):
     """Web-Bench hosts one scaffold for any agent, rtk. On Codex that is rtk's INSTRUCTION
-    mode (files under CODEX_HOME), because the hook mode is one this CLI ignores. Anything
-    else is refused rather than installed and ignored."""
+    mode (files under CODEX_HOME), the one `rtk init -g --codex` installs: rtk ships no hook
+    for Codex. Anything else is refused rather than installed and ignored."""
     import pytest
     for other in ("repomap", "serena"):
         with pytest.raises(RuntimeError, match="not wired for the Codex Web-Bench lane"):
@@ -284,9 +300,8 @@ def test_the_codex_runner_sets_every_field_the_inherited_lifecycle_reads():
     """The Codex runner does NOT call WebBenchRunner.__init__ -- that resolves the Anthropic
     key -- so every attribute the inherited methods read has to be set here by hand.
 
-    Pinned because of how the gap surfaces: not at construction, but as an AttributeError
+    Pinned because a missing one surfaces not at construction, but as an AttributeError
     deep in `run_task`, after the evaluator has started and the first task has been paid for.
-    That is exactly how `routing_base` was found, on a live Web-Bench run.
     """
     import inspect, re
     base = inspect.getsource(wb.WebBenchRunner)
@@ -305,7 +320,7 @@ def test_the_per_task_codex_home_is_pruned_to_its_provenance(tmp_path):
     """The CLI's own state is ~38 MB per task-run and would put ~19 GB of sqlite WALs,
     bundled skills and shell snapshots in the results tree over a five-project, five-seed
     sweep. The SWE-bench lane has no such problem -- its CODEX_HOME dies with the container --
-    so the host lane prunes to restore that parity, keeping the contract, which is provenance.
+    so the host lane prunes to the same footprint, keeping the contract, which is provenance.
     """
     r = _stub(tmp_path)
     run_dir = tmp_path / "run"
