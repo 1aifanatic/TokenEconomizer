@@ -59,10 +59,11 @@ This records which tools a Claude Code session loads, with no model call. Do it 
 machine, and again after Claude Code updates. **Don't skip it:** without it the deny list sees
 only the few tools Claude Code defers, not the ones every session loads.
 
-**4. Work normally.** See [What to expect](#what-to-expect). Once a tool has gone unused over
-ten prompts across two or more sessions (or five sessions, however short), the plugin leaves it
-out of the next sessions without asking you (it writes the list once your sessions here have
-been idle for an hour), and the session start says so once:
+**4. Work normally.** See [What to expect](#what-to-expect). Once a tool has gone unused long
+enough (by default ten prompts across two or more sessions, or five sessions however short), the
+plugin leaves it out of the next sessions without asking you (it writes the list once your
+sessions here have been idle, an hour by default; each number is a [setting](#settings)), and
+the session start says so once:
 
 ```text
 /tokeneconomizer:toolprune            # the tools it left out, and the evidence
@@ -291,7 +292,7 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 - **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
   any language or toolchain: the same environment failure coming up in a few sessions (a tool,
   interpreter, build or test command that fails as typed and works spelled another way), with
-  no model call; and, every three sessions, a model reading digests of the recent ones (the
+  no model call; and, every `microskills_propose_every` sessions (3 by default), a model reading digests of the recent ones (the
   commands run, the build, test and lint commands among them, the files edited, and each
   failing command with its error line, paths relative to the repository) and writing facts
   about the repository, each with the patterns that test it against later sessions. A fact is
@@ -301,11 +302,13 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
   says so once, in one line. A resumed session keeps the facts it started with, word for word, so
   its cached prompt still matches. `microskills` shows the facts injected and those forming.
 - **Deny list.** Applied without asking you once a tool, package or server never used here has
-  gone unused over ten prompts across at least two sessions, or over five sessions however short
-  (three times as long for a few higher-risk tools), from the next session on; that session's
-  start says so once. Prompts let long sessions count for more, and the two-session floor keeps
-  one session's work from deciding alone. A session that ran no prompt counts for nothing. It is
-  written once the repository's sessions have been idle for an hour: a conversation resumed
+  gone unused over `toolprune_evidence` prompts (10 by default) across at least
+  `toolprune_min_sessions` sessions (2), or over `toolprune_sessions` sessions however short (5)
+  -- three times as long for a few higher-risk tools -- from the next session on; that session's
+  start says so once. Prompts let long sessions count for more, and the session floor keeps one
+  session's work from deciding alone. A session that ran no prompt counts for nothing. It is
+  written once the repository's sessions have been idle for `toolprune_quiet_minutes` (60 by
+  default): a conversation resumed
   after its tools change writes its whole history to the prompt cache again instead of reading
   it, and after an idle hour that cache has expired anyway. `toolprune` shows a list still
   waiting. `toolprune restore` gives back what the plugin removed, and only that, and what you
@@ -314,14 +317,15 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
   until you run `toolprune apply`. A file the plugin creates is added to `.git/info/exclude`.
   Each checkout keeps its own settings file: a repository's other clones share what it learned,
   and each gets the list when one of its own sessions ends.
-- **Loop guard.** Quiet on normal turns, and it does nothing until a repository has a few turns
-  that ended with passing checks. A turn that keeps hitting the same failures, or piles up
-  errors, after `min_turns` tool calls is put to a judge model; only a confident "stuck" verdict
-  attaches one redirect (written by that model) to a tool result, and if the turn is still stuck
-  after it, a one-line notice tells you how to stop it. A long turn with no such sign is never
-  judged. A turn far past the repository's usual length that also keeps churning edits through
-  the same failures is redirected even if the judge disagrees. The plugin never stops a turn
-  itself.
+- **Loop guard.** Quiet on normal turns, and it does nothing until `loopguard.envelope_min_samples`
+  turns in a repository (5 by default) have ended with passing checks. A turn that keeps hitting
+  the same failures, or piles up errors, after `loopguard.min_turns` tool calls is put to a judge
+  model; only a "stuck" verdict with confidence `loopguard.judge_confidence` (0.7) or more
+  attaches a redirect (written by that model) to a tool result, at most `loopguard_nudges` (1)
+  per turn, and if the turn is still stuck after that, a one-line notice tells you how to stop
+  it. A long turn with no such sign is never judged. A turn past `loopguard.backstop_mult` (2.5)
+  times the repository's usual length that also keeps churning edits through the same failures
+  is redirected even if the judge disagrees. The plugin never stops a turn itself.
   Where the notice appears, and how to stop, on each agent and in each mode:
   [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
 - **Cost.** `status` shows each session's tokens, priced after it ends, and the plugin's own

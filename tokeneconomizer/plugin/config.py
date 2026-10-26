@@ -51,8 +51,8 @@ settings (`inject_max_facts`, `untool_evidence`, `spiral.<name>`, ...) and envir
 
 Sources, lowest precedence first: built-in defaults, `<root>/config.json`, the repository's
 `config.json`, then environment variables (`TE_MICROSKILLS`, `TE_TOOLPRUNE`, `TE_LOOPGUARD`,
-`TE_MODE`, `TE_PAID`, `TE_SHADOW`, `TE_DISABLE`, and one per setting; `TE_LOOPGUARD_THRESHOLDS`
-takes JSON). Within one source a new name wins over its old one. An invalid value is ignored with
+`TE_MODE`, `TE_SHADOW`, `TE_DISABLE`, and one per setting; `TE_LOOPGUARD_THRESHOLDS` takes
+JSON). Within one source a new name wins over its old one. An invalid value is ignored with
 a warning recorded in the result rather than raised: a typo in a config file must not break the
 agent's hooks.
 """
@@ -110,8 +110,8 @@ LOOPGUARD_KEYS = {
     "envelope_pct": (float, 1.0, 100.0, "percentile of this repository's ended-green turns"),
     "envelope_margin": (float, 0.1, None, "multiplier on that percentile: the envelope"),
     "envelope_min_samples": (int, 1, None, "ended-green turns needed before the envelope is used"),
-    "backstop_mult": (float, 0.1, None, "stuck past this multiple of the envelope: redirect, "
-                                        "then stop"),
+    "backstop_mult": (float, 0.1, None, "stuck past this multiple of the envelope: redirect "
+                                        "without the judge"),
     "judge_confidence": (float, 0.0, 1.0, "the judge's confidence needed to redirect"),
     "gate_min_turns": (int, 1, None, "tool calls before the judge is consulted"),
     "gate_error_outputs": (int, 1, None, "failing results that wake the judge without a repeat"),

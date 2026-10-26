@@ -27,6 +27,7 @@ experiments/figures/
 *.png
 *.pdf
 *.svg
+*.mp4
 # ...except the figures the README and docs show.
 !docs/assets/*.png
 !docs/assets/*.svg
