@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  In the paper's SWE-Bench runs: <b>18.4–30.9% lower mean cost</b> across five agent–model
+  Our measurement on SWE-Bench tasks: <b>18.4–30.9% lower mean cost</b> across five agent–model
   combinations, cheaper in <b>all 30</b> repository × combination cells, and Pass@1 up in
   <b>4 of 5</b>. <a href="#results">Results</a>
 </p>
