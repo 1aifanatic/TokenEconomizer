@@ -38,13 +38,13 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   `plugin/config.py`); write new code against the current names.
 - No run outputs in the repository: transcripts, rows, streams, figures rendered from runs and
   tables derived from them stay out of git (`.gitignore`). The one exception is the paper's
-  headline results in `README.md` (the line under the badges, the Results section and
-  `docs/assets/results_overview.*`, and the teaser's closing results, which read
-  `results_overview.py`'s `ROWS`): quoted from the paper's Table 1 and attributed to it.
-  Change them only with the paper, and redraw both figures with
+  headline results in `README.md` (the line under the badges, the Results section, and the
+  teaser's closing results, which read `docs/assets/results_overview.py`'s `ROWS`; that script
+  also draws `results_overview.*`, which the README no longer shows): quoted from the paper's
+  Table 1 and attributed to it. Change them only with the paper, and redraw both figures with
   `python docs/assets/results_overview.py` and `python docs/assets/teaser.py --plex FONTS`
   (its docstring says where to get IBM Plex). The teaser's middle act is a schematic with
-  made-up tasks and no numbers.
+  made-up sessions and no numbers.
 - The plugin's own text (`plugin/`, its manifests, slash commands and skills, and what the
   hooks print) makes no claims of effect.
 - Tests: `python -m pytest tests experiments/tests`. A change to what the plugin learns or

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The teaser: TokenEconomizer's title card, how it trims the waste of a repository's tasks, and
+"""The teaser: TokenEconomizer's title card, how it trims the waste of a repository's sessions, and
 the paper's headline results.
 
     python docs/assets/teaser.py --plex FONTS             # the README's: teaser.gif and teaser.png
@@ -15,13 +15,15 @@ Three acts, crossfaded:
 Title    the page hero's two-tone name, the paper's subtitle, the three mechanisms in the paper's
          order, the agents it works with, and the authors' institutions' logos (logo_*.png: the
          project page's SVGs, rasterized with a transparent background, as Pillow draws no SVG).
-Method   a sketch, not a measurement: six made-up tasks, alike, each a bar of the work itself and
-         three kinds of waste, named beside the first bar, under a dashed line at what a task costs
-         without TokenEconomizer. On the right, what TokenEconomizer has learned: tasks 1-3 each
-         fly into it and teach it one mechanism, with a plain example; in the next task that waste
-         shrinks while its card lights up, and the last tasks start lean. No number in it comes
-         from a run (runs stay out of the repository); the waste is sized so the last tasks land
-         inside the paper's range of savings, and nothing is labelled with a number.
+Method   a sketch, not a measurement: six made-up sessions, alike, each a bar of the work itself
+         and three kinds of waste, named beside the first bar, under a dashed line at what a
+         session costs without TokenEconomizer. Sessions, not tasks: the plugin learns from each
+         finished session, however many tasks it held. On the right, what TokenEconomizer has
+         learned: sessions 1-3 each fly into it and teach it one mechanism, with a plain example;
+         in the next session that waste shrinks while its card lights up, and the last sessions
+         start lean. No number in it comes from a run (runs stay out of the repository); the
+         waste is sized so the last sessions land inside the paper's range of savings, and
+         nothing is labelled with a number.
 Results  the paper's SWE-Bench headline, as the README's line under the badges and the project
          page's tiles state it, and per agent-model combination the cost cut and the change in
          Pass@1. The numbers are results_overview.py's ROWS (the paper's Table 1), not copied.
@@ -107,21 +109,21 @@ def page_look(fonts):
 L = None                    # the look being drawn; main() sets it, with the fonts it is given
 
 
-# ---- the tasks ------------------------------------------------------------------------------
-# Every task does the same work, and wastes the same three things until TokenEconomizer has
+# ---- the sessions ---------------------------------------------------------------------------
+# Every session does the same work, and wastes the same three things until TokenEconomizer has
 # learned how not to: cost units, the full amount and what is left once it has.
 N = 6
 WORK = 160
 MECHS = ("facts", "prune", "guard")         # in the paper's order, top to bottom on each bar
 FULL = {"facts": 40, "prune": 44, "guard": 40}
 LEFT = {"facts": 8, "prune": 22, "guard": 16}
-LEARNED_AFTER = {"facts": 1, "prune": 2, "guard": 3}    # the task that teaches it
+LEARNED_AFTER = {"facts": 1, "prune": 2, "guard": 3}    # the session that teaches it
 NAME = {"facts": "Micro-skills", "prune": "Tool pruning", "guard": "Failure-loop intervention"}
 WASTE = {"facts": "re-learning the repo", "prune": "tools never used",
          "guard": "stuck in loops"}
 DOES = {"facts": "Remembers how the repo works", "prune": "Skips tools never used here",
         "guard": "Spots loops and steps in"}
-CAPTION = {"facts": "told to the agent as each task starts",
+CAPTION = {"facts": "told to the agent as each session starts",
            "prune": "unused tools are no longer loaded",
            "guard": "a nudge when the same error repeats"}
 
@@ -143,8 +145,8 @@ PITCH = (CX1 - BX0) / N
 BAR_W = 46
 BASE_Y = 528                                # the bars' baseline
 UNIT = 1.52                                 # pixels per cost unit
-TASK_Y = 550
-FULL_Y = BASE_Y - (WORK + sum(FULL.values())) * UNIT     # a task without TokenEconomizer
+SESSION_Y = 550
+FULL_Y = BASE_Y - (WORK + sum(FULL.values())) * UNIT     # a session without TokenEconomizer
 LEAN_Y = BASE_Y - (WORK + sum(LEFT.values())) * UNIT
 
 PX0, PX1, PY0, PY1 = 704, 1088, 24, 576     # TokenEconomizer's panel
@@ -227,8 +229,8 @@ def rgb(color):
 
 
 def amount(m, i, f):
-    """What task i spends on waste m at frame f: all of it until TokenEconomizer has learned
-    from an earlier task, shrinking in the first task after, and what is left from then on."""
+    """What session i spends on waste m at frame f: all of it until TokenEconomizer has learned
+    from an earlier session, shrinking in the first session after, and what is left from then on."""
     after = LEARNED_AFTER[m]
     if after >= i:
         return FULL[m]
@@ -238,7 +240,7 @@ def amount(m, i, f):
 
 
 def trim_glow(m, f):
-    """How lit m's card is while the task after it learned shrinks m's waste: 0 to 1 and back."""
+    """How lit m's card is while the session after it learned shrinks m's waste: 0 to 1 and back."""
     i = LEARNED_AFTER[m] + 1
     if i > N or ("trim", i) not in AT:
         return 0.0
@@ -368,27 +370,27 @@ class Painter:
 
 def draw_static(p):
     """What never moves in the method: the title, the baseline, the panel and its header."""
-    title = "Each finished task makes the next ones waste less"
+    title = "Each finished session makes the next ones waste less"
     p.text((CX0, TITLE_Y), title, 22, L.ink, "bold", anchor="ls")
     assert CX0 + p.width(title, 22, "bold") <= CX1, "the title outgrows the chart"
     p.line([(BX0 - 8, BASE_Y), (CX1, BASE_Y)], L.faint, 1.4)
     p.rect((PX0, PY0, PX1, PY1), L.panel, L.line, 1.6, radius=14)
     p.text((CARD_X0 + 4, 56), "TokenEconomizer", 20, L.ink, "bold")
-    p.text((CARD_X0 + 4, 82), "learns from each finished task", 15, L.muted)
+    p.text((CARD_X0 + 4, 82), "learns from each finished session", 15, L.muted)
     p.line([(CARD_X0, 100), (CARD_X1, 100)], L.line, 1.2)
 
 
 def stack(i, f):
-    """Task i's bar, bottom to top, as (units, color, waste or None)."""
+    """Session i's bar, bottom to top, as (units, color, waste or None)."""
     return [(WORK, L.work, None)] + [(amount(m, i, f), color(m), m) for m in reversed(MECHS)]
 
 
 def draw_bar(p, i, f):
     start = AT["grow", i]
     grow = GROW_FIRST if i == 1 else GROW
-    p.text((col_x(i), TASK_Y), f"task {i}", 14, mix(L.faint, L.ink, clamp((f - start) / 4)),
+    p.text((col_x(i), SESSION_Y), f"session {i}", 14, mix(L.faint, L.ink, clamp((f - start) / 4)),
            anchor="mm")
-    assert p.width(f"task {i}", 14) <= PITCH - 8, "task labels meet"
+    assert p.width(f"session {i}", 14) <= PITCH - 8, "session labels meet"
     if f < start:
         return
     segs = stack(i, f)
@@ -431,7 +433,7 @@ def draw_names(p, segs, shown):
 
 
 def draw_without(p, f):
-    """The dashed line at a task's full cost, drawn when TokenEconomizer first trims one."""
+    """The dashed line at a session's full cost, drawn when TokenEconomizer first trims one."""
     if f < AT["trim", 2]:
         return
     x0 = col_x(1) + BAR_W / 2 + 6

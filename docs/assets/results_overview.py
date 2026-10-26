@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The README's results figure: the paper's SWE-Bench headline, per agent-model combination.
+"""The results figure: the paper's SWE-Bench headline, per agent-model combination. Its ROWS
+are also the README teaser's closing numbers (teaser.py); the README no longer shows the figure.
 
     python docs/assets/results_overview.py      # needs matplotlib; writes the PNG and SVG here
 

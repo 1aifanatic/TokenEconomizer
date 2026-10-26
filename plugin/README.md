@@ -59,38 +59,35 @@ This records which tools a Claude Code session loads, with no model call. Do it 
 machine, and again after Claude Code updates. **Don't skip it:** without it the deny list sees
 only the few tools Claude Code defers, not the ones every session loads.
 
-**4. Work normally.** See [What to expect](#what-to-expect). Once a tool has gone unused long
-enough (by default ten prompts across two or more sessions, or five sessions however short), the
-plugin leaves it out of the next sessions without asking you (it writes the list once your
-sessions here have been idle, an hour by default; each number is a [setting](#settings)), and
-the session start says so once:
+**4. Work normally.** When the plugin leaves tools out ([What to expect](#what-to-expect) says
+when), the next session start says so once. To see or undo it:
 
 ```text
 /tokeneconomizer:toolprune            # the tools it left out, and the evidence
 /tokeneconomizer:toolprune restore    # give them back, from your next session; they stay back
 ```
 
-The rules go into this repository's `.claude/settings.local.json`, which the plugin keeps out of
-git, and it never touches deny rules you wrote. To approve each deny list yourself instead:
+The deny rules go into this repository's `.claude/settings.local.json`, which the plugin keeps
+out of git; deny rules you wrote are never touched. To approve each deny list yourself instead:
 `/tokeneconomizer:config set toolprune=propose`, then `/tokeneconomizer:toolprune apply`.
 
-**Where its messages appear.** Claude Code shows the plugin's one-line messages (facts
-added, tools left out) only in its detailed transcript: press **Ctrl+O**, where they read
-`<event> says: TokenEconomizer: …`. A turn that still looks stuck is the exception:
-the plugin also asks Claude to repeat that line word for word, so it shows in Claude's reply,
-and under `claude -p` in its final reply. That is a request to the model, which may word it
-differently or leave it out; the detailed transcript always has it. To stop a turn, press
-**Esc**; under `claude -p`, Ctrl+C ends the run. With `--output-format stream-json --verbose`
-every message also arrives as a `hook_response` event.
+**Where its messages appear.** Claude Code shows the plugin's one-line messages (facts added,
+tools left out) only in its detailed transcript: press **Ctrl+O**, where they read
+`<event> says: TokenEconomizer: …`. The exception is a turn that still looks stuck: the plugin
+also asks Claude to repeat that line word for word, so it shows in Claude's reply (under
+`claude -p`, in the final reply). Claude may word it differently or leave it out; the detailed
+transcript always has it. Press **Esc** to stop the turn; under `claude -p`, Ctrl+C ends the
+run. With `--output-format stream-json --verbose`, every message also arrives as a
+`hook_response` event.
 
-Each slash command is one model turn. The same commands are free from a terminal, as
+Each slash command costs one model turn; the same commands are free from a terminal, as
 `~/.tokeneconomizer/bin/te --host claude <command>` run inside the repository
-([Commands](#commands)). For one session without installing anything:
+([Commands](#commands)). To try the plugin for one session without installing it:
 `claude --plugin-dir /path/to/TokenEconomizer/plugin`.
 
-**Update.** `git pull` in the clone, then start a new session (or `/reload-plugins`). Claude Code
-runs a plugin added from a local folder from that folder. If `/tokeneconomizer:status` still
-shows the old behaviour, run `claude plugin update tokeneconomizer@tokeneconomizer`.
+**Update.** `git pull` in the clone, then start a new session (or `/reload-plugins`): Claude Code
+runs the plugin straight from the clone. If `/tokeneconomizer:status` still shows the old
+behaviour, run `claude plugin update tokeneconomizer@tokeneconomizer`.
 
 **Uninstall.**
 
@@ -114,37 +111,38 @@ codex plugin add tokeneconomizer@tokeneconomizer
 Hooks run from the next session on (the session in which you approve gets no session-start
 injection), so quit with `/exit` and start `codex` again. To approve later: `/hooks`.
 
-**3. Check it.** Type `$tokeneconomizer:status`. Codex has no plugin slash commands; the plugin's
-commands are Codex skills, named like the slash commands on the other agents (type
-`$tokeneconomizer` to pick one): `$tokeneconomizer:status`, `:microskills`, `:toolprune`,
-`:config` and `:repos`, each followed by its arguments (`$tokeneconomizer:config set
-loopguard=off`). Name the skill: a question in plain words (*"what has TokenEconomizer learned
-here?"*) may be answered from the plugin's files without running its command. A command that
-changes something (`config set` or `unset`, `toolprune apply` or `restore`, `repos migrate` or
-`merge`) writes the plugin's state in `~/.tokeneconomizer`, which Codex's sandbox keeps
-read-only, so Codex asks first: choose **Yes, proceed**. From a terminal, inside the repository:
+**3. Check it.** Type `$tokeneconomizer:status`. Codex has no plugin slash commands, so the
+plugin's commands are Codex skills with the same names as on the other agents:
+`$tokeneconomizer:status`, `:microskills`, `:toolprune`, `:config` and `:repos`, each followed by
+its arguments (`$tokeneconomizer:config set loopguard=off`); type `$tokeneconomizer` to pick one.
+Name the skill rather than asking in plain words: a question such as *"what has TokenEconomizer
+learned here?"* may be answered from the plugin's files without running its command. Commands
+that change something (`config set` or `unset`, `toolprune apply` or `restore`, `repos migrate`
+or `merge`) write to `~/.tokeneconomizer`, which Codex's sandbox keeps read-only, so Codex asks
+first: choose **Yes, proceed**. From a terminal, inside the repository:
 `~/.tokeneconomizer/bin/te --host codex <command>` (the launcher appears after the first
 session).
 
-**4. Work normally.** See [What to expect](#what-to-expect). Codex's deny list turns off the
-sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only once it has
-been loaded and unused long enough ([What to expect](#what-to-expect)); a package you used even
-once is kept. It is
-written to the project's `.codex/config.toml`, which Codex reads **only in a trusted project**
-(the session start that announces it says so otherwise), and never into one your repository
-commits: that stays a proposal, and the session start says why. The web, asking you questions
-and the bundled skills are never turned off. `$tokeneconomizer:toolprune restore` gives the
-packages back, and `toolprune measure` shows the difference with no model call.
+**4. Work normally.** See [What to expect](#what-to-expect). On Codex the deny list can turn off
+the sub-agent (`collaboration`), `goals` and image (`image_media`) packages, each only after it
+has been loaded and gone unused long enough; a package you used even once is kept. Web access,
+asking you questions and the bundled skills are never turned off. The list is written to the
+project's `.codex/config.toml`, which Codex reads **only in a trusted project** (otherwise the
+session start that announces it says so), and never into a `config.toml` your repository
+commits: that stays a proposal, and the session start says why.
+`$tokeneconomizer:toolprune restore` gives the packages back, and `toolprune measure` shows the
+difference with no model call.
 
-In `codex exec`, Codex does not print hook messages, so the plugin's notices are not shown
-there; a loop guard redirect still reaches the model. In the terminal UI a turn that is still
-stuck after the redirect shows "↳ Hook · TokenEconomizer: … Press Esc to interrupt it, then /stop
+**Messages.** Under `codex exec`, Codex prints no hook messages, so the plugin's notices are not
+shown, though a loop guard redirect still reaches the model. In the terminal UI, a turn still
+stuck after its redirect shows "↳ Hook · TokenEconomizer: … Press Esc to interrupt it, then /stop
 to end a command it left running": Esc interrupts the turn, but a command it started keeps
 running in the background until `/stop`. Under `codex exec`, Ctrl+C ends the run and its command.
-Quitting Codex's interactive mode (`/exit`) keeps the
-session open to `codex resume` and sends no session end, so the plugin learns from it at a later
-session start, once it has been quiet for ten minutes; `codex exec` sessions are learned from
-as they end.
+
+**When a session is learned from.** Quitting interactive Codex (`/exit`) keeps the session open
+for `codex resume` and sends no session end, so the plugin learns from it at a later session
+start, once it has been quiet for ten minutes. `codex exec` sessions are learned from as they
+end.
 
 **Update.** `git pull` in the clone, then `codex plugin add tokeneconomizer@tokeneconomizer`
 again to refresh Codex's installed copy (your hook approval is kept).
@@ -192,14 +190,13 @@ commands work only in interactive mode; the plugin's notices also appear under `
 
 With no model call. Do it once on this machine, and again after Copilot updates.
 
-**4. Work normally.** See [What to expect](#what-to-expect). Copilot has no setting that removes a
-single built-in tool, only one that turns off a whole MCP server, so the deny list turns off a
-server only when **none** of its tools was used long enough ([What to expect](#what-to-expect)):
-one of yours from
+**4. Work normally.** See [What to expect](#what-to-expect). Copilot cannot remove a single
+built-in tool, only turn off a whole MCP server, so the deny list turns off a server only when
+**all** of its tools have gone unused long enough: one of yours from
 `~/.copilot/mcp-config.json`, or the built-in `github-mcp-server`, which loads only when you are
 signed in to GitHub. It is written to `.github/copilot/settings.local.json`, and the next session
-start says so; `/tokeneconomizer:toolprune restore` turns the server back on. `toolprune
-measure` shows the difference with no model call.
+start says so. `/tokeneconomizer:toolprune restore` turns the server back on, and
+`toolprune measure` shows the difference with no model call.
 
 From a terminal, inside the repository: `~/.tokeneconomizer/bin/te --host copilot <command>` (the
 launcher appears after the first session). A turn that is still stuck after the loop guard's
@@ -252,13 +249,13 @@ To check the whole plugin on your own setup:
 ~/.tokeneconomizer/bin/te --host copilot probe      # 7 short real sessions, in a temp repo
 ```
 
-It builds a throwaway repository that is set up for pytest but has no pytest installed, and
-whose tests pass under `python -m unittest`, and runs the same prompt in real Copilot sessions
-with the plugin, under a state directory of its own. It reports, per session, whether the fact
-the plugin learned was in the context and which test command the model ran first. Then it
-applies the deny list it proposed, and shows the tool definition tokens of one more session
-before restoring. It makes real model calls on your key or quota, and leaves those sessions in
-Copilot's history.
+It builds a throwaway repository that is set up for pytest, without pytest installed, and whose
+tests pass under `python -m unittest`. It runs the same prompt in real Copilot sessions with the
+plugin, under a state directory of its own, and reports for each session whether the fact the
+plugin learned was in the context and which test command the model ran first. Then it applies the
+deny list it proposed, shows the tool-definition tokens of one more session, and restores the
+list. It makes real model calls on your key or quota, and leaves those sessions in Copilot's
+history.
 
 ## Pi
 
@@ -289,44 +286,47 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 
 ## What to expect
 
+The plugin works session by session. A session is one conversation with the agent, from start to
+exit, however many tasks you do in it; resuming it continues the same session. The plugin learns
+from a session once it ends, and acts at the start of the next one; only the loop guard acts
+during a turn.
+
 - **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
-  any language or toolchain: the same environment failure coming up in a few sessions (a tool,
-  interpreter, build or test command that fails as typed and works spelled another way), with
-  no model call; and, every `microskills_propose_every` sessions (3 by default), a model reading digests of the recent ones (the
-  commands run, the build, test and lint commands among them, the files edited, and each
-  failing command with its error line, paths relative to the repository) and writing facts
-  about the repository, each with the patterns that test it against later sessions. A fact is
-  injected at every session start once later sessions have confirmed it (three confirming ones,
-  among at least four where it applied), and retired when one contradicts it. How much this helps
-  depends on the repository's state and the tasks you run in it. A session start that adds facts
-  says so once, in one line. A resumed session keeps the facts it started with, word for word, so
-  its cached prompt still matches. `microskills` shows the facts injected and those forming.
-- **Deny list.** Applied without asking you once a tool, package or server never used here has
-  gone unused over `toolprune_evidence` prompts (10 by default) across at least
-  `toolprune_min_sessions` sessions (2), or over `toolprune_sessions` sessions however short (5)
-  -- three times as long for a few higher-risk tools -- from the next session on; that session's
-  start says so once. Prompts let long sessions count for more, and the session floor keeps one
-  session's work from deciding alone. A session that ran no prompt counts for nothing. It is
-  written once the repository's sessions have been idle for `toolprune_quiet_minutes` (60 by
-  default): a conversation resumed
-  after its tools change writes its whole history to the prompt cache again instead of reading
-  it, and after an idle hour that cache has expired anyway. `toolprune` shows a list still
-  waiting. `toolprune restore` gives back what the plugin removed, and only that, and what you
+  any language or toolchain. The first needs no model call: the same environment failure in a
+  few sessions (a tool, interpreter, build or test command that fails as typed and works spelled
+  another way). The second runs every `microskills_propose_every` sessions (3 by default): a
+  model reads digests of the recent sessions (the commands run, including build, test and lint
+  commands, the files edited, and each failing command with its error line, with paths relative
+  to the repository) and writes facts about the repository, each with patterns that test it
+  against later sessions. A fact is injected at every session start once later sessions confirm
+  it (three confirming sessions among at least four where it applied), and retired when one
+  contradicts it. How much this helps depends on the repository's state and the tasks you run in
+  it. A session start that adds facts says so once, in one line. A resumed session keeps the
+  facts it started with, word for word, so its cached prompt still matches. `microskills` shows
+  the facts injected and those still forming.
+- **Deny list.** A tool, package or server that is loaded but never used here is left out without
+  asking you, once it has gone unused over `toolprune_evidence` prompts (10 by default) across at
+  least `toolprune_min_sessions` sessions (2), or over `toolprune_sessions` sessions of any length
+  (5); a few higher-risk tools need three times as long. A session that ran no prompt does not
+  count. The list is written once the repository's sessions have been idle for
+  `toolprune_quiet_minutes` (60 by default), so that no conversation you resume loses its prompt
+  cache, and it applies from the next session, whose start says so once. `toolprune` shows a list
+  still waiting. `toolprune restore` gives back what the plugin removed, and only that; what you
   give back is never removed again (`toolprune apply NAME` removes one again). With
-  `toolprune=propose`, it is only proposed, the session start says so, and nothing changes
-  until you run `toolprune apply`. A file the plugin creates is added to `.git/info/exclude`.
-  Each checkout keeps its own settings file: a repository's other clones share what it learned,
-  and each gets the list when one of its own sessions ends.
-- **Loop guard.** Quiet on normal turns, and it does nothing until `loopguard.envelope_min_samples`
-  turns in a repository (5 by default) have ended with passing checks. A turn that keeps hitting
-  the same failures, or piles up errors, after `loopguard.min_turns` tool calls is put to a judge
-  model; only a "stuck" verdict with confidence `loopguard.judge_confidence` (0.7) or more
+  `toolprune=propose`, the list is only proposed, the session start says so, and nothing changes
+  until you run `toolprune apply`. A settings file the plugin creates is added to
+  `.git/info/exclude`. Each checkout keeps its own settings file: a repository's clones share
+  what was learned, and each gets the list when one of its own sessions ends.
+- **Loop guard.** Quiet on normal turns, and idle until `loopguard.envelope_min_samples` turns in
+  a repository (5 by default) have ended with passing checks. After that, a turn that keeps
+  hitting the same failures, or piles up errors, after `loopguard.min_turns` tool calls is put to
+  a judge model. Only a "stuck" verdict with confidence `loopguard.judge_confidence` (0.7) or more
   attaches a redirect (written by that model) to a tool result, at most `loopguard_nudges` (1)
-  per turn, and if the turn is still stuck after that, a one-line notice tells you how to stop
-  it. A long turn with no such sign is never judged. A turn past `loopguard.backstop_mult` (2.5)
+  per turn; if the turn is still stuck after that, a one-line notice tells you how to stop it. A
+  long turn with no sign of looping is never judged. A turn past `loopguard.backstop_mult` (2.5)
   times the repository's usual length that also keeps churning edits through the same failures
-  is redirected even if the judge disagrees. The plugin never stops a turn itself.
-  Where the notice appears, and how to stop, on each agent and in each mode:
+  is redirected even if the judge disagrees. The plugin never stops a turn itself. Where the
+  notice appears, and how to stop the turn, on each agent and in each mode:
   [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
 - **Cost.** `status` shows each session's tokens, priced after it ends, and the plugin's own
   overhead: the loop guard's judge, and micro-skills' proposer when it is on.
@@ -396,7 +396,7 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills (off by default) | `microskills` | `envfacts+distiller`: facts found without model calls, plus a model proposing facts every `microskills_propose_every` sessions | `off`; `envfacts`: only the facts found without model calls; `distiller`: only the proposer |
-| Tool pruning | `toolprune` | `auto`: applied once it forms and your sessions have been idle an hour, from the next session, and announced | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
+| Tool pruning | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes`, from the next session, which announces it | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
 | Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, one mid-turn redirect, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**
@@ -517,21 +517,23 @@ not rewritten, so the commands that fact recommends keep working.
 
 ## Model calls and API keys
 
-**By default the plugin's only model calls are the loop guard's**: its judge, asked about a turn
-that shows signs of looping, and, when the judge finds it stuck, the redirect it writes. Tool
-pruning never calls a model. Turning micro-skills on adds its fact proposer, once every
-`microskills_propose_every` sessions (`microskills=envfacts` keeps only the facts found without
-a model call); `loopguard=off` stops the judge with the guard. These calls run through **your
-own agent CLI** (`claude -p`; `codex exec` on Codex; `copilot -p`, with every tool removed, on
-Copilot; `pi -p`, with nothing loaded but the model, on Pi), so they use whatever your sessions
-already use: a Claude subscription or Anthropic API key, your Codex login or OpenAI key,
-Copilot's subscription, or the provider and login Pi is set up with. (Copilot with BYOK is the
-exception; see [Copilot CLI](#copilot-cli).) Their cost is billed there too, and shown in
-`status`. A call that gets no reply leaves a line in `~/.tokeneconomizer/errors.log`; one whose
-CLI answered that it is not signed in also pauses that agent's calls (the loop guard then
-redirects only at its backstop), the next session start says so once, and
-`config set microskills=on` (or `loopguard=on`) tries again. `toolprune measure` on Claude Code
-makes its two calls the same way, and only when you run it.
+**With the defaults, the plugin's only model calls are the loop guard's**: the judge, asked about
+a turn that shows signs of looping, and, when the judge finds the turn stuck, the redirect it
+writes. Tool pruning never calls a model. Turning micro-skills on adds its fact proposer, once
+every `microskills_propose_every` sessions (`microskills=envfacts` keeps only the facts found
+without a model call); `loopguard=off` turns the judge off along with the guard.
+
+These calls run through **your own agent's CLI**: `claude -p`; `codex exec`; `copilot -p`, with
+every tool removed; and `pi -p`, with nothing loaded but the model. So they use whatever your
+sessions already use (a Claude subscription or Anthropic API key, your Codex login or OpenAI key,
+Copilot's subscription, or the provider and login Pi is set up with), are billed there, and are
+shown in `status`. Copilot with BYOK is the exception; see [Copilot CLI](#copilot-cli).
+
+A call that gets no reply leaves a line in `~/.tokeneconomizer/errors.log`. If the CLI answers
+that it is not signed in, that agent's calls are also paused (the loop guard then redirects only
+at its backstop), the next session start says so once, and `config set microskills=on` (or
+`loopguard=on`) tries again. `toolprune measure` on Claude Code makes its two calls the same way,
+and only when you run it.
 
 ## Troubleshooting
 
