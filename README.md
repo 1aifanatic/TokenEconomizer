@@ -38,11 +38,9 @@
   </picture>
 </p>
 
-TokenEconomizer is a plugin that makes **Claude Code**, **Codex**, the **GitHub Copilot CLI**
-and **Pi** cheaper to run in the repositories you work in often. It does not change the agent;
-it learns from your sessions. Its unit is the *session*: one conversation with your agent, from
-start to exit, however many tasks you do in it. After each session in a repository ends, the
-plugin reads its log, and it changes what the next sessions there start with. It has three
+TokenEconomizer makes coding agents cheaper to run in the repositories you work in often,
+without changing the agent itself. It learns from the sessions an agent has already run in a
+repository, and uses that experience to cut waste in the sessions that follow. It has three
 mechanisms:
 
 - **Micro-skills: remember how the repository works.** Sessions keep rediscovering the same
@@ -51,22 +49,26 @@ mechanisms:
   variable a command needs, where generated files live. Micro-skills learns such facts, in any
   language, from two sources: failures that repeat across sessions, and a model that reviews the
   recent sessions every *k* sessions (*k* = 3) and proposes facts. A fact is stated at the start
-  of each session once later sessions confirm it, and dropped when one contradicts it.
-- **Tool pruning: stop loading tools that go unused.** Every loaded tool is sent with every
-  request. A tool that goes unused over *p* prompts spread across at least *m* sessions, or over
-  *s* sessions of any length (*p* = 10, *m* = 2, *s* = 5), is left out of the next sessions
+  of each session once three sessions have confirmed it, and dropped when later sessions
+  contradict it.
+- **Tool pruning: stop loading tools that go unused.** Every loaded tool's definition is sent with
+  every request. A tool that goes unused over *p* prompts spread across at least *m* sessions, or
+  over *s* sessions of any length (*p* = 10, *m* = 2, *s* = 5), is left out of the next sessions
   through the agent's own settings. One command brings it back.
 - **Failure-loop intervention (the loop guard): step in when a turn is stuck.** When a turn (the
   agent's work on one prompt) keeps hitting the same failures, a judge model checks whether it is
-  stuck. If the judge is at least *c* sure (*c* = 0.7), the agent gets a short redirect, at most
-  *r* times per turn (*r* = 1). If the turn is still stuck after that, the plugin tells you how to
-  stop it; it never stops a turn itself.
+  stuck. If the judge is at least *c* sure (*c* = 0.7), the agent gets a redirect (a short note,
+  added to its context, to try another approach), at most *r* times per turn (*r* = 1). If the
+  turn is still stuck after that, TokenEconomizer tells you how to stop it; it never stops a turn
+  itself.
 
-Each italic letter is a setting, shown with its default ([Settings](#settings)), and each
+TokenEconomizer is a plugin for **Claude Code**, **Codex**, the **GitHub Copilot CLI** and **Pi**.
+Each italic letter above is a setting, shown with its default ([Settings](#settings)), and each
 mechanism can be turned on or off. The plugin announces each action in one line, and if any part
-of it fails, your session carries on as if it were not installed. Its only model calls (the fact
-proposer and the judge) run through your own agent, on the same plan or login, and their cost is
-included in its reports. What it learns stays on your machine, in `~/.tokeneconomizer`.
+of it fails, your session carries on as if it were not installed. Its model calls (the fact
+proposer, and the judge with the redirect it writes) run through your own agent, on the same plan
+or login, and their cost is included in its reports. What it learns stays on your machine, in
+`~/.tokeneconomizer`.
 
 ## Results
 
@@ -98,7 +100,7 @@ follow. Four principles guide the mechanisms:
   computed with cache pricing, and it includes the plugin's own model calls.
 - **Protect task success.** Facts form only from repeated evidence, tools are removed only after
   going unused, and the loop guard leaves alone a turn that is still making progress.
-- **Keep every action reversible.** A fact that a later session contradicts is dropped, removed
+- **Keep every action reversible.** A fact that later sessions contradict is dropped, removed
   tools can be given back, and the loop guard only redirects and tells you: stopping a turn is
   your call.
 
@@ -135,8 +137,8 @@ codex plugin add tokeneconomizer@tokeneconomizer
 ```
 
 Start `codex`, choose **Trust and continue** for the folder, then at **Hooks need review**
-choose **Trust all and continue**; the hooks run from the next session on. Check with
-`$tokeneconomizer:status`.
+choose **Trust all and continue**. The hooks take effect from your next Codex session, so quit
+(`/exit`), start `codex` again, and check with `$tokeneconomizer:status`.
 
 **Copilot CLI**
 
@@ -210,7 +212,7 @@ commands. They have the same names on every agent; only the way you type them di
 | `toolprune` | the tools it left out, and the evidence (not on Pi) |
 | `toolprune restore` | give them back; they will not be removed again |
 | `config` | every setting in effect |
-| `config set microskills=on` | turn a mechanism on (or `=off`) here; add `--global` for every repository |
+| `config set microskills=on` | turn a mechanism on (or `=off`) in this repository; add `--global` for every repository |
 
 Inside an agent, a command costs one model turn; from a terminal it is free. The other commands
 (`repos`, `doctor`, `config unset`, ...) and each agent's permission prompts are listed under
@@ -218,11 +220,12 @@ Inside an agent, a command costs one model turn; from a terminal it is free. The
 
 ## Settings
 
-Tool pruning and the loop guard are on by default; with these defaults, the plugin's only model
-call is the judge, asked only about a turn that shows signs of looping. Micro-skills is off by
-default, because its proposer adds model calls and how much it saves depends on the repository
-and the work you do there. Each mechanism takes `on` or `off`, and the italic letters above are
-these settings:
+Tool pruning and the loop guard are on by default; with these defaults, the plugin calls a model
+only when a turn shows signs of looping: the judge, and the redirect it writes if it finds the
+turn stuck. Micro-skills is off by default, because its proposer adds model calls and how much it
+saves depends on the repository and the work you do there. Each mechanism has its own switch
+(`microskills`, `toolprune`, `loopguard`) that takes `on` or `off`, and the italic letters above
+are these settings:
 
 | | Setting | Default | What it sets |
 |---|---|---|---|
@@ -231,7 +234,7 @@ these settings:
 | *m* | `toolprune_min_sessions` | 2 | sessions those prompts must span |
 | *s* | `toolprune_sessions` | 5 | or this many sessions, of any length |
 | *q* | `toolprune_quiet_minutes` | 60 | minutes your sessions here must be idle before a deny list is written |
-| *e* | `loopguard.envelope_min_samples` | 5 | turns here that ended with passing checks before the loop guard acts |
+| *e* | `loopguard.envelope_min_samples` | 5 | turns here that ended well (no failing check after the last edit) before the loop guard acts |
 | *c* | `loopguard.judge_confidence` | 0.7 | how sure the judge must be that a turn is stuck |
 | *r* | `loopguard_nudges` | 1 | redirects per turn before the guard only tells you |
 | *b* | `loopguard.backstop_mult` | 2.5 | how many times its usual length a churning turn may run before it is redirected without the judge |
@@ -248,9 +251,9 @@ Change them with `config set`, shown here in Claude Code's form (other agents ty
 
 Tool pruning counts prompts so that long sessions weigh more, and requires *m* sessions so that a
 single session never decides alone. It writes the deny list only once your sessions in the
-repository have been idle for *q* minutes: a conversation resumed after its tools change must
-write its whole history to the prompt cache again instead of reading it, and after an idle hour
-that cache has expired anyway.
+repository have been idle for *q* minutes (or, at the latest, a day after the list formed): a
+conversation resumed after its tools change must write its whole history to the prompt cache again
+instead of reading it, and after an idle hour that cache has expired anyway.
 
 Besides `on` and `off`, two modes are useful: `toolprune=propose` only proposes the deny list, and
 nothing changes until you run `toolprune apply`; `microskills=envfacts` learns facts only from
@@ -258,48 +261,51 @@ repeated failures, with no model calls.
 
 To change a single session, set an environment variable when you start the agent:
 `TE_DISABLE=1 claude` turns the whole plugin off, and `TE_LOOPGUARD=off codex` turns off one
-mechanism (likewise `TE_MICROSKILLS` and `TE_TOOLPRUNE`). Every setting, its default and its
-environment variable are listed under [Settings](plugin/README.md#settings).
+mechanism (likewise `TE_MICROSKILLS` and `TE_TOOLPRUNE`). Every setting and its default are
+listed under [Settings](plugin/README.md#settings); each one's environment variable is `TE_` plus
+its name in capitals.
 
 ## What it does on each agent
 
-Micro-skills and the loop guard work the same way on every agent. Tool pruning acts through each
-agent's own settings, so what it can leave out differs:
+Micro-skills and the loop guard work the same way on every agent. Each agent learns on its own:
+facts, tool evidence and the loop guard's sense of a usual turn are kept per agent and
+repository, while settings are shared. Tool pruning acts through each agent's own settings, so
+what it can leave out differs:
 
 | Agent | Tool pruning leaves out | Written to |
 |---|---|---|
 | Claude Code | single tools | `.claude/settings.local.json` |
 | Codex | capability packages | `.codex/config.toml` |
 | Copilot CLI | whole MCP servers | `.github/copilot/settings.local.json` |
-| Pi | nothing: Pi loads four tools | — |
+| Pi | nothing (Pi loads only four tools) | — |
 
-Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file
-it creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that
-says what it left out shows only in the detailed transcript (**Ctrl+O**), so check with
+Tool pruning adds only its own entries and never touches deny rules you wrote; a settings file it
+creates is kept out of git (`.git/info/exclude`). On Claude Code, the session-start line that says
+what it left out shows only in the detailed transcript (**Ctrl+O**), so check with
 `/tokeneconomizer:toolprune`. `toolprune restore` removes the plugin's entries and nothing else,
 and tools you give back are not removed again. If the plugin cannot edit a file safely (a
-`.codex/config.toml` your repository commits, a settings file that is not valid JSON, a path
-through a symlink), the list stays a proposal and the session start says why; `toolprune apply`
-tries again. **[`docs/PLUGIN.md`](docs/PLUGIN.md)** records how each agent's hooks and settings
-were verified to behave, and **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** how the package
-fits together.
+`.codex/config.toml` your repository commits, a settings file that is not valid JSON, a symlink
+that leads out of the repository), the list stays a proposal and the session start says why;
+`toolprune apply` tries again. **[`docs/PLUGIN.md`](docs/PLUGIN.md)** records how each agent's
+hooks and settings were verified to behave, and **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
+how the package fits together.
 
 ### When a turn gets stuck
 
 The loop guard first learns how long a turn in this repository usually runs: it waits until *e*
-turns here have ended with passing checks. After that, a turn that shows signs of looping (the
-same failures repeating, or errors piling up) goes to the judge. One case is redirected without
-the judge: a turn that runs past *b* times the usual length while churning the same edits through
-the same failures. If a turn is still stuck after its redirects, you see one line that ends with
-how to stop it:
+turns here have ended well, on their own and with no failing check after the last edit. After
+that, a turn that shows signs of looping (the same failures repeating, or errors piling up) goes
+to the judge. One case is redirected without the judge: a turn that runs past *b* times the usual
+length while churning the same edits through the same failures. If a turn is still stuck after its
+redirects, you see one line that ends with how to stop it:
 
-> TokenEconomizer: this turn still looks stuck after a redirect (envelope, 12 tool calls). Press
-> Esc to interrupt it.
+> TokenEconomizer: this turn still looks stuck after a redirect (judge-stuck@0.82, 46 tool
+> calls). Press Esc to interrupt it.
 
 Where that line appears, and how to stop the turn, in the terminal UI and in a headless run
 (`claude -p`, `codex exec`, `copilot -p`, `pi -p`):
 
-| Agent | Interactive: shown | Stop with | Headless: shown | Stop with |
+| Agent | Interactive: where it shows | How to stop | Headless: where it shows | How to stop |
 |---|---|---|---|---|
 | Claude Code | in Claude's reply | Esc | in the final reply | Ctrl+C |
 | Codex | in the conversation | Esc, then `/stop` | not shown | Ctrl+C |

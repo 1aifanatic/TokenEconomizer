@@ -13,7 +13,7 @@ the hooks run) and `plugin/` (the packaging for each agent). To install and use 
 
 | Hook | What the plugin does | Mechanism it drives |
 |---|---|---|
-| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
+| `SessionStart` | Injects the repository's micro-skills (a cached render) as `additionalContext`, at a new start, and on a Copilot resume the text that session started with (§3); announces changed facts, tools the deny list newly left out, or, under `toolprune=propose` (or when `auto` could not write the file), a proposal still waiting, each in one `systemMessage` line; folds any earlier session whose end was never seen | microskills |
 | `UserPromptSubmit` | Opens a prompt-turn for the loop guard | loopguard |
 | `PostToolUse` | Folds the call into the turn's guard; delivers a redirect as `additionalContext`, then, if the turn is still stuck, a one-line notice to the person (on Claude Code, also as context asking the model to repeat it); never stops the turn | loopguard |
 | `PostToolUseFailure` | The same, for a call that failed (Claude Code and Copilot report a failed call only here); the answer names this event, as Claude Code requires | loopguard |
@@ -32,14 +32,14 @@ re-tuned. Three things it adds:
   `apply_patch <<'PATCH'`. The loop
   state counts only edit tools, and agents that edit through Bash then looked as if they had
   edited nothing.
-* **The nudge always comes before the stop.** The benchmark ladder checks a hard backstop (a
-  multiple of the learned envelope: 2.5 × at the default level, 1.8 × at `aggressive`) before
-  anything else. With the large envelopes of the benchmark streams, the backstop lay well past
-  the stuck rule's own floor (20 calls at the default level, 14 at `aggressive`), and the nudge
-  came first. An interactive repository learns a small envelope. Its backstop then falls inside
-  that floor, so the first call that counts as stuck has also tripped the backstop, and the turn
-  would be stopped (or, in nudge mode, merely flagged) without ever being redirected. Now an
-  unspent nudge goes first, and the stop needs a second stuck segment after it.
+* **The redirect always comes before the still-stuck notice.** The benchmark ladder checks a
+  hard backstop (a multiple of the learned envelope: 2.5 × at the default level, 1.8 × at
+  `aggressive`) before anything else. With the large envelopes of the benchmark streams, the
+  backstop lay well past the stuck rule's own floor (20 calls at the default level, 14 at
+  `aggressive`), and the redirect came first. An interactive repository learns a small envelope.
+  Its backstop then falls inside that floor, so the first call that counts as stuck has also
+  tripped the backstop, and the turn would get the notice without ever being redirected. Now an
+  unspent redirect goes first, and the notice needs a second stuck segment after it.
 * The **stuck judge and nudge writer run in a detached `te judge` job**, not in
   the hook. The hook starts the job and returns; a later PostToolUse picks up the verdict, with
   the redirect already written. Each job's spend is charged to the ledger when it is spent.
@@ -55,14 +55,14 @@ Every hook fails open: any error becomes an empty output (no change) and a trace
 | Learning signal | the official grader's `resolved` | the envelope learns from turns that **ended green**: the agent stopped on its own, was not stopped by the guard, and no verification after its last edit failed | There is no grader. Micro-skills and evidence pruning never needed one |
 | Injection channel | a prefix on the task prompt | `SessionStart` `additionalContext` | Verified to reach the model (§3) |
 | Tool removal | `--disallowed-tools` / Codex config at launch | a **deny list**, applied by default once the evidence forms it and the repository's sessions have been idle longer than a prompt cache lives (§3), and announced at the next session start (`toolprune=propose` waits for approval instead), written to the repository's own settings file — tools in `.claude/settings.local.json`, Codex capability packages in `.codex/config.toml`, Copilot MCP servers in `.github/copilot/settings.local.json` — effective from the **next** session | The plugin launches nothing. A session keeps the tools it started with, but a conversation resumed after a change sends the new ones, re-writing its cached prefix, hence the idle wait. Each agent's file can express a different unit (§3) |
-| Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (never used, and unused over N prompts across two or more sessions, or over N sessions) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
+| Pruning candidates | `toolprune.tools.INAPPLICABLE_TOOLS` — orchestration, Q&A, plan mode, web — "inapplicable by construction" for a sealed headless task | nothing is inapplicable by construction; only **evidence** (never used, and unused over `toolprune_evidence` prompts (10) across at least `toolprune_min_sessions` sessions (2), or over `toolprune_sessions` sessions (5)) proposes a tool, and a person's tools — AskUserQuestion, plan mode, sub-agents, the web — are protected | A person asks questions, plans and browses in a real session. A deny rule the plugin wrote for a tool that has since become protected is given back at the next fold |
 | Network | every arm, baseline included, carries an answer-key guard — a `PreToolUse` hook and an `/etc/hosts` block refuse the benchmarks' upstream sources — and drops the web tools | **no guard**: no `PreToolUse` hook (on Pi, no `tool_call` handler), no blocked command or host; the web tools stay | A benchmark's answer is a fetch away. A real session has no answer key, and the web is part of the work |
-| Who decides a turn is stuck | in the guard's arms, the trace judge, woken by the rule gate or by a turn past the envelope (the agents ran under a turn cap); without a judge, the strict rule | **always the judge** when the guard is on, woken only by a sign of trouble (a repeated failure, or dense errors) after `min_turns` calls, and never before the repository has an envelope; a `productive` or unsure verdict spares the turn. The hard backstop (far past the envelope AND the strict stall rule) still acts without it. While the agent's model calls are paused, the judge gives no verdict and only the backstop acts | The rule alone redirected turns that had found their cause and were working around it (§5); interactive turns outrun a small envelope all the time, so the envelope alone wakes nothing |
-| Nudge | kill the agent, resume it with a continuation prompt | a mid-turn reminder attached to the tool result | Different intervention, so its effect is not inherited from the experiments |
+| Who decides a turn is stuck | in the guard's arms, the trace judge, woken by the rule gate or by a turn past the envelope (the agents ran under a turn cap); without a judge, the strict rule | **always the judge** when the guard is on, woken only by a sign of trouble (a repeated failure, or dense errors) after `min_turns` calls, and never before the repository has an envelope; a `productive` or ambiguous verdict spares the turn (at the `aggressive` preset an ambiguous one past the envelope gets the redirect). The hard backstop (far past the envelope AND the strict stall rule) still acts without it. While the agent's model calls are paused, the judge gives no verdict and only the backstop acts | The rule alone redirected turns that had found their cause and were working around it (§5); interactive turns outrun a small envelope all the time, so the envelope alone wakes nothing |
+| Redirect | kill the agent, resume it with a continuation prompt | a mid-turn reminder attached to the tool result | Different intervention, so its effect is not inherited from the experiments |
 | Still stuck after the redirect | terminal abort, in autonomous runs | a one-line **notice** to the person, ending with how to stop the turn on that agent and in that mode (§3); the plugin never stops a turn, and `loopguard: stop` is read as `nudge` | Not every agent's hooks can stop a turn (Codex and Copilot ignore `continue: false`), and the person decides: the benchmark guard's own design note says "interactive callers should map it to a hand-off" |
 | Micro-skills' reading | a domain vocabulary per benchmark (Python/git, Node/web); the proposer's digest counts edited Python files, lists test invocations and flags Python import errors, and its prompt leads with the test command | **generic**, whatever the repository: every ecosystem's interpreters, package tools and test runners at once, builds and checks (`make`, `tsc`, `npm run build`, `cargo check`, ...) as their own intent, every edited file, and a language-neutral digest (failing commands with a normalized error line, paths relative to the repository) and prompt, with tests one topic among several. `vocabulary=python-git` or `node-web` selects an experiment's | A person's repository may be in any language, or several; the experiments keep the paper's reading (its prompt is pinned by a test) |
-| Micro-skills | on in the arms that measured it: the proposer every 5 tasks (on Codex, every 10, over the free layer) | **off by default**; `on` runs the free layer under the proposer, every 3 sessions (after the 2nd, 5th, 8th, ...), since a real session usually carries more work than one benchmark task | The proposer calls a model on the person's plan, and what it injects is derived from command output a repository controls: turning it on is the person's call. In the experiments the free layer alone formed almost nothing once the harness set each environment up properly, so `on` keeps the proposer |
-| Optimizer model | the agent's own model, so overhead could not look cheaper than its arm | the cheapest capable model on the user's own agent CLI (`paid_model`, default `haiku`): the proposer when micro-skills is on, the loop guard's judge and redirect writer whenever the guard is on | Every call is still charged to the session ledger |
+| Micro-skills | on in the arms that measured it: the proposer every 5 tasks (on Codex, every 10, over the free layer) | **off by default**; `on` runs the free layer under the proposer, every `microskills_propose_every` sessions (3 by default: after the 2nd, 5th, 8th, ...), since a real session usually carries more work than one benchmark task | The proposer calls a model on the person's plan, and what it injects is derived from command output a repository controls: turning it on is the person's call. In the experiments the free layer alone formed almost nothing once the harness set each environment up properly, so `on` keeps the proposer |
+| Optimizer model | the agent's own model, so overhead could not look cheaper than its arm | the cheapest capable model on the user's own agent CLI (`paid_model`; when empty, `haiku` on Claude Code, the agent's default model on Codex and Pi, and on Copilot a concrete `COPILOT_MODEL` or a BYOK provider's Haiku): the proposer when micro-skills is on, the loop guard's judge and redirect writer whenever the guard is on | Every call is still charged to the session ledger |
 
 ## 3. Verified agent behaviour
 
@@ -83,7 +83,7 @@ and date it was verified on; §5 says what has not been exercised.
   list `--disallowed-tools` produces, whether the rule comes from `--settings` or from a
   project's `.claude/settings.local.json`. A plugin's own `settings.json` cannot carry deny rules
   (only `agent` and `subagentStatusLine` take effect), which is why the deny-list writer edits the
-  project-local file, with approval.
+  project-local file (by itself under `toolprune=auto`, on `toolprune apply` under `propose`).
 * An interactive transcript does not record the tool list a session loaded. Without a recorded
   catalog, evidence pruning sees only the tools Claude Code defers (one listing line each) and
   those a session used; `te toolprune refresh-catalog` records the always-loaded set, with no model
@@ -191,7 +191,7 @@ feature flags):
   `toolDefinitionsTokens`; the probe reports it before and after the deny list.
 * **Usage under BYOK** keeps the grand-total form: with an Anthropic provider, `inputTokens`
   includes the `cacheWriteTokens`, which the ledger splits out.
-* **Paid side calls under BYOK.** With `COPILOT_MODEL=auto` (the subscription's router) in the
+* **The plugin's own model calls under BYOK.** With `COPILOT_MODEL=auto` (the subscription's router) in the
   environment, `copilot -p` without a model answered nothing. The side call now names a model:
   `paid_model`, else a concrete `COPILOT_MODEL`, else `claude-haiku-4-5` on an Anthropic
   provider. It answered, and was priced from its own session log. The local capture behind
@@ -208,7 +208,7 @@ itself, with no model and no quota:
 * Copilot loads a Claude-format plugin, and prefers `.github/plugin/plugin.json` to
   `.claude-plugin/plugin.json`: with both present, only the hook file the first one names
   ran. That is how the plugin gives Copilot its own `hooks/copilot-hooks.json` (`--host
-  copilot`, plus `PostToolUseFailure`) while Claude Code keeps `hooks/hooks.json`.
+  copilot`) while Claude Code keeps `hooks/hooks.json`.
   `copilot plugin marketplace add <checkout>` and `copilot plugin install` load the plugin
   live from the checkout ("nothing was copied"), and the installed copy's hooks all fired.
 * PascalCase events receive Claude-shaped snake_case payloads: `session_id`, `cwd`,
@@ -244,7 +244,7 @@ itself, with no model and no quota:
 * A side effect to know when scripting Copilot's TUI: under an editor's terminal (`TERM_PROGRAM`
   set), its first run offers to add a shift+enter binding and writes that editor's
   `keybindings.json` if accepted.
-* Untooling. Copilot has no persistent per-tool filter: `--excluded-tools` is a launch flag,
+* Tool pruning. Copilot has no persistent per-tool filter: `--excluded-tools` is a launch flag,
   and `permissions.deny` refuses a call but leaves the schema in the request. What does work,
   from the repository's `.github/copilot/settings.local.json`, is `disabledMcpServers`: listing
   the built-in `github-mcp-server` removes all of that server's tools from the request.
@@ -273,8 +273,9 @@ isolated `PI_CODING_AGENT_DIR`):
 * Pi's bash result carries a real exit code (`structuredContent.exit_code`), which the
   ended-green proxy uses; its session file is a tree, and only the active branch is read.
 * Not exercised live: a nudge (`sendMessage` with `deliverAs: "steer"`) and a stop
-  (`ctx.abort()`) — the dispatcher's side is covered by the offline tests, Pi's by its API.
-  Untooling does not apply: Pi declares four tools by default.
+  (`ctx.abort()`, since removed: the plugin no longer stops a turn) — the dispatcher's side is
+  covered by the offline tests, Pi's by its API. Tool pruning does not apply: Pi declares four
+  tools by default.
 
 **Pi 1.2.0 — verified live, 2026-10-14** (Haiku 4.5 through Pi's built-in OpenRouter provider,
 set as the default provider and model in an isolated `PI_CODING_AGENT_DIR`, as a Pi user's own
@@ -286,7 +287,7 @@ settings would be):
   file, and `errors.log` stayed empty.
 * `/te status` answered as a `notify` over RPC (the terminal UI's notice), and on stderr in
   print mode, leaving stdout to the reply.
-* A paid side call — `pi --print --mode json` with no tools, extensions, skills, prompt
+* One of the plugin's own model calls — `pi --print --mode json` with no tools, extensions, skills, prompt
   templates, context files, MCP servers or saved session, and no `--model` — ran on the default
   model and returned its text and usage; the plugin's own extension did not load inside it. Pi
   0.99.2 rejects `--no-mcp`, so the call retries without it.
@@ -308,7 +309,7 @@ this plugin's guide step by step (Claude Code 2.1.300, Codex 0.153.1, Copilot CL
   with `loopguard=stop` a headless turn ended at the next stuck verdict (nudged at call 17,
   stopped at 35) — the first live check of both on Pi. On Codex and Copilot the second fire is
   a notice. (Since 2026-10-21 the second fire is a notice on every agent; see below.)
-* Paid side calls ran through each agent's own CLI (Copilot's only off BYOK, above) and were
+* The plugin's own model calls ran through each agent's own CLI (Copilot's only off BYOK, above) and were
   charged to the ledger, without recursing into the plugin.
 * Pi's real git install (a local git daemon standing in for GitHub): cloned, `npm install`ed,
   listed, loaded; `pi update --extensions` fast-forwarded it; `pi remove` removed it.
@@ -422,7 +423,7 @@ OpenRouter (cache breakpoints, which move every turn, left out of the comparison
     fact was retired on disk kept the original system message, and a new session took the
     current facts.
 
-**Counting prompts, 2026-10-24** (the `experimental` branch). Can the mechanisms learn from the
+**Counting prompts, 2026-10-24** (on the `experimental` branch, since merged into `main`). Can the mechanisms learn from the
 prompts of a session rather than from whole sessions, so a long first session counts for more?
 
 * Tool pruning: yes, with a floor. Replaying this machine's recorded Claude Code sessions
@@ -431,8 +432,8 @@ prompts of a session rather than from whole sessions, so a long first session co
 
   | Rule | Projects with a list | Wrong prunes | Tools left out of the next session, summed |
   |---|---|---|---|
-  | 5 sessions (`main`) | 7 | 1 | 340 |
-  | 10 prompts over 2+ sessions, or 5 sessions (now) | 8 | 1 | 512 |
+  | 5 sessions (the earlier rule) | 7 | 1 | 340 |
+  | 10 prompts over 2+ sessions, or 5 sessions (the current default) | 8 | 1 | 512 |
   | 10 prompts (`toolprune_min_sessions=1`) | 8 | 7 | 628 |
 
   Ten prompts in one session pruned tools the next session needed (`ListAgents`,
@@ -499,7 +500,7 @@ nothing.
 
 All state is local, under `$TOKENECONOMIZER_HOME` (default `~/.tokeneconomizer`), one directory
 per repository and host: the mechanisms' own state, `ledger.jsonl` (one priced record per
-session), `events.jsonl` (every injection, nudge, stop), and per-session guard state.
+session), `events.jsonl` (every injection, redirect and still-stuck notice), and per-session guard state.
 Uninstalling the plugin leaves this directory; delete it to forget. `te repos` lists what it
 holds.
 
@@ -531,12 +532,14 @@ Which repository a session belongs to (`plugin/paths.py`, `plugin/repos.py`):
   sessions are folded again from their logs where those still exist; a session folded under two
   keys counts once, at its later fold. Nothing is deleted: a merged directory moves to
   `merged/`, displaced learned state to `premerge-*`. `te repos merge KEY [INTO]` joins two by
-  hand, for state whose checkouts are gone. Like the agents'
-own session logs it is derived from, it is private to you: the plugin creates it `0700` and its
-files `0600`, and tightens a looser one it finds.
+  hand, for state whose checkouts are gone.
+
+The state directory, like the agents' own session logs it is derived from, is private to you:
+the plugin creates it `0700` and its files `0600`, and tightens a looser one it finds.
 
 Nothing leaves the machine but the model calls of the loop guard (its judge and nudge writer, on
-by default with the guard) and of micro-skills (its proposer, when it is on). Those calls send
+by default with the guard), of micro-skills (its proposer, when it is on), and, only when you run
+it, of `toolprune measure` on Claude Code. Those calls send
 **digests** — command templates, edited file basenames, error lines with paths and numbers
 masked, never file contents — through your own agent CLI (`claude -p` / `codex exec` /
 `copilot -p` / `pi -p`), billed where your session is. The proposer keeps the digests of the last eight
@@ -552,8 +555,8 @@ parse rather than write over it.
 A learned fact is text injected into your agent's context, derived from your sessions' command
 output — which a repository controls. The free layer only fills fixed templates with observed
 command forms and hosts, and lints out completion advice; the proposer's facts are
-open-vocabulary. On a repository you do not trust, use `microskills=envfacts`, or read what it
-learned with `te microskills`.
+open-vocabulary. On a repository you do not trust, leave micro-skills off (the default) or use
+`microskills=envfacts`, and read what it learned with `te microskills`.
 
 ## 5. Known limitations
 
@@ -579,8 +582,9 @@ learned with `te microskills`.
   * The free fact layer has no family for "this tool is absent here, with no working
     alternative" (a missing `ruff`, `mypy` or `pre-commit`, say).
   * Test runs launched from a script are not recognised as verification.
-  * `refresh-catalog` is manual; until it runs in a repository, evidence pruning sees only
-    deferred tools. Running it at a repository's first session would close that gap.
+  * `refresh-catalog` is manual, once per machine and agent; until it runs, evidence pruning
+    sees only the tools sessions used (plus, on Claude Code, the deferred ones). Running it at
+    an agent's first session on a machine would close that gap.
 * Windows (the launcher is POSIX `sh`), Python 3.9, and compressed Codex rollouts (`.zst`).
 * Transcript formats are internal to each agent and change between versions; the readers are
   pinned by tests against the shapes observed on the versions above.

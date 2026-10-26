@@ -7,8 +7,8 @@ Left column   what the plugin keeps for a repository, the three mechanisms that 
               next session, and the fold that updates them when a session ends.
 Right column  the agent, unchanged, drawn as the three surfaces the plugin reaches. Each
               mechanism is shown by what it adds to or removes from its surface: facts added
-              to the session's context, tools struck out of the loaded set, and calls struck
-              out of a turn the guard stopped.
+              to the session's context, tools struck out of the loaded set, and a redirect,
+              then a notice to the person, in a turn that keeps failing.
 
 The layout is the paper figure's. Every row sits on one pitch, so a card, its arrow and its
 surface share one horizontal axis; the gaps inside a row are solved for, so the three surfaces
@@ -173,10 +173,10 @@ MECHANISMS = [
       "that recur across finished sessions")),
     (2, "Tool pruning", TOOLS, TOOLS_LIGHT,
      ("tools left unused session after session",
-      "go on a deny list once you approve it")),
+      "are left out of the next sessions")),
     (3, "Failure-loop intervention", SPIRAL, SPIRAL_LIGHT,
      ("learns how long turns here usually run;",
-      "one redirect, then a stop or a notice")),
+      "one redirect, then a notice to you")),
 ]
 
 
@@ -325,14 +325,14 @@ def draw_tools_row(fig, ax):
             ax.plot([x + 0.28, x + w - 0.28], [y + BAR_H / 2] * 2,
                     color=DROPPED_TC, lw=0.6, zorder=6)
         x += w + TOOL_GAP
-    annotate(ax, 2, dropped[0][0], dropped[-1][1], "denied, once you approve", DROPPED_TC)
+    annotate(ax, 2, dropped[0][0], dropped[-1][1], "left out, and announced", DROPPED_TC)
 
 
 # One prompt-turn, read left to right, in the order the guard acts: the same failure comes
 # back, and only then is one redirect attached to a tool result; when it comes back again
-# the turn is stopped (headless; interactive use gets a notice instead), so the calls after
-# it are struck out exactly like a pruned tool. An ellipsis stands for the repetitions a
-# schematic cannot show, so the two groups are not read as exactly two calls each.
+# the person gets a notice saying how to stop the turn. The plugin never stops it, so the
+# calls after the notice run as before. An ellipsis stands for the repetitions a schematic
+# cannot show, so the two groups are not read as exactly two calls each.
 TURNBOXES = [
     (ELLIPSIS, "earlier", 1.40, None),
     ("edit", "repeat", 2.55, "loop"),
@@ -342,14 +342,14 @@ TURNBOXES = [
     ("edit", "repeat", 2.55, "again"),
     ("test", "repeat", 2.55, "again"),
     (ELLIPSIS, "more", 1.40, "again"),
-    ("STOP", "abort", 3.30, None),
-    ("edit", "dropped", 2.50, "dropped"),
-    ("test", "dropped", 2.50, "dropped"),
+    ("NOTICE", "abort", 3.70, None),
+    ("edit", "repeat", 2.55, "after"),
+    ("test", "repeat", 2.55, "after"),
 ]
 ROLLOUT_NOTES = [
     ("loop", "repeated failures", SPIRAL),
     ("again", "still repeating", SPIRAL),
-    ("dropped", "never run", DROPPED_TC),
+    ("after", "until you stop it", SPIRAL),
 ]
 
 BOX_STYLES = {                     # fill, edge, text, family, weight

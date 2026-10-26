@@ -8,9 +8,9 @@ standard-library-only package `tokeneconomizer`:
   `call_cwds`, `tool_usage`, `parse_catalog`), with one module per agent's format. A new agent
   needs a reader here and nothing else.
 - `tokeneconomizer.ledger` and `tokeneconomizer.pricing` are the one definition of cost.
-  Mechanisms record their per-task overhead; the plugin's session ledger and the experiments'
-  aggregation read it back through the same modules, so recorded and reported cost cannot
-  drift.
+  Mechanisms record their per-task overhead (in the plugin, a session counts as one task); the
+  plugin's session ledger and the experiments' aggregation read it back through the same modules,
+  so recorded and reported cost cannot drift.
 - `tokeneconomizer.domain.DomainAdapter` is the interface to the task domain: reading a session,
   the tools pruning protects or excludes, a trajectory's loop signals, the task text for the
   optional judge, and the micro-skill vocabulary. A new domain is a new adapter, with no change

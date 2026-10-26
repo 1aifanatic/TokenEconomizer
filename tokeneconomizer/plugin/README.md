@@ -13,10 +13,11 @@ What happens at each hook, and how each agent was verified to behave, is in
 | `controller.py` | what happens at each hook |
 | `hosts.py` | per-agent hook payloads and outputs (Claude Code, Codex, Copilot CLI, Pi) |
 | `fold.py` | a finished session through `PrefixStage` and `ToolingStage` |
-| `denylist.py` | writing an approved proposal into each agent's settings, and taking it back |
+| `denylist.py` | writing the deny list into each agent's settings (by itself under `auto`, on `toolprune apply` under `propose`), and taking it back |
 | `toolcheck.py` | asking the agent CLIs what a session loads, and what a deny list removed |
 | `config.py` | settings, their sources, and the earlier names they are still read under |
 | `context.py`, `paths.py`, `store.py` | where state lives, which repository a session is in, locked atomic JSON |
+| `repos.py` | which repository's state a session belongs to over time: session pins, `te repos`, `repos migrate` and `merge` |
 | `adapter.py` | the `DomainAdapter` for a real repository |
 | `accounting.py` | the session ledger |
 | `sidecall.py`, `judge.py` | the plugin's model calls (the loop guard's judge, micro-skills' proposer) through the agent's own CLI, off the hook's critical path |

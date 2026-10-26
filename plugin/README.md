@@ -16,7 +16,6 @@ behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 - [ ] Your agent installed and signed in, any way it supports (a subscription or an API key), at a
   supported version ([Supported versions](../README.md#supported-versions))
 - [ ] Python 3.10 or newer on `PATH` (or set `TE_PYTHON=/path/to/python3.10+`)
-- [ ] Access to this repository on GitHub
 - [ ] Copilot CLI only: the repository's folder trusted by Copilot (it asks the first time you
   start it there: choose **Yes, and remember this folder for future sessions**); Copilot ignores a
   folder's `.github/copilot` settings otherwise
@@ -30,8 +29,9 @@ git clone https://github.com/microsoft/TokenEconomizer.git
 
 Keep the clone where it is: the installed plugin runs from it.
 
-> **Where commands go.** Lines starting with `/` (`/plugin …`, `/tokeneconomizer:…`, `/te …`)
-> are typed into **the agent's prompt**, not your shell. Shell commands are in `bash` blocks.
+> **Where commands go.** Lines starting with `/` or `$` (`/plugin …`, `/tokeneconomizer:…`,
+> `$tokeneconomizer:…`, `/te …`) are typed into **the agent's prompt**, not your shell. Shell
+> commands are in `bash` blocks.
 
 ## Claude Code
 
@@ -286,48 +286,53 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 
 ## What to expect
 
-The plugin works session by session. A session is one conversation with the agent, from start to
-exit, however many tasks you do in it; resuming it continues the same session. The plugin learns
-from a session once it ends, and acts at the start of the next one; only the loop guard acts
-during a turn.
+The plugin works session by session: what it learns from a repository's earlier sessions is
+applied to the ones that follow. Facts and the deny list take effect when a session starts; the
+loop guard acts during a turn. Each agent learns on its own (what Claude Code learned in a
+repository is not used by Codex there), while settings are shared by every agent.
 
 - **Facts** (once you turn micro-skills on; it is off by default). Two sources propose them, in
-  any language or toolchain. The first needs no model call: the same environment failure in a
-  few sessions (a tool, interpreter, build or test command that fails as typed and works spelled
-  another way). The second runs every `microskills_propose_every` sessions (3 by default): a
-  model reads digests of the recent sessions (the commands run, including build, test and lint
-  commands, the files edited, and each failing command with its error line, with paths relative
-  to the repository) and writes facts about the repository, each with patterns that test it
-  against later sessions. A fact is injected at every session start once later sessions confirm
-  it (three confirming sessions among at least four where it applied), and retired when one
-  contradicts it. How much this helps depends on the repository's state and the tasks you run in
-  it. A session start that adds facts says so once, in one line. A resumed session keeps the
-  facts it started with, word for word, so its cached prompt still matches. `microskills` shows
-  the facts injected and those still forming.
+  any language or toolchain. The first needs no model call: the same environment failure in a few
+  sessions (a tool, interpreter, build or test command that fails as typed and works spelled
+  another way). The second runs every `microskills_propose_every` sessions (3 by default): a model
+  reads digests of the recent sessions (the commands run, including build, test and lint commands,
+  the files edited, and each failing command with its error line, with paths relative to the
+  repository) and writes facts about the repository, each with patterns that test it against later
+  sessions. A fact becomes active once three sessions confirm it (for a proposed fact about the
+  code, sessions that edited different files), and is injected at every session start while the
+  failure it prevents keeps showing up, or keeps being avoided, in at least 40% of the sessions
+  where it applies (over at least four). It is retired when a session contradicts it (for a
+  command-spelling fact, two in a row). How much this helps depends on the repository's state and
+  the tasks you run in it. A session start that adds facts says so once, in one line. A resumed
+  session keeps the facts it started with, word for word, so its cached prompt still matches.
+  `microskills` shows the facts injected and those still forming.
 - **Deny list.** A tool, package or server that is loaded but never used here is left out without
   asking you, once it has gone unused over `toolprune_evidence` prompts (10 by default) across at
   least `toolprune_min_sessions` sessions (2), or over `toolprune_sessions` sessions of any length
-  (5); a few higher-risk tools need three times as long. A session that ran no prompt does not
-  count. The list is written once the repository's sessions have been idle for
-  `toolprune_quiet_minutes` (60 by default), so that no conversation you resume loses its prompt
-  cache, and it applies from the next session, whose start says so once. `toolprune` shows a list
-  still waiting. `toolprune restore` gives back what the plugin removed, and only that; what you
-  give back is never removed again (`toolprune apply NAME` removes one again). With
-  `toolprune=propose`, the list is only proposed, the session start says so, and nothing changes
-  until you run `toolprune apply`. A settings file the plugin creates is added to
-  `.git/info/exclude`. Each checkout keeps its own settings file: a repository's clones share
-  what was learned, and each gets the list when one of its own sessions ends.
+  (5); Claude Code's `NotebookEdit` and Codex's `image_media` package need three times as long. A
+  session that ran no prompt does not count. The list is written once the repository's sessions
+  have been idle for `toolprune_quiet_minutes` (60 by default), so that no conversation you resume
+  loses its prompt cache (a list that has waited a day is written anyway), and it applies from the
+  next session, whose start says so once. `toolprune` shows a list still waiting.
+  `toolprune restore` gives back what the plugin removed, and only that; what you give back is
+  never removed again (`toolprune apply NAME` removes one again). With `toolprune=propose`, the
+  list is only proposed, the session start says so, and nothing changes until you run
+  `toolprune apply`. `toolprune=off` stops new lists but leaves an applied one in place;
+  `toolprune restore` gives the tools back. A settings file the plugin creates is added to
+  `.git/info/exclude`. Each checkout keeps its own settings file: a repository's clones share what
+  was learned, and each gets the list when one of its own sessions ends.
 - **Loop guard.** Quiet on normal turns, and idle until `loopguard.envelope_min_samples` turns in
-  a repository (5 by default) have ended with passing checks. After that, a turn that keeps
-  hitting the same failures, or piles up errors, after `loopguard.min_turns` tool calls is put to
-  a judge model. Only a "stuck" verdict with confidence `loopguard.judge_confidence` (0.7) or more
-  attaches a redirect (written by that model) to a tool result, at most `loopguard_nudges` (1)
-  per turn; if the turn is still stuck after that, a one-line notice tells you how to stop it. A
-  long turn with no sign of looping is never judged. A turn past `loopguard.backstop_mult` (2.5)
-  times the repository's usual length that also keeps churning edits through the same failures
-  is redirected even if the judge disagrees. The plugin never stops a turn itself. Where the
-  notice appears, and how to stop the turn, on each agent and in each mode:
-  [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
+  a repository (5 by default) have ended well: on their own, with no failing check after the last
+  edit. After that, a turn that keeps hitting the same failures, or piles up errors, after
+  `loopguard.min_turns` tool calls is put to a judge model. Only a "stuck" verdict with confidence
+  `loopguard.judge_confidence` (0.7) or more attaches a redirect (written by that model) to a tool
+  result (at the `aggressive` preset, an ambiguous verdict past the envelope also does), at most
+  `loopguard_nudges` (1) per turn; if the turn is still stuck after that, a one-line notice tells
+  you how to stop it. A long turn with no sign of looping is never judged. A turn past
+  `loopguard.backstop_mult` (2.5) times the repository's usual length that also keeps churning
+  edits through the same failures is redirected even if the judge disagrees. The plugin never
+  stops a turn itself. Where the notice appears, and how to stop the turn, on each agent and in
+  each mode: [When a turn gets stuck](../README.md#when-a-turn-gets-stuck).
 - **Cost.** `status` shows each session's tokens, priced after it ends, and the plugin's own
   overhead: the loop guard's judge, and micro-skills' proposer when it is on.
 
@@ -344,7 +349,7 @@ during a turn.
 | `toolprune measure` | the request with and without the proposal |
 | `config` | the settings: what is on, and every value in effect |
 | `config set KEY=VALUE … [--global]` | change settings for this repository (or every one); see [Settings](#settings) |
-| `config unset KEY … [--global]` | put a setting back to its default |
+| `config unset KEY … [--global]` | remove the setting at this level, so the global value (or the default) applies |
 | `repomap` / `repomap refresh` | the cached repository map / make it now (see [Repository map](#repository-map)) |
 | `repos` | every repository it keeps state for: how it was identified, its sessions per agent, the checkouts seen |
 | `repos migrate` | file state an earlier version recorded under the repository it belongs to (runs by itself, once, after an upgrade) |
@@ -359,6 +364,9 @@ How to run them:
 | Codex | `$tokeneconomizer:<command>` (`status`, `microskills`, `toolprune`, `config`, `repos`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
+
+`doctor` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
+Codex skill for them.
 
 Inside an agent, each command is one model turn; from a terminal it costs nothing. Codex asks
 before a command that changes something (`config set`, `toolprune restore`, ...), since it
@@ -396,8 +404,8 @@ and are shared by every agent working in it. The examples use Claude Code's form
 | Mechanism | Key | `on` means | Other values |
 |---|---|---|---|
 | Micro-skills (off by default) | `microskills` | `envfacts+distiller`: facts found without model calls, plus a model proposing facts every `microskills_propose_every` sessions | `off`; `envfacts`: only the facts found without model calls; `distiller`: only the proposer |
-| Tool pruning | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes`, from the next session, which announces it | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
-| Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, one mid-turn redirect, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
+| Tool pruning | `toolprune` | `auto`: applied without asking once your sessions have been idle for `toolprune_quiet_minutes` (or a day after it formed), from the next session, which announces it | `off`; `propose`: only proposed, applied when you run `toolprune apply` |
+| Loop guard | `loopguard` | `nudge`: a judge model decides whether a looping turn is stuck; if so, up to `loopguard_nudges` mid-turn redirects, then a notice to you if the turn is still stuck | `off` (no judge either); `stop` is read as `nudge`, with a warning |
 
 **Tune a mechanism:**
 
@@ -410,22 +418,22 @@ and are shared by every agent working in it. The examples use Claude Code's form
 
 | Key | Default | What it sets |
 |---|---|---|
-| `microskills_max_facts` | `4` | the most facts injected at session start |
-| `microskills_max_tokens` | `150` | the size of the injected block, in tokens (about 4 characters each) |
-| `microskills_propose_every` | `3` | sessions between runs of the fact proposer (the first runs after the second session) |
-| `toolprune_evidence` | `10` | prompts a never-used tool must go unused, over at least `toolprune_min_sessions` sessions, before it is left out (three times as many for a few higher-risk tools; the web is never proposed) |
+| `microskills_max_facts` | `4` | the most facts from repeated failures injected at session start (the proposer's facts are not capped) |
+| `microskills_max_tokens` | `150` | the size of those facts' block, in tokens (about 4 characters each) |
+| `microskills_propose_every` | `3` | sessions between runs of the fact proposer (the first run comes one session early: after the second, by default) |
+| `toolprune_evidence` | `10` | prompts a never-used tool must go unused, over at least `toolprune_min_sessions` sessions, before it is left out (three times as many for `NotebookEdit` and Codex's `image_media`; the web is never proposed) |
 | `toolprune_min_sessions` | `2` | sessions those prompts must span; `1` lets a single session's prompts decide |
 | `toolprune_sessions` | `5` | or this many sessions, however few prompts they ran |
-| `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it; `0` writes at once |
+| `toolprune_quiet_minutes` | `60` | how long the repository's sessions must have been idle before `auto` writes a deny list, so that no conversation resumed while its prompt cache is warm loses it (a list is written at the latest a day after it formed); `0` writes at once |
 | `loopguard_aggr` | `default` | the guard's threshold preset: `conservative`, `default` or `aggressive` |
-| `loopguard_nudges` | `1` | redirects per prompt-turn before the guard only notifies you |
+| `loopguard_nudges` | `1` | redirects per turn before the guard only tells you |
 | `loopguard.<name>` | from the preset | one guard threshold, set by hand (below) |
 
-The guard calls a turn stuck when it keeps editing the same files and hitting the same
-failures, well past how long this repository's turns that end with passing tests usually take
-(the *envelope*). Until a repository has a few such turns, the preset's thresholds apply; after
-that, some are learned from the repository's own turns. A value you set with `loopguard.<name>`
-wins over both. Defaults at each preset:
+The guard looks for a turn that keeps editing the same files and hitting the same failures. It
+also learns how long this repository's turns usually run when they end well (on their own, with
+no failing check after the last edit): the *envelope*. Until `envelope_min_samples` such turns
+exist the guard does nothing; after that, some thresholds are learned from those turns, on top
+of the preset. A value you set with `loopguard.<name>` wins over both. Defaults at each preset:
 
 | `loopguard.<name>` | `conservative` | `default` | `aggressive` | What it sets |
 |---|---|---|---|---|
@@ -434,9 +442,9 @@ wins over both. Defaults at each preset:
 | `distinct_edit_files` | 3 | 3 | 3 | files edited that count as scattered |
 | `error_outputs` | 8 | 6 | 4 | failing tool results that count as sustained errors |
 | `stagnation` | 0.30 | 0.20 | 0.12 | share of failures that repeat an earlier one |
-| `envelope_pct` | 90 | 90 | 90 | percentile of the repository's passing turns the envelope starts from |
+| `envelope_pct` | 90 | 90 | 90 | percentile of the repository's well-ended turns the envelope starts from |
 | `envelope_margin` | 1.5 | 1.25 | 1.0 | multiplier on that percentile |
-| `envelope_min_samples` | 7 | 5 | 3 | passing turns needed before the envelope is used |
+| `envelope_min_samples` | 7 | 5 | 3 | well-ended turns needed before the guard acts |
 | `backstop_mult` | 3.5 | 2.5 | 1.8 | past this multiple of the envelope, a turn the rule calls stuck is redirected even if the judge disagrees, then flagged to you |
 | `judge_confidence` | 0.85 | 0.7 | 0.55 | how sure the judge must be that a turn is stuck |
 | `gate_min_turns` | 24 | 18 | 12 | tool calls before the judge is asked (never fewer than `min_turns`) |
@@ -455,14 +463,14 @@ wins over both. Defaults at each preset:
 
 | Key | Default | Values |
 |---|---|---|
-| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, `COPILOT_MODEL` on Copilot (unless it is `auto`) |
+| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
 
 **Where settings live, and when they apply.** For one session, an environment variable wins:
-`TE_MICROSKILLS`, `TE_TOOLPRUNE`, `TE_LOOPGUARD`, `TE_LOOPGUARD_NUDGES`,
-`TE_MICROSKILLS_MAX_FACTS`, and so on, and `TE_LOOPGUARD_THRESHOLDS='{"min_turns": 30}'` for the
-guard's thresholds; `TE_DISABLE=1` turns the whole plugin off. Otherwise the repository's
+`TE_` plus the setting's name in capitals (`TE_MICROSKILLS`, `TE_TOOLPRUNE_EVIDENCE`,
+`TE_LOOPGUARD_NUDGES`, ...), and `TE_LOOPGUARD_THRESHOLDS='{"min_turns": 30}'` for the guard's
+thresholds; `TE_DISABLE=1` turns the whole plugin off. Otherwise the repository's
 settings win over the global ones, and those over the defaults; `unset` goes back one level. A
 change applies from the agent's next hook call: the guard at the next tool call, facts and the
 deny list at the next session start. A new fact-size cap shows once the next session has ended.
@@ -482,7 +490,7 @@ agent knows where things are before it starts reading files. Turn it on per repo
 
 ```bash
 pip install aider-chat                      # or: pipx install aider-chat / uv tool install aider-chat
-~/.tokeneconomizer/bin/te config set repomap=on      # add --host for Codex, Copilot or Pi
+~/.tokeneconomizer/bin/te config set repomap=on      # settings are shared by every agent
 ```
 
 - **What goes in.** At most `repomap_tokens` tokens (default 2048), once per session. On Claude
@@ -541,7 +549,7 @@ and only when you run it.
 |---|---|
 | a command prints an import error, or the hooks seem to do nothing | run `~/.tokeneconomizer/bin/te doctor` (or `plugin/scripts/te doctor` in the clone) and read its errors.log lines |
 | errors.log says the package "was not found for the plugin" | the clone the plugin was installed from moved or is gone: add it again, or use the [self-contained install](#codex) |
-| `python 3.x (needs >= 3.10)` | install Python 3.10+ or set `TE_PYTHON` to one |
+| `TokenEconomizer needs Python >= 3.10 (this is 3.x)` | install Python 3.10+ or set `TE_PYTHON` to one |
 | the deny list leaves nothing out after many sessions | run `toolprune refresh-catalog` (Claude Code, Copilot) |
 | a Codex deny list was applied but nothing changed | trust the project in Codex; `~/.tokeneconomizer/bin/te --host codex doctor` says whether it is trusted |
 | errors.log has `sidecall copilot: no reply`, and a session start says the plugin's model calls are paused | they cannot use a Copilot BYOK provider ([Copilot CLI](#copilot-cli)): micro-skills keeps its facts that need no model call (`microskills=envfacts` stops trying the proposer), and the loop guard redirects only at its backstop. Once Copilot is signed in, `config set microskills=on` (or `loopguard=on`) tries again |
