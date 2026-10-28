@@ -40,6 +40,19 @@ const SECTION = "tokeneconomizer";
 
 const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 
+/** The program and arguments that run a launcher. The launchers are POSIX `sh`, which Windows
+ * cannot start; there the bootstrap they run is started with Python itself (`TE_PYTHON`, else
+ * `python`). */
+export function launch(
+  script: string,
+  args: string[],
+  platform: string = process.platform,
+): [string, string[]] {
+  if (platform !== "win32") return [join(SCRIPTS, script), args];
+  const mode = script === "te-hook" ? "hook" : "cli";
+  return [process.env.TE_PYTHON || "python", [join(SCRIPTS, "te_bootstrap.py"), mode, ...args]];
+}
+
 /** Run one of the plugin's launchers with `input` on stdin; resolve to its stdout. */
 function run(
   script: string,
@@ -52,8 +65,10 @@ function run(
     let out = "";
     let child;
     try {
-      child = spawn(join(SCRIPTS, script), args, {
-        env: { ...process.env, TE_PI_MODE: mode, ...extra },
+      const [program, argv] = launch(script, args);
+      // UTF-8 mode as the launchers set it, for where they are bypassed (Windows).
+      child = spawn(program, argv, {
+        env: { ...process.env, PYTHONUTF8: "1", TE_PI_MODE: mode, ...extra },
         stdio: ["pipe", "pipe", "ignore"],
       });
     } catch {
@@ -64,7 +79,9 @@ function run(
       child.kill("SIGKILL");
       resolve("");
     }, HOOK_TIMEOUT_MS);
-    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    // Decoded as a stream, so a character split across two chunks arrives whole.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => (out += d));
     child.on("error", () => {
       clearTimeout(timer);
       resolve("");

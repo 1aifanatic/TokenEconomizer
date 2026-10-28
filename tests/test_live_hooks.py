@@ -866,6 +866,21 @@ def test_garbage_input_and_internal_errors_answer_no_change(env, repo, monkeypat
     assert "RuntimeError: bug" in log
 
 
+def test_a_non_ascii_checkout_is_found_whatever_the_locale(env, tmp_path):
+    """The agents send UTF-8. A text stdin decodes with the locale's code page -- on a Russian
+    Windows, cp1251 turns `Программирование` into `РџСЂРѕРіСЂ...`, a directory that does not
+    exist -- so the hook reads the bytes, and the session is the checkout's."""
+    repo = tmp_path / "Программирование" / "agentsync"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    raw = json.dumps({"hook_event_name": "SessionStart", "session_id": "s1", "source": "startup",
+                      "transcript_path": "", "cwd": str(repo)}, ensure_ascii=False)
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="cp1251")
+    hook.main([], stdin, io.StringIO(), env)
+    assert store_for(env, str(repo)).read("sessions/s1.json")
+    assert not os.path.exists(os.path.join(env["TOKENECONOMIZER_HOME"], "errors.log"))
+
+
 def test_side_calls_a_disabled_plugin_and_a_payload_without_a_session_do_nothing(env, repo):
     for flag in ("TE_SIDECALL", "TE_DISABLE"):
         assert call(dict(env, **{flag: "1"}), {"hook_event_name": "SessionStart",

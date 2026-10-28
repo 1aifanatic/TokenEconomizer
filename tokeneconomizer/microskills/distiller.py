@@ -764,7 +764,7 @@ class Distiller:
                    "facts": {k: f.to_dict() for k, f in self.facts.items()},
                    "window": window,
                    "raw_cmds": [[c for c, _ in cmds] for cmds in self.raw_window[-WINDOW:]]},
-                  open(self._path(root, self.repo), "w"), indent=2)
+                  open(self._path(root, self.repo), "w", encoding="utf-8"), indent=2)
 
     @classmethod
     def load(cls, repo, root, runner=None, model="agent", external_facts=None, vocab=None):
@@ -772,7 +772,7 @@ class Distiller:
         self = cls(repo, runner, model, external_facts=external_facts, vocab=vocab)
         if not os.path.exists(p):
             return self
-        d = json.load(open(p))
+        d = json.load(open(p, encoding="utf-8"))
         self.now = d.get("now", 0)
         self.opt_tokens = d.get("opt_tokens", 0.0)
         self.last_propose = d.get("last_propose", -1)

@@ -124,7 +124,7 @@ def prune_pins(root, host, now=None, max_age_s=PIN_MAX_AGE_S):
             if name.endswith(".json") and now - os.path.getmtime(p) > max_age_s:
                 os.remove(p)
                 n += 1
-        open(marker, "w").close()
+        open(marker, "w", encoding="utf-8").close()
     except OSError:
         pass
     return n
@@ -700,7 +700,7 @@ def start_migration(ctx):
             return False
     except OSError:
         pass
-    open(marker, "w").close()
+    open(marker, "w", encoding="utf-8").close()
     return ctx.spawn(["repos", "migrate", "--quiet"], "migrate.log")
 
 

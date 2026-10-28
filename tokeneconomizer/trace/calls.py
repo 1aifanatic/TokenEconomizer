@@ -38,7 +38,7 @@ def load_trajectory(path):
     envelopes carrying `tool_use` blocks, and anything else is read as Copilot events."""
     if not os.path.exists(path):
         return []
-    lines = [l.strip() for l in open(path) if l.strip()]
+    lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
     if _is_codex_exec(lines):
         return codex_exec_calls(lines)
     if any('"tool_use"' in line or '"type": "assistant"' in line or '"type":"assistant"' in line
@@ -57,7 +57,7 @@ def call_cwds(path):
     calls = load_trajectory(path)
     if not calls or not os.path.exists(path):
         return [None] * len(calls)
-    lines = [l.strip() for l in open(path) if l.strip()]
+    lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
     if _is_codex_exec(lines):
         return [None] * len(calls)
     cwds = [c[4] for c in claude_calls(lines)]

@@ -463,3 +463,39 @@ def test_codex_sees_no_claude_format_commands_folder():
     for manifest in (".claude-plugin/plugin.json", ".github/plugin/plugin.json"):
         with open(os.path.join(PLUGIN, manifest), encoding="utf-8") as fh:
             assert json.load(fh)["commands"] == "./slash-commands/"
+
+
+def _shipped_python():
+    for top in ("tokeneconomizer", os.path.join("plugin", "scripts"), "scripts"):
+        for root, _dirs, files in os.walk(os.path.join(REPO, top)):
+            for name in sorted(files):
+                if name.endswith(".py"):
+                    yield os.path.join(root, name)
+
+
+def test_text_io_names_its_encoding():
+    """The agents' payloads, session logs and output are UTF-8 whatever the locale, and Python
+    decodes a file or a pipe opened without an encoding with the locale's code page -- cp1251 on
+    a Russian Windows, cp1252 on a US one -- which garbles a non-ASCII path and stops a fold at
+    the first undecodable byte. So every text-mode `open()`, `read_text`/`write_text` and text
+    subprocess call in the shipped code names its encoding."""
+    import ast
+    missing = []
+    for path in _shipped_python():
+        for call in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
+            if not isinstance(call, ast.Call):
+                continue
+            f, kw = call.func, {k.arg: k.value for k in call.keywords}
+            if isinstance(f, ast.Name) and f.id == "open":
+                mode = call.args[1] if len(call.args) > 1 else kw.get("mode")
+                text = not (isinstance(mode, ast.Constant) and "b" in mode.value)
+            elif isinstance(f, ast.Attribute) and f.attr in ("read_text", "write_text"):
+                text = True
+            elif (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                  and f.value.id == "subprocess"):
+                text = "text" in kw or "universal_newlines" in kw
+            else:
+                continue
+            if text and "encoding" not in kw:
+                missing.append(f"{os.path.relpath(path, REPO)}:{call.lineno}")
+    assert not missing, missing

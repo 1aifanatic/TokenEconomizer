@@ -76,7 +76,7 @@ def _write_state(ctx, d):
 def head_commit(root):
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
-                             text=True, timeout=10)
+                             encoding="utf-8", errors="replace", timeout=10)
         return out.stdout.strip() if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -140,8 +140,8 @@ def generate(ctx, python, idents=(), timeout=REFRESH_TIMEOUT_S):
     cmd = [python, GEN, ctx.repo.root, str(ctx.config.repomap_tokens), ",".join(idents),
            "--git", "--cache", _cache_dir(ctx)]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             env=_gen_env(ctx), cwd=ctx.repo.root)
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_gen_env(ctx), cwd=ctx.repo.root)
     except subprocess.TimeoutExpired:
         return "", f"timed out after {timeout}s"
     except OSError as e:

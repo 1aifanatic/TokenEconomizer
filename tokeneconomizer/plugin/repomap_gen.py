@@ -35,7 +35,8 @@ MAX_BYTES = 256 * 1024
 
 def _git_files(repo):
     import subprocess
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True, text=True)
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True,
+                         encoding="utf-8", errors="replace")
     files = []
     for f in out.stdout.split("\0"):
         path = "/" + f

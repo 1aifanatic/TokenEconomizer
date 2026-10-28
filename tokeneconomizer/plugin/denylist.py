@@ -386,7 +386,7 @@ def _git_tracked(repo_root, rel):
     """Is `rel` committed in this repository? False when git cannot tell."""
     try:
         out = subprocess.run(["git", "ls-files", "--error-unmatch", rel], cwd=repo_root,
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, encoding="utf-8", errors="replace", timeout=10)
         return out.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -401,8 +401,9 @@ def codex_config_error(repo_root, cli="codex", timeout=30):
     if not shutil.which(cli):
         return None
     try:
-        out = subprocess.run([cli, "features", "list"], capture_output=True, text=True,
-                             cwd=repo_root, timeout=timeout, env=dict(os.environ, TE_SIDECALL="1"))
+        out = subprocess.run([cli, "features", "list"], capture_output=True,
+                             encoding="utf-8", errors="replace", cwd=repo_root, timeout=timeout,
+                             env=dict(os.environ, TE_SIDECALL="1"))
     except (OSError, subprocess.SubprocessError):
         return None
     return None if out.returncode == 0 else ((out.stderr or out.stdout).strip()[:500]

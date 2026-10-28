@@ -41,8 +41,8 @@ def verify_codex(repo_root, capabilities, cli="codex", timeout=30):
     if not feats or not shutil.which(cli):
         return None
     try:
-        out = subprocess.run([cli, "features", "list"], capture_output=True, text=True,
-                             cwd=repo_root, timeout=timeout,
+        out = subprocess.run([cli, "features", "list"], capture_output=True,
+                             encoding="utf-8", errors="replace", cwd=repo_root, timeout=timeout,
                              env=dict(os.environ, TE_SIDECALL="1"))
     except (OSError, subprocess.SubprocessError):
         return None
@@ -62,7 +62,8 @@ def _init_tools(extra_args, cli="claude", timeout=60):
            "--model", "haiku", "--max-turns", "1"] + claude_flags(cli) + list(extra_args)
     with tempfile.TemporaryDirectory(prefix="te-probe-") as cwd:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, text=True, env=env, cwd=cwd)
+                             stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=env,
+                             cwd=cwd)
         tools, version = None, None
         deadline = time.time() + timeout
         try:
@@ -148,8 +149,9 @@ def copilot_capture(extra_args=(), cwd=None, cli="copilot", timeout=90):
         cwd = tmp
     try:
         subprocess.run([cli, "-p", "Reply with OK", "--no-auto-update", "--no-color"]
-                       + list(extra_args), cwd=cwd, env=env, capture_output=True, text=True,
-                       timeout=timeout, stdin=subprocess.DEVNULL)
+                       + list(extra_args), cwd=cwd, env=env, capture_output=True,
+                       encoding="utf-8", errors="replace", timeout=timeout,
+                       stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         pass
     finally:
@@ -167,7 +169,8 @@ def _request_tools(body):
 
 def _copilot_version(cli="copilot"):
     try:
-        out = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=30)
+        out = subprocess.run([cli, "--version"], capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=30)
         return (out.stdout or "").strip().splitlines()[0]
     except (OSError, subprocess.SubprocessError, IndexError):
         return None
@@ -200,8 +203,8 @@ def _prompt_tokens(extra_args, cli="claude", timeout=180):
     cmd = [cli, "-p", "Reply with exactly: OK", "--output-format", "json", "--model", "haiku",
            "--max-turns", "1"] + claude_flags(cli) + list(extra_args)
     with tempfile.TemporaryDirectory(prefix="te-measure-") as cwd:
-        out = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd,
-                             timeout=timeout)
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", env=env,
+                             cwd=cwd, timeout=timeout)
     data = json.loads(out.stdout or "{}")
     u = data.get("usage") or {}
     return (sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
@@ -214,8 +217,8 @@ def _codex_prompt_chars(overrides, cli="codex", timeout=60):
     for table, key, value in overrides:
         cmd += ["-c", f"{table}.{key}={value}" if table else f"{key}={value}"]
     with tempfile.TemporaryDirectory(prefix="te-measure-") as cwd:
-        out = subprocess.run(cmd + ["OK"], capture_output=True, text=True, cwd=cwd,
-                             timeout=timeout, env=dict(os.environ, TE_SIDECALL="1"))
+        out = subprocess.run(cmd + ["OK"], capture_output=True, encoding="utf-8", errors="replace",
+                             cwd=cwd, timeout=timeout, env=dict(os.environ, TE_SIDECALL="1"))
     return len(out.stdout or "") if out.returncode == 0 else None
 
 

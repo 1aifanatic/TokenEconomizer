@@ -120,8 +120,8 @@ def run_session(repo, env, plugin, model, cli="copilot", timeout=600):
            "--output-format", "json"]
     if model:
         cmd += ["--model", model]
-    out = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, text=True,
-                         timeout=timeout, stdin=subprocess.DEVNULL)
+    out = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, encoding="utf-8",
+                         errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
     sid, answer, error = None, "", (out.stderr or "").strip().splitlines()[-1:] or [""]
     for line in (out.stdout or "").splitlines():
         try:
