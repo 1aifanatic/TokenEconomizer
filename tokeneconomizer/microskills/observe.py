@@ -286,7 +286,7 @@ def _shell_path(p):
 
 
 def _shell_isabs(p):
-    return p.startswith("/") or bool(re.match(r"^[a-z]:(/|$)", p))
+    return p.startswith("/") or (os.sep == "\\" and bool(re.match(r"^[a-z]:(/|$)", p)))
 
 
 def classify_command(cmd, call_index=0, vocab=None, cwd="", root=None, top=None):
