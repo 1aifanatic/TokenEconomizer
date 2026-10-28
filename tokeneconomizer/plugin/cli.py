@@ -61,7 +61,7 @@ def _unwritable(path):
     probe = os.path.join(path, f".write-test-{os.getpid()}")
     try:
         os.makedirs(path, exist_ok=True)
-        open(probe, "w").close()
+        open(probe, "w", encoding="utf-8").close()
         os.remove(probe)
         return None
     except OSError as e:
@@ -271,7 +271,7 @@ def _wait_and_apply(args):
     except OSError:
         pass
     ctx.store.ensure()
-    with open(beat, "w") as fh:
+    with open(beat, "w", encoding="utf-8") as fh:
         fh.write(str(os.getpid()))
     try:
         while True:
@@ -617,7 +617,7 @@ def cmd_doctor(args):
     try:
         os.makedirs(root, exist_ok=True)
         probe = os.path.join(root, ".write-test")
-        open(probe, "w").close()
+        open(probe, "w", encoding="utf-8").close()
         os.remove(probe)
         print(f"state root  {root} (writable)")
     except OSError as e:

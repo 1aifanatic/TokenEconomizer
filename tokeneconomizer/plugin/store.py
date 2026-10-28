@@ -81,7 +81,7 @@ class Store:
         if fcntl is None:
             yield True
             return
-        fh = open(self.path(f".{name}.lock"), "a+")
+        fh = open(self.path(f".{name}.lock"), "a+", encoding="utf-8")
         got = False
         deadline = time.time() + timeout
         try:

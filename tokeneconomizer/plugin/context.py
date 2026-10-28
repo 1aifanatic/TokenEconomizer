@@ -79,10 +79,12 @@ class LiveContext:
         env = dict(self.env)
         env["PYTHONPATH"] = core + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH")
                                     else "")
+        # It reads session logs and the agents' output, which are UTF-8 whatever the locale.
+        env["PYTHONUTF8"] = "1"
         cmd = [sys.executable, "-m", "tokeneconomizer.plugin.cli", *argv,
                "--host", self.host.name, "--cwd", self.repo.root]
         self.store.ensure()
-        log = open(self.store.path(log_name), "a")
+        log = open(self.store.path(log_name), "a", encoding="utf-8")
         try:
             subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                              cwd=self.repo.root, env=env, start_new_session=True)

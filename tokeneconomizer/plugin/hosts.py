@@ -426,7 +426,7 @@ def _ancestor_args(limit=4):
             break
         try:
             line = subprocess.run(["ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True,
-                                  text=True, timeout=2).stdout.strip()
+                                  encoding="utf-8", errors="replace", timeout=2).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             break
         ppid, _, args = line.partition(" ")

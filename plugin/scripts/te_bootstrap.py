@@ -42,7 +42,7 @@ def _marketplace_sources(plugin_root):
     home, market = os.sep.join(parts[:-5]), parts[-3]
     out = [os.path.join(home, ".tmp", "marketplaces", market)]
     try:
-        text = open(os.path.join(home, "config.toml")).read()
+        text = open(os.path.join(home, "config.toml"), encoding="utf-8", errors="replace").read()
     except (IOError, OSError):
         return out
     section = None
@@ -74,11 +74,11 @@ def _say_missing(plugin_root):
             "install from the bundle (scripts/build_plugin.py) or set TE_CORE_PATH\n" % plugin_root)
     path = os.path.join(home, "errors.log")
     try:
-        if os.path.exists(path) and line in open(path).read():
+        if os.path.exists(path) and line in open(path, encoding="utf-8", errors="replace").read():
             return
         if not os.path.isdir(home):
             os.makedirs(home)
-        open(path, "a").write(line)
+        open(path, "a", encoding="utf-8").write(line)
     except (IOError, OSError):
         pass
 
@@ -88,7 +88,7 @@ def main():
     rest = sys.argv[2:]
     if sys.version_info < MIN_VERSION:
         if mode == "hook":
-            sys.stdin.read()
+            getattr(sys.stdin, "buffer", sys.stdin).read()     # bytes: no locale to decode with
             sys.stdout.write("{}\n")
             return 0
         sys.stderr.write("TokenEconomizer needs Python >= %d.%d (this is %s); set TE_PYTHON\n"

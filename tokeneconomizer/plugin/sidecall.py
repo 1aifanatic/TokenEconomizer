@@ -111,8 +111,9 @@ def claude_flags(cli="claude"):
     not a session of the person's, and should not appear in their history (`claude --resume`)."""
     if cli not in _FLAGS:
         try:
-            help_text = subprocess.run([cli, "--help"], capture_output=True, text=True,
-                                       timeout=30, stdin=subprocess.DEVNULL).stdout
+            help_text = subprocess.run([cli, "--help"], capture_output=True,
+                                       encoding="utf-8", errors="replace", timeout=30,
+                                       stdin=subprocess.DEVNULL).stdout
         except (OSError, subprocess.SubprocessError):
             help_text = ""
         _FLAGS[cli] = ["--no-session-persistence"] if "--no-session-persistence" in help_text else []
@@ -123,8 +124,9 @@ def claude_call(prompt, model="haiku", cli="claude", timeout=TIMEOUT_S):
     cmd = [cli, "-p", "--output-format", "json", "--max-turns", "1", "--tools", "",
            "--model", model or "haiku"] + claude_flags(cli)
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
-        out = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                             timeout=timeout, env=_env(), cwd=cwd)
+        out = subprocess.run(cmd, input=prompt, capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
+                             cwd=cwd)
     try:
         data = json.loads(out.stdout or "{}")
     except ValueError:
@@ -144,8 +146,8 @@ def codex_call(prompt, model="", cli="codex", timeout=TIMEOUT_S):
         cmd += ["-m", model]
     cmd.append(prompt)
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             env=_env(), cwd=cwd)
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd)
     text, usage = "", None
     for line in (out.stdout or "").splitlines():
         try:
@@ -183,8 +185,9 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S):
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
         for extra in (["--no-mcp"], []):
             cmd = [cli, *PI_FLAGS, *extra, *model_args, "--", prompt]
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                                 env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+            out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                                 timeout=timeout, env=_env(), cwd=cwd,
+                                 stdin=subprocess.DEVNULL)
             if "Unknown option: --no-mcp" not in (out.stderr or ""):
                 break
     text, usage = trace.pi_json_reply(out.stdout)
@@ -243,8 +246,8 @@ def copilot_call(prompt, model="", cli="copilot", timeout=TIMEOUT_S):
     if model:
         cmd += ["--model", model]
     with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
+        out = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=_env(), cwd=cwd, stdin=subprocess.DEVNULL)
     text, sid = "", None
     for line in (out.stdout or "").splitlines():
         try:

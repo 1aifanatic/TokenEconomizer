@@ -54,7 +54,10 @@ def main(argv=None, stdin=None, stdout=None, env=None):
         hint = argv[i + 1] if i + 1 < len(argv) else None
     out = {}
     try:
-        raw = stdin.read()
+        # The agents send UTF-8 whatever the locale; a text stdin would decode it with the
+        # locale's code page on Windows and garble a non-ASCII path.
+        buf = getattr(stdin, "buffer", None)
+        raw = buf.read().decode("utf-8") if buf is not None else stdin.read()
         if not (_truthy(env.get("TE_SIDECALL")) or _truthy(env.get("TE_DISABLE"))):
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
