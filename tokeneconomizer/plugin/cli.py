@@ -625,8 +625,8 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("claude", "codex", "copilot", "pi") if _sh.which(h)]
-    print(f"agents      {', '.join(agents) or 'none of claude, codex, copilot, pi on PATH'}")
+    agents = [h for h in ("claude", "codex", "copilot", "opencode", "pi") if _sh.which(h)]
+    print(f"agents      {', '.join(agents) or 'none of claude, codex, copilot, opencode, pi on PATH'}")
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:

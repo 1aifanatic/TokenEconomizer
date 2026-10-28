@@ -348,6 +348,45 @@ class Pi(Host):
         return trace.pi_session_usage(transcript_path)
 
 
+class OpenCode(Host):
+    """opencode (anomalyco/opencode), through the plugin in `plugin/opencode/`.
+
+    opencode has no hook protocol of its own -- plugins are TypeScript functions on its hook and
+    event bus -- so the plugin speaks THIS one on opencode's behalf, as the Pi extension does: it
+    calls the same dispatcher with a Claude-shaped payload per event and applies the answer with
+    opencode's own levers (a system-prompt entry, a message into the session, a toast). What it
+    sends:
+
+      * `prompt_id`, which it numbers itself, for the turn identity opencode does not stamp;
+      * `transcript_path`, the session's export (`client.session.messages`) written as JSON when
+        the session ends, since opencode's own database is not a format to read;
+      * `tool_response = {content, isError, exit_code}`, with `exit_code` from the bash tool's
+        `metadata.exit` when it reports one;
+      * opencode's mode in `TE_OPENCODE_MODE`: `run` (headless, `opencode run`) or `tui`.
+    """
+    name = "opencode"
+    prompt_context = True              # the plugin appends it to the system prompt
+    interrupt = "Press Esc to interrupt it."
+    end_run = "Press Ctrl+C to end the run."
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_OPENCODE_MODE", "")).strip() == "run"
+
+    def mechanism_trace(self, transcript_path, workdir):
+        out = os.path.join(workdir, "opencode_trace.jsonl")
+        n = trace.opencode_session_to_claude(transcript_path, out)
+        return out if n is not None else None
+
+    def prompt_count(self, transcript_path):
+        return trace.opencode_prompt_count(transcript_path)
+
+    def session_usage(self, transcript_path):
+        return trace.opencode_session_usage(transcript_path)
+
+
 def copilot_home(env=None):
     env = os.environ if env is None else env
     return env.get("COPILOT_HOME") or os.path.join(os.path.expanduser("~"), ".copilot")
@@ -437,7 +476,8 @@ def _ancestor_args(limit=4):
     return out
 
 
-HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "pi": Pi}
+HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
+         "pi": Pi}
 
 
 def default_host(env=None, recent=None):

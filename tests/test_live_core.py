@@ -460,6 +460,68 @@ def test_the_pi_host_reads_what_the_extension_sends():
     assert hosts.detect({"turn_id": "t"}, hint="pi").name == "pi"
 
 
+# ---- opencode sessions -------------------------------------------------------------------
+def _opencode_export(path, cwd="/w/repo"):
+    """An opencode export: a prompt, a bash call that fails, an edit, a bash call that passes."""
+    tokens = {"input": 10, "output": 45, "reasoning": 5, "cache": {"read": 1000, "write": 100}}
+
+    def call(cid, tool, args, state):
+        return {"info": {"id": f"m-{cid}", "role": "assistant", "modelID": "gpt-5.6-sol",
+                         "path": {"cwd": cwd, "root": cwd}, "cost": 0.002, "tokens": tokens},
+                "parts": [{"type": "tool", "callID": cid, "tool": tool,
+                           "state": dict(state, input=args)}]}
+
+    msgs = [{"info": {"id": "u1", "role": "user"},
+             "parts": [{"type": "text", "text": "fix the bug"},
+                       {"type": "text", "text": "(added by opencode)", "synthetic": True}]},
+            call("c1", "bash", {"command": "pytest -q"},
+                 {"status": "error", "error": "bash: pytest: command not found"}),
+            call("c2", "edit", {"filePath": "pkg/a.py", "oldString": "x", "newString": "y"},
+                 {"status": "completed", "output": "ok", "metadata": {}}),
+            call("c3", "bash", {"command": "python -m pytest -q"},
+                 {"status": "completed", "output": "1 passed", "metadata": {"exit": 0}})]
+    with open(path, "w") as fh:
+        json.dump({"info": {"id": "oc-1"}, "messages": msgs}, fh)
+    return path
+
+
+def test_an_opencode_export_reads_through_the_trace_seam(tmp_path):
+    src = _opencode_export(str(tmp_path / "s.json"))
+    out = str(tmp_path / "t.jsonl")
+    assert trace.opencode_session_to_claude(src, out) == 3
+    assert trace.opencode_prompt_count(src) == 1          # opencode's own text is not a prompt
+    text = open(out).read()
+    assert "command not found" in text and "python -m pytest -q" in text
+    assert '"is_error": true' in text and "fix the bug" in text and "added by opencode" not in text
+
+
+def test_an_opencode_list_export_and_a_missing_file(tmp_path):
+    src = _opencode_export(str(tmp_path / "s.json"))
+    listed = str(tmp_path / "l.json")
+    json.dump(json.load(open(src))["messages"], open(listed, "w"))
+    assert trace.opencode_session_to_claude(listed, str(tmp_path / "t.jsonl")) == 3
+    assert trace.opencode_session_to_claude(str(tmp_path / "none.json"), str(tmp_path / "x")) is None
+
+
+def test_opencode_usage_counts_reasoning_as_output(tmp_path):
+    u = trace.opencode_session_usage(_opencode_export(str(tmp_path / "s.json")))
+    assert (u["input_tokens"], u["output_tokens"]) == (30, 150)
+    assert (u["cache_read_input_tokens"], u["cache_creation_input_tokens"]) == (3000, 300)
+    assert u["requests"] == 3 and u["model"] == "gpt-5.6-sol"
+    assert u["cost_usd_vendor"] == 0.006
+
+
+def test_the_opencode_host_reads_what_the_plugin_sends():
+    h = hosts.HOSTS["opencode"]()
+    name, args, text, code = h.tool_call({"tool_name": "bash", "tool_input": {"command": "go test"},
+                                          "tool_response": {"content": "FAIL", "isError": True,
+                                                            "exit_code": 1}})
+    assert (name, args["command"], code) == ("bash", "go test", 1) and "FAIL" in text
+    assert h.headless({"TE_OPENCODE_MODE": "run"}) and not h.headless({"TE_OPENCODE_MODE": "tui"})
+    assert h.turn_key({"prompt_id": "s:1"}) == "s:1"
+    assert hosts.detect({}, hint="opencode").name == "opencode"
+
+
 # ---- the guard sees edits made through the shell ---------------------------------------------
 from tokeneconomizer import loopguard as guard  # noqa: E402
 from tokeneconomizer.loopguard import turn  # noqa: E402

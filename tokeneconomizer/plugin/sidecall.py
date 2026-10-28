@@ -277,6 +277,10 @@ def runner_for(host_name, config):
     model = config.paid_model
     if host_name == "pi":
         return lambda prompt, _m="agent": pi_call(prompt, model=model)
+    if host_name == "opencode":
+        # No model call yet: opencode's headless output is not read here, so micro-skills learns
+        # from repeated failures alone and the loop guard's judge stays silent.
+        return lambda prompt, _m="agent": ("", None)
     if host_name == "codex":
         return lambda prompt, _m="agent": codex_call(prompt, model=model)
     if host_name == "copilot":

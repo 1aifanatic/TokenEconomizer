@@ -1,6 +1,6 @@
 # TokenEconomizer plugin
 
-How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI and Pi. What
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi and (experimental) opencode. What
 the plugin does and why is in the [main README](../README.md); its design and the verified
 behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
@@ -284,6 +284,26 @@ after the loop guard's redirect gets a notice: press **Esc** to abort it, or Ctr
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed
 from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokeneconomizer`.
 
+## opencode
+
+**Experimental; not yet verified against a running opencode.** The plugin is written against the
+v1 plugin API (`@opencode-ai/plugin`, opencode 1.19.x) and is tested only through the shared
+dispatcher and a recorded session export.
+
+**1. Install.** Copy or link the plugin directory, and keep it next to `scripts/` and `lib/`:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -s /path/to/TokenEconomizer/plugin/opencode/tokeneconomizer.ts ~/.config/opencode/plugins/tokeneconomizer.ts
+```
+
+**2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host opencode status` in the
+repository. opencode has no plugin slash commands here, so every command runs from a terminal.
+Tool pruning does not apply yet. The plugin hands a session over when opencode deletes it or the
+process exits, and a headless `opencode run` after its one turn. Model calls of the plugin's own
+(micro-skills' proposer, the loop guard's judge) are not wired up for opencode yet, so it learns
+from repeated failures only.
+
 ## What to expect
 
 The plugin works session by session: what it learns from a repository's earlier sessions is
@@ -364,6 +384,7 @@ How to run them:
 | Codex | `$tokeneconomizer:<command>` (`status`, `microskills`, `toolprune`, `config`, `repos`) | `~/.tokeneconomizer/bin/te --host codex <command>` |
 | Copilot CLI | `/tokeneconomizer:<command>` (interactive mode) | `~/.tokeneconomizer/bin/te --host copilot <command>` |
 | Pi | `/te <command>` | `~/.tokeneconomizer/bin/te --host pi <command>` |
+| opencode | none (run from a terminal) | `~/.tokeneconomizer/bin/te --host opencode <command>` |
 
 `doctor` and `repomap` run from a terminal (or as `/te …` on Pi); there is no slash command or
 Codex skill for them.
