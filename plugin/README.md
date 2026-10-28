@@ -45,6 +45,12 @@ claude plugin list        # should show tokeneconomizer@tokeneconomizer ... enab
 
 (Inside Claude Code the same thing is `/plugin marketplace add …` and `/plugin install …`.)
 
+On Windows, the hooks run under Git for Windows' `sh`, which Claude Code uses for its shell.
+Give the marketplace as an absolute path with forward slashes (`C:/path/to/TokenEconomizer`)
+and keep the clone in place: a checkout without symlinks has no package in the install copy,
+which finds it in that clone. Python is taken as `python3`, `python`, then `py -3`; the
+Microsoft Store alias is skipped when it runs nothing.
+
 **2. Check it.** Start Claude Code in any project (`cd my-project && claude`) and type
 `/tokeneconomizer:status`. It should print a short status block, not an error. Claude Code may ask
 permission to run the plugin's script; allow it always.
