@@ -211,13 +211,11 @@ def test_the_mechanisms_never_import_the_plugin_runtime():
     assert out.stdout.strip() == "[]", out.stdout + out.stderr
 
 
-@pytest.mark.skipif(not os.path.islink(os.path.join(PLUGIN, "lib", "tokeneconomizer")),
-                    reason="checkout without symlinks (Windows): see the known_marketplaces test")
 def test_the_plugin_ships_and_loads_no_benchmark_code():
     """The benchmark adapters, the facade, the workloads, the baselines and the benchmark-only
     controllers live with the experiments (`experiments/te_bench/`). The plugin's library is the
     package alone, and running every part of the plugin loads none of them."""
-    shipped = os.path.join(PLUGIN, "lib", "tokeneconomizer")
+    shipped = os.path.join(REPO, "tokeneconomizer")       # what lib/ links (below)
     assert sorted(n for n in os.listdir(shipped)
                   if os.path.isdir(os.path.join(shipped, n)) and n != "__pycache__") == sorted(
         MECHANISMS + ("plugin",))
@@ -255,7 +253,6 @@ def test_the_package_is_stdlib_only_and_never_touches_the_benchmark_harness():
                     "tokeneconomizer", "tomllib"), f"{path} imports non-stdlib {mod}"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the Pi extension is not ported to Windows")
 def test_a_resumed_pi_conversation_keeps_the_section_it_carries():
     """Pi rebuilds a conversation's system message from its system entries, so a resumed one is
     given back the facts section it carries, byte for byte: unwrapped from the `<name>` tags Pi
@@ -266,7 +263,8 @@ def test_a_resumed_pi_conversation_keeps_the_section_it_carries():
         pytest.skip("node is not installed")
     ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
     script = """
-const { carriedSection } = await import(process.argv[1]);
+const { pathToFileURL } = await import("node:url");      // Windows: a path is no import URL
+const { carriedSection } = await import(pathToFileURL(process.argv[1]).href);
 const sys = (sections) => ({ type: "message", message: { role: "system", sections } });
 const compact = (sections) => ({ type: "compaction", systemMessage: { sections } });
 const user = { type: "message", message: { role: "user" } };

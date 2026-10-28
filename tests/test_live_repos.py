@@ -616,7 +616,8 @@ def test_an_end_with_no_start_and_no_log_records_nothing(tmp_path, env, host):
 
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
-                    reason="root writes through read-only permissions; Windows ignores chmod on directories")
+                    reason="root writes through read-only permissions; Windows ignores chmod on "
+                           "directories")
 def test_a_change_where_the_state_is_read_only_is_refused_whole(tmp_path, env, monkeypatch,
                                                                  capsys):
     """Codex's default sandbox makes ~/.tokeneconomizer read-only. A change must be refused

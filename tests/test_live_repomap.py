@@ -8,8 +8,6 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="the stand-in Python is a sh script")
-
 from tokeneconomizer.plugin import repomap
 from tokeneconomizer.plugin.config import LiveConfig
 from tests.test_live_hooks import call, env, repo  # noqa: F401
@@ -25,6 +23,8 @@ echo "| def run(): ranked toward [$4]"
 
 
 def _fake(tmp_path, probe=0, slow=0):
+    if os.name == "nt":
+        pytest.skip("the stand-in Python is an sh script, which Windows cannot start")
     p = tmp_path / f"fakepy-{probe}-{slow}"
     p.write_text(FAKE.format(probe=probe, slow=slow))
     p.chmod(p.stat().st_mode | stat.S_IEXEC)

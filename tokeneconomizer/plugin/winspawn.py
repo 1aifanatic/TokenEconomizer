@@ -28,7 +28,7 @@ _BREAKAWAY = 0x01000000   # CREATE_BREAKAWAY_FROM_JOB
 def spawn(cmd, cwd, env, log_path):
     """Start `cmd` so that it outlives the hook that started it. Returns whether it started."""
     try:
-        with open(log_path, "a") as log:
+        with open(log_path, "a", encoding="utf-8") as log:
             subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=cwd,
                              env=env, creationflags=_FLAGS | _BREAKAWAY, close_fds=True)
         return True
@@ -62,13 +62,13 @@ def _spawn_wmi(cmd, cwd, env, log_path):
 
 
 def _run(spec_path):
-    with open(spec_path) as fh:
+    with open(spec_path, encoding="utf-8") as fh:
         spec = json.load(fh)
     try:
         os.remove(spec_path)
     except OSError:
         pass
-    with open(spec["log"], "a") as log:
+    with open(spec["log"], "a", encoding="utf-8") as log:
         return subprocess.call(spec["cmd"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                cwd=spec["cwd"], env=spec["env"], creationflags=0x08000000)
 

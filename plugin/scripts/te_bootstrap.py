@@ -46,7 +46,8 @@ def _marketplace_sources(plugin_root):
     # its `known_marketplaces.json` records for this marketplace.
     try:
         import json
-        known = json.load(open(os.path.join(home, "plugins", "known_marketplaces.json")))
+        known = json.load(open(os.path.join(home, "plugins", "known_marketplaces.json"),
+                               encoding="utf-8"))
         entry = known.get(market) or {}
         source = entry.get("source") or {}
         for cand in (source.get("path"), entry.get("installLocation")):
@@ -77,7 +78,7 @@ def _symlink_stub(plugin_root):
     try:
         if not os.path.isfile(stub) or os.path.getsize(stub) > 1024:
             return None
-        target = open(stub).read().strip()
+        target = open(stub, encoding="utf-8").read().strip()
     except (IOError, OSError):
         return None
     return os.path.dirname(os.path.normpath(os.path.join(plugin_root, "lib", target)))

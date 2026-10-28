@@ -17,6 +17,7 @@ import pytest
 from tokeneconomizer.plugin import denylist, toolcheck
 from tokeneconomizer.plugin.paths import ensure_launcher, secure_root
 from tokeneconomizer.plugin.store import Store
+from tests.conftest import symlink_or_skip
 from tests.test_live_hooks import repo  # noqa: F401
 
 PLUGIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin")
@@ -31,7 +32,7 @@ def _mode(path):
 def test_a_symlinked_settings_directory_is_refused(repo, tmp_path, host, rel):
     outside = tmp_path / "outside"
     outside.mkdir()
-    os.symlink(outside, os.path.join(repo, rel))
+    symlink_or_skip(outside, os.path.join(repo, rel))
     item = {"claude": "Workflow", "copilot": "github-mcp-server", "codex": "goals"}[host]
     with pytest.raises(RuntimeError, match="symlink"):
         denylist.apply(repo, [item], Store(str(tmp_path / "st")), host=host)
@@ -42,7 +43,7 @@ def test_a_symlinked_settings_file_is_refused_and_its_target_untouched(repo, tmp
     target = tmp_path / "elsewhere.json"
     target.write_text('{"keep": true}\n')
     os.makedirs(os.path.join(repo, ".claude"))
-    os.symlink(target, os.path.join(repo, ".claude", "settings.local.json"))
+    symlink_or_skip(target, os.path.join(repo, ".claude", "settings.local.json"))
     st = Store(str(tmp_path / "st"))
     with pytest.raises(RuntimeError, match="symlink"):
         denylist.apply(repo, ["Workflow"], st)
@@ -76,12 +77,13 @@ def test_a_git_file_pointing_out_of_the_repository_gets_no_exclude_line(repo, tm
 def test_a_symlinked_exclude_file_is_not_written_through(repo, tmp_path):
     victim = tmp_path / "victim"
     victim.write_text("keep\n")
-    os.symlink(victim, os.path.join(repo, ".git", "info", "exclude"))
+    symlink_or_skip(victim, os.path.join(repo, ".git", "info", "exclude"))
     denylist.apply(repo, ["Workflow"], Store(str(tmp_path / "st")))
     assert victim.read_text() == "keep\n"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits: Windows keeps a profile private by ACL")
+@pytest.mark.skipif(os.name == "nt",
+                    reason="POSIX permission bits: Windows keeps a profile private by ACL")
 def test_a_loose_state_root_is_made_private_and_the_launcher_is_owner_only(tmp_path):
     env = {"TOKENECONOMIZER_HOME": str(tmp_path / "home"), "TE_PLUGIN_ROOT": PLUGIN}
     os.makedirs(env["TOKENECONOMIZER_HOME"], mode=0o775)
@@ -91,7 +93,8 @@ def test_a_loose_state_root_is_made_private_and_the_launcher_is_owner_only(tmp_p
     assert _mode(ensure_launcher(env)) == 0o700
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits: Windows keeps a profile private by ACL")
+@pytest.mark.skipif(os.name == "nt",
+                    reason="POSIX permission bits: Windows keeps a profile private by ACL")
 def test_the_command_line_creates_its_state_private(repo, tmp_path):
     env = dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "home"))
     subprocess.run(["sh", os.path.join(PLUGIN, "scripts", "te"), "--cwd", repo, "config", "set",
