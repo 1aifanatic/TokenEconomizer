@@ -19,6 +19,8 @@
  *                                -> SessionEnd         hands the session, exported as JSON, to
  *                                                      a detached fold
  *
+ * opencode calls every export of a plugin module as a plugin, so `TokenEconomizer` is the only one.
+ *
  * Like the hooks on the other agents it fails open: a dispatcher that is missing, slow or
  * broken answers "no change". It does nothing under TE_SIDECALL=1 (the plugin's own side calls)
  * or TE_DISABLE=1.
@@ -49,7 +51,7 @@ const mode = () => (process.env.TE_OPENCODE_MODE ?? (process.argv.includes("run"
 /** The program and arguments that run a launcher. The launchers are POSIX `sh`, which Windows
  * cannot start; there the bootstrap they run is started with Python itself (`TE_PYTHON`, else
  * `python`). */
-export function launch(
+function launch(
   script: string,
   args: string[],
   platform: string = process.platform,
@@ -116,15 +118,25 @@ function hookSync(payload: Record<string, unknown>) {
 
 const stateRoot = () => resolve(process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer"));
 
-/** What the model said and did so far, as the JSON the fold reads (`trace/opencode.py`). */
-async function exportSession(client: any, sessionID: string): Promise<string> {
+/** The session so far, as the JSON the fold reads (`trace/opencode.py`), from `opencode export`.
+ * A child process rather than the plugin client: `opencode run` exits as soon as its turn goes
+ * idle, without waiting for a plugin to finish, so only a blocking call is sure to complete. The
+ * running binary is opencode itself (`process.execPath`), or `opencode` on PATH under Node. */
+function exportSession(sessionID: string, cwd: string): string {
   const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
   try {
-    const res = await client.session.messages({ path: { id: sessionID } });
-    const messages = res?.data ?? res;
-    if (!Array.isArray(messages)) return "";
+    const exe = /(^|[\\/])(node|bun)(\.exe)?$/i.test(process.execPath) ? "opencode" : process.execPath;
+    const res = spawnSync(exe, ["export", sessionID], {
+      cwd,
+      encoding: "utf8",
+      timeout: HOOK_TIMEOUT_MS,
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const json = res.status === 0 ? res.stdout : "";
+    if (!json.trimStart().startsWith("{")) return "";
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(file, JSON.stringify({ info: { id: sessionID }, messages }), { mode: 0o600 });
+    writeFileSync(file, json, { mode: 0o600 });
     return file;
   } catch {
     return "";
@@ -165,7 +177,7 @@ export const TokenEconomizer: Plugin = async ({ client, directory }) => {
 
   const end = async (sessionID: string, reason: string) => {
     if (!open.delete(sessionID)) return;
-    const file = await exportSession(client, sessionID);
+    const file = exportSession(sessionID, directory);
     await hook({ ...base(sessionID, file), hook_event_name: "SessionEnd", reason });
   };
 
@@ -173,7 +185,11 @@ export const TokenEconomizer: Plugin = async ({ client, directory }) => {
   // finishing), the sessions still open are handed over, once, synchronously.
   process.once("exit", () => {
     for (const sessionID of open) {
-      hookSync({ ...base(sessionID), hook_event_name: "SessionEnd", reason: "exit" });
+      hookSync({
+        ...base(sessionID, exportSession(sessionID, directory)),
+        hook_event_name: "SessionEnd",
+        reason: "exit",
+      });
     }
     open.clear();
   });
@@ -189,7 +205,7 @@ export const TokenEconomizer: Plugin = async ({ client, directory }) => {
         if (!id) return;
         if (!open.has(id)) await start(id);
         await hook({ ...base(id), hook_event_name: "Stop", prompt_id: turns.get(id) ?? "", stop_hook_active: false });
-        // A headless run ends right after its one turn; export now, while the client is up.
+        // A headless run ends right after its one turn, so the session is handed over now.
         if (mode() === "run") await end(id, "run");
       } else if (event?.type === "session.deleted") {
         const id = props.info?.id ?? props.sessionID;
@@ -245,5 +261,3 @@ export const TokenEconomizer: Plugin = async ({ client, directory }) => {
     },
   };
 };
-
-export default TokenEconomizer;

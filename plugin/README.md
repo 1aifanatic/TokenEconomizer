@@ -286,9 +286,11 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 
 ## opencode
 
-**Experimental; not yet verified against a running opencode.** The plugin is written against the
-v1 plugin API (`@opencode-ai/plugin`, opencode 1.19.x) and is tested only through the shared
-dispatcher and a recorded session export.
+**Experimental.** Written against the v1 plugin API (`@opencode-ai/plugin`) and run live on
+opencode 1.19.5 with `opencode run` (free `opencode/big-pickle` model): the plugin loads, each
+session is handed over and folded with real token usage, facts are learned over five sessions
+(`microskills=envfacts`), and the next session receives them through the system prompt. Not yet
+exercised: the interactive TUI (toasts, quitting), the loop guard's redirect, and the v2 plugin API.
 
 **1. Install.** Copy or link the plugin directory, and keep it next to `scripts/` and `lib/`:
 
@@ -299,8 +301,8 @@ ln -s /path/to/TokenEconomizer/plugin/opencode/tokeneconomizer.ts ~/.config/open
 
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host opencode status` in the
 repository. opencode has no plugin slash commands here, so every command runs from a terminal.
-Tool pruning does not apply yet. The plugin hands a session over when opencode deletes it or the
-process exits, and a headless `opencode run` after its one turn. Model calls of the plugin's own
+Tool pruning does not apply yet. The plugin hands a session over when opencode deletes it, when the process
+exits, and after the one turn of a headless `opencode run`, exporting it with `opencode export`. Model calls of the plugin's own
 (micro-skills' proposer, the loop guard's judge) are not wired up for opencode yet, so it learns
 from repeated failures only.
 
