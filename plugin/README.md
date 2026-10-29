@@ -1,8 +1,8 @@
 # TokenEconomizer plugin
 
-How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi and (experimental) opencode. What
-the plugin does and why is in the [main README](../README.md); its design and the verified
-behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
+How to install and use TokenEconomizer in Claude Code, Codex, the GitHub Copilot CLI, Pi and
+(experimental) opencode. What the plugin does and why is in the [main README](../README.md); its
+design and the verified behaviour of each agent are in [`docs/PLUGIN.md`](../docs/PLUGIN.md).
 
 - [Before you start](#before-you-start)
 - Install and use it on [Claude Code](#claude-code) · [Codex](#codex) ·
