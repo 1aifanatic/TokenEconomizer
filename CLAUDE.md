@@ -10,7 +10,7 @@ agent behavior, and `docs/ARCHITECTURE.md` for how the package fits together.
   - `microskills/` — learn repository facts from finished sessions; render the injected block
   - `toolprune/` — unused-tool evidence and the deny-list proposal; Codex capability packages
   - `loopguard/` — the per-call failure-loop guard and its per-repository envelope
-  - `trace/` — each agent's session-log format (Claude Code, Codex, Copilot CLI, Pi)
+  - `trace/` — each agent's session-log format (Claude Code, Codex, Copilot CLI, Pi, opencode)
   - `plugin/` — the runtime: hook dispatch, per-repository state, settings, the `te` CLI
   - `config.py`, `ledger.py`, `pricing.py`, `domain.py`, `stage.py` — shared by all three
 - `plugin/` — the installable plugin directory: manifests per agent, hook files, launchers

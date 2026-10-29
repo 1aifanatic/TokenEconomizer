@@ -26,6 +26,10 @@ so no extra API key is needed and the call is billed where the session is:
     it runs on the person's own default provider and model, under whatever login Pi holds for
     it (a subscription signed in with `/login`, or an API key).
 
+  * opencode: `opencode run --format json` in a throwaway directory, on the person's default
+    model, with `bash`, `edit`, `webfetch` and `websearch` denied, no other plugin (`--pure` on
+    1.x, `--standalone` on 2.x) and its session deleted afterwards.
+
 Every side call runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
 returns no reply -- a CLI that is not signed in, say -- leaves one line in the plugin's
@@ -201,6 +205,63 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S):
     return text, eff
 
 
+# A side call only answers, so what can change anything or reach out is denied. Its directory is
+# an empty throwaway one, which is why the read-only tools are left alone: opencode 1.19.5 stalls
+# at startup, with no output, when `read`, `task` or `*` is denied (it waits on a prompt nobody
+# sees).
+OPENCODE_CONFIG = json.dumps({"permission": {"bash": "deny", "edit": "deny", "webfetch": "deny",
+                                             "websearch": "deny"},
+                              "share": "disabled", "autoupdate": False})
+
+
+_OC_FLAGS = {}
+
+
+def opencode_flags(cli="opencode"):
+    """The flags a side call adds, by what this opencode's `run --help` lists: `--pure` (1.x: no
+    external plugins) and `--standalone` (2.x: a private server of its own, since plugins there
+    run in a shared background service that does not inherit `TE_SIDECALL`, and the nested
+    session would run this plugin's hooks)."""
+    if cli not in _OC_FLAGS:
+        try:
+            help_text = subprocess.run([cli, "run", "--help"], capture_output=True,
+                                       encoding="utf-8", errors="replace", timeout=30,
+                                       stdin=subprocess.DEVNULL).stdout
+        except (OSError, subprocess.SubprocessError):
+            help_text = ""
+        _OC_FLAGS[cli] = [f for f in ("--pure", "--standalone") if f in help_text]
+    return list(_OC_FLAGS[cli])
+
+
+def opencode_call(prompt, model="", cli="opencode", timeout=TIMEOUT_S):
+    """A side call through `opencode run`: no external plugins where the CLI can say so, every
+    tool that changes anything denied, in a throwaway directory, on the person's own default
+    model unless `model` names one. The session it creates is deleted afterwards, so it is not
+    in their history."""
+    model_args = ["--model", model] if model else []
+    env = dict(_env(), OPENCODE_CONFIG_CONTENT=OPENCODE_CONFIG)
+    with tempfile.TemporaryDirectory(prefix="te-side-") as cwd:
+        out = subprocess.run([cli, "run", *opencode_flags(cli), "--format", "json", *model_args,
+                              prompt],
+                             capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=timeout, env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+        text, usage, sid = trace.opencode_run_reply(out.stdout)
+        if sid:
+            try:
+                subprocess.run([cli, "session", "delete", sid], capture_output=True, timeout=30,
+                               env=env, cwd=cwd, stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError):
+                pass
+    if not text:
+        _no_reply("opencode", out)
+    eff = None
+    if usage:
+        usage.pop("cost_usd", None)
+        usage["model"] = model or "opencode"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
 # Everything the Copilot CLI offers (1.0.83 names), so the completion is offered nothing; a name
 # the installed CLI does not know is ignored.
 COPILOT_TOOLS = ("bash", "read_bash", "write_bash", "stop_bash", "list_bash", "view", "grep",
@@ -277,6 +338,8 @@ def runner_for(host_name, config):
     model = config.paid_model
     if host_name == "pi":
         return lambda prompt, _m="agent": pi_call(prompt, model=model)
+    if host_name == "opencode":
+        return lambda prompt, _m="agent": opencode_call(prompt, model=model)
     if host_name == "codex":
         return lambda prompt, _m="agent": codex_call(prompt, model=model)
     if host_name == "copilot":
