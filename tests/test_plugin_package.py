@@ -89,9 +89,15 @@ def _run_hook(launcher, payload, env):
     return p.returncode, p.stdout, p.stderr
 
 
+# What every Windows process inherits, whatever runs it: the launchers know Windows by `OS`, and
+# Python and Git need the rest to start.
+WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
+
+
 def _hook_env(tmp_path, **extra):
-    env = {"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
-           "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"}
+    env = {k: os.environ[k] for k in WINDOWS_ENV if os.name == "nt" and k in os.environ}
+    env.update({"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
+                "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"})
     env.update(extra)
     return env
 
@@ -322,7 +328,9 @@ def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_pat
     import shutil
     assert os.listdir(os.path.join(PLUGIN, "lib")) == ["tokeneconomizer"]
     link = os.path.join(PLUGIN, "lib", "tokeneconomizer")
-    assert os.path.islink(link) and os.readlink(link) == "../../tokeneconomizer"
+    assert os.path.islink(link)
+    # Windows reports the target with its own separator
+    assert os.readlink(link).replace(os.sep, "/") == "../../tokeneconomizer"
     assert os.path.isfile(os.path.join(link, "plugin", "hook.py"))
     # What an install does: copy the directory, following links. The copy runs on its own.
     copy = str(tmp_path / "cache" / "tokeneconomizer" / "0.1.0")
