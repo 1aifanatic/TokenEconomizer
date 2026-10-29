@@ -207,7 +207,8 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S):
 
 # A side call only answers, so what can change anything or reach out is denied. Its directory is
 # an empty throwaway one, which is why the read-only tools are left alone: opencode 1.19.5 stalls
-# at startup, with no output, when `read`, `task` or `*` is denied (it waits on a prompt nobody sees).
+# at startup, with no output, when `read`, `task` or `*` is denied (it waits on a prompt nobody
+# sees).
 OPENCODE_CONFIG = json.dumps({"permission": {"bash": "deny", "edit": "deny", "webfetch": "deny",
                                              "websearch": "deny"},
                               "share": "disabled", "autoupdate": False})

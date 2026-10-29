@@ -19,8 +19,9 @@
  *   event session.deleted, a headless run's end, or the process exiting
  *                                -> SessionEnd         hands the session to a detached fold; a
  *                                                      TUI quit sends nothing, so the plugin's
- *                                                      session-recovery folds it at the next start
- *                                                      once its export has been quiet for 10 minutes
+ *                                                      session-recovery folds it at the next
+ *                                                      start once its export has been quiet for
+ *                                                      10 minutes
  *
  * The module's one export is the default object below: opencode 1.x reads its `server`, 2.x its
  * `setup`, and 1.x would call a second export as another plugin.
@@ -46,7 +47,8 @@ const HERE = (() => {
 const SCRIPTS = join(HERE, "..", "scripts");
 const HOOK_TIMEOUT_MS = 60_000;
 
-const truthy = (v: string | undefined) => ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
+const truthy = (v: string | undefined) =>
+  ["1", "true", "yes", "on"].includes((v ?? "").trim().toLowerCase());
 const disabled = () => truthy(process.env.TE_SIDECALL) || truthy(process.env.TE_DISABLE);
 
 /** `opencode run` is headless: one prompt, then the process ends. */
@@ -120,7 +122,8 @@ function hookSync(payload: Record<string, unknown>) {
   }
 }
 
-const stateRoot = () => resolve(process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer"));
+const stateRoot = () =>
+  resolve(process.env.TOKENECONOMIZER_HOME || join(homedir(), ".tokeneconomizer"));
 
 /** The session so far, as the JSON the fold reads (`trace/opencode.py`), from `opencode export`.
  * A child process rather than the plugin client: `opencode run` exits as soon as its turn goes
@@ -129,7 +132,9 @@ const stateRoot = () => resolve(process.env.TOKENECONOMIZER_HOME || join(homedir
 function exportSession(sessionID: string, cwd: string): string {
   const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
   try {
-    const exe = /(^|[\\/])(node|bun)(\.exe)?$/i.test(process.execPath) ? "opencode" : process.execPath;
+    const exe = /(^|[\\/])(node|bun)(\.exe)?$/i.test(process.execPath)
+      ? "opencode"
+      : process.execPath;
     const res = spawnSync(exe, ["export", sessionID], {
       cwd,
       encoding: "utf8",
@@ -174,7 +179,11 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
     if (open.has(sessionID)) return;
     open.add(sessionID);
     prompts.set(sessionID, 0);
-    const out = await hook({ ...base(sessionID), hook_event_name: "SessionStart", source: "startup" });
+    const out = await hook({
+      ...base(sessionID),
+      hook_event_name: "SessionStart",
+      source: "startup",
+    });
     manuals.set(sessionID, out?.hookSpecificOutput?.additionalContext ?? "");
     await notify(out?.systemMessage);
   };
@@ -212,7 +221,12 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
         // TUI gives a plugin no chance to hand a session over when it is quit, and a session
         // whose export has gone quiet is folded by the next session's start.
         const file = exportSession(id, directory);
-        await hook({ ...base(id, file), hook_event_name: "Stop", prompt_id: turns.get(id) ?? "", stop_hook_active: false });
+        await hook({
+          ...base(id, file),
+          hook_event_name: "Stop",
+          prompt_id: turns.get(id) ?? "",
+          stop_hook_active: false,
+        });
         // A headless run ends right after its one turn, so the session is handed over now.
         if (mode() === "run") await end(id, "run");
       } else if (event?.type === "session.deleted") {
@@ -234,7 +248,12 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
         .filter((p: any) => p?.type === "text")
         .map((p: any) => p.text)
         .join("\n");
-      const out = await hook({ ...base(id), hook_event_name: "UserPromptSubmit", prompt_id: turn, prompt });
+      const out = await hook({
+        ...base(id),
+        hook_event_name: "UserPromptSubmit",
+        prompt_id: turn,
+        prompt,
+      });
       // The repository map arrives on a session's first prompt; it joins the manual for the rest
       // of the session, since the manual is added to every request.
       const extra = out?.hookSpecificOutput?.additionalContext;
@@ -260,7 +279,11 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
         tool_name: input.tool,
         tool_use_id: input.callID,
         tool_input: input.args ?? {},
-        tool_response: { content: text, isError: exit !== undefined && exit !== 0, exit_code: exit },
+        tool_response: {
+          content: text,
+          isError: exit !== undefined && exit !== 0,
+          exit_code: exit,
+        },
       });
       const nudge = out?.hookSpecificOutput?.additionalContext;
       // The redirect rides on the result the model reads next: opencode has no mid-turn message.
@@ -272,152 +295,193 @@ const TokenEconomizer: Plugin = async ({ client, directory }) => {
 
 /**
  * opencode 2.x (`Plugin.define({ id, setup })`, `@opencode/plugin`); `setup` below, on the same
- * default export as v1's `server`, so one file serves both. v2 has no `opencode export`, so this entry
- * records the session itself from its events -- prompts, tool calls and results, each step's
- * tokens and cost -- and writes the same JSON shape `trace/opencode.py` reads.
+ * default export as v1's `server`, so one file serves both. v2 has no `opencode export`, so this
+ * entry records the session itself from its events -- prompts, tool calls and results, each
+ * step's tokens and cost -- and writes the same JSON shape `trace/opencode.py` reads.
  */
 const textOf = (content: any): string =>
   typeof content === "string"
     ? content
     : Array.isArray(content)
-      ? content.map((c: any) => (typeof c === "string" ? c : c?.text ?? "")).filter(Boolean).join("\n")
+      ? content
+          .map((c: any) => (typeof c === "string" ? c : c?.text ?? ""))
+          .filter(Boolean)
+          .join("\n")
       : "";
 
 const setupV2 = async (ctx: any) => {
-    const directory: string = ctx.location?.directory ?? ctx.location?.path ?? process.cwd();
-    const open = new Set<string>();
-    const manuals = new Map<string, string>();
-    const prompts = new Map<string, number>();
-    const turns = new Map<string, string>();
-    const records = new Map<string, any[]>();       // sessionID -> messages, in the export's shape
-    const steps = new Map<string, any>();           // assistantMessageID -> assistant message
-    const names = new Map<string, string>();        // tool call id -> tool name
+  const directory: string = ctx.location?.directory ?? ctx.location?.path ?? process.cwd();
+  const open = new Set<string>();
+  const manuals = new Map<string, string>();
+  const prompts = new Map<string, number>();
+  const turns = new Map<string, string>();
+  const records = new Map<string, any[]>();       // sessionID -> messages, in the export's shape
+  const steps = new Map<string, any>();           // assistantMessageID -> assistant message
+  const names = new Map<string, string>();        // tool call id -> tool name
 
-    const base = (sessionID: string, transcript = "") => ({ session_id: sessionID, transcript_path: transcript, cwd: directory });
-    const notify = (text: unknown) => { if (typeof text === "string" && text) console.error(text); };
+  const base = (sessionID: string, transcript = "") => ({
+    session_id: sessionID,
+    transcript_path: transcript,
+    cwd: directory,
+  });
+  const notify = (text: unknown) => {
+    if (typeof text === "string" && text) console.error(text);
+  };
 
-    const writeExport = (sessionID: string): string => {
-      const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
-      try {
-        mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        writeFileSync(file, JSON.stringify({ info: { id: sessionID }, messages: records.get(sessionID) ?? [] }), { mode: 0o600 });
-        return file;
-      } catch {
-        return "";
-      }
-    };
+  const writeExport = (sessionID: string): string => {
+    const file = join(stateRoot(), "opencode-sessions", `${sessionID}.json`);
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      writeFileSync(
+        file,
+        JSON.stringify({ info: { id: sessionID }, messages: records.get(sessionID) ?? [] }),
+        { mode: 0o600 },
+      );
+      return file;
+    } catch {
+      return "";
+    }
+  };
 
-    const start = async (id: string) => {
-      if (open.has(id)) return;
-      open.add(id);
-      records.set(id, []);
-      prompts.set(id, 0);
-      const out = await hook({ ...base(id), hook_event_name: "SessionStart", source: "startup" });
-      manuals.set(id, out?.hookSpecificOutput?.additionalContext ?? "");
-      notify(out?.systemMessage);
-    };
-    const end = async (id: string, reason: string) => {
-      if (!open.delete(id)) return;
-      await hook({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason });
-    };
-    process.once("exit", () => {
-      for (const id of open) hookSync({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason: "exit" });
-      open.clear();
+  const start = async (id: string) => {
+    if (open.has(id)) return;
+    open.add(id);
+    records.set(id, []);
+    prompts.set(id, 0);
+    const out = await hook({ ...base(id), hook_event_name: "SessionStart", source: "startup" });
+    manuals.set(id, out?.hookSpecificOutput?.additionalContext ?? "");
+    notify(out?.systemMessage);
+  };
+  const end = async (id: string, reason: string) => {
+    if (!open.delete(id)) return;
+    await hook({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason });
+  };
+  process.once("exit", () => {
+    for (const id of open)
+      hookSync({ ...base(id, writeExport(id)), hook_event_name: "SessionEnd", reason: "exit" });
+    open.clear();
+  });
+
+  const assistant = (sessionID: string, messageID: string) => {
+    let m = steps.get(messageID);
+    if (!m) {
+      m = { info: { id: messageID, role: "assistant", path: { cwd: directory } }, parts: [] };
+      steps.set(messageID, m);
+      records.get(sessionID)?.push(m);
+    }
+    return m;
+  };
+  const toolPart = (m: any, callID: string) => m.parts.find((p: any) => p.callID === callID);
+
+  await ctx.session.hook("prompt", async (e: any) => {
+    const id: string = e.sessionID;
+    await start(id);
+    const n = (prompts.get(id) ?? 0) + 1;
+    prompts.set(id, n);
+    const turn = `${id}:${n}`;
+    turns.set(id, turn);
+    const text: string = e.prompt?.text ?? "";
+    records.get(id)?.push({
+      info: { id: String(e.messageID ?? turn), role: "user" },
+      parts: [{ type: "text", text }],
     });
-
-    const assistant = (sessionID: string, messageID: string) => {
-      let m = steps.get(messageID);
-      if (!m) {
-        m = { info: { id: messageID, role: "assistant", path: { cwd: directory } }, parts: [] };
-        steps.set(messageID, m);
-        records.get(sessionID)?.push(m);
-      }
-      return m;
-    };
-    const toolPart = (m: any, callID: string) => m.parts.find((p: any) => p.callID === callID);
-
-    await ctx.session.hook("prompt", async (e: any) => {
-      const id: string = e.sessionID;
-      await start(id);
-      const n = (prompts.get(id) ?? 0) + 1;
-      prompts.set(id, n);
-      const turn = `${id}:${n}`;
-      turns.set(id, turn);
-      const text: string = e.prompt?.text ?? "";
-      records.get(id)?.push({ info: { id: String(e.messageID ?? turn), role: "user" }, parts: [{ type: "text", text }] });
-      const out = await hook({ ...base(id), hook_event_name: "UserPromptSubmit", prompt_id: turn, prompt: text });
-      const extra = out?.hookSpecificOutput?.additionalContext;
-      if (extra) manuals.set(id, manuals.get(id) ? `${manuals.get(id)}\n\n${extra}` : extra);
-      notify(out?.systemMessage);
+    const out = await hook({
+      ...base(id),
+      hook_event_name: "UserPromptSubmit",
+      prompt_id: turn,
+      prompt: text,
     });
+    const extra = out?.hookSpecificOutput?.additionalContext;
+    if (extra) manuals.set(id, manuals.get(id) ? `${manuals.get(id)}\n\n${extra}` : extra);
+    notify(out?.systemMessage);
+  });
 
-    await ctx.session.hook("context", (e: any) => {
-      const manual = manuals.get(e.sessionID);
-      if (manual && Array.isArray(e.system)) e.system.push({ type: "text", text: manual });
+  await ctx.session.hook("context", (e: any) => {
+    const manual = manuals.get(e.sessionID);
+    if (manual && Array.isArray(e.system)) e.system.push({ type: "text", text: manual });
+  });
+
+  await ctx.tool.hook("execute.after", async (e: any) => {
+    const id: string = e.sessionID;
+    const ok = e.status === "completed";
+    const result = ok ? e.result : undefined;
+    const text = ok
+      ? textOf(result?.content) || String(result?.output ?? "")
+      : String(e.error?.message ?? e.error ?? "");
+    const exit = typeof result?.metadata?.exit === "number" ? result.metadata.exit : undefined;
+    const out = await hook({
+      ...base(id),
+      hook_event_name: "PostToolUse",
+      prompt_id: turns.get(id) ?? "",
+      tool_name: e.tool,
+      tool_use_id: e.id,
+      tool_input: e.input ?? {},
+      tool_response: {
+        content: text,
+        isError: !ok || (exit !== undefined && exit !== 0),
+        exit_code: exit,
+      },
     });
+    const nudge = out?.hookSpecificOutput?.additionalContext;
+    if (nudge && ok && result) {
+      if (typeof result.content === "string") result.content = `${result.content}\n\n${nudge}`;
+      else if (Array.isArray(result.content))
+        result.content = [...result.content, { type: "text", text: nudge }];
+      else result.content = nudge;
+    }
+    notify(out?.systemMessage);
+  });
 
-    await ctx.tool.hook("execute.after", async (e: any) => {
-      const id: string = e.sessionID;
-      const ok = e.status === "completed";
-      const result = ok ? e.result : undefined;
-      const text = ok ? textOf(result?.content) || String(result?.output ?? "") : String(e.error?.message ?? e.error ?? "");
-      const exit = typeof result?.metadata?.exit === "number" ? result.metadata.exit : undefined;
-      const out = await hook({
-        ...base(id),
-        hook_event_name: "PostToolUse",
-        prompt_id: turns.get(id) ?? "",
-        tool_name: e.tool,
-        tool_use_id: e.id,
-        tool_input: e.input ?? {},
-        tool_response: { content: text, isError: !ok || (exit !== undefined && exit !== 0), exit_code: exit },
-      });
-      const nudge = out?.hookSpecificOutput?.additionalContext;
-      if (nudge && ok && result) {
-        if (typeof result.content === "string") result.content = `${result.content}\n\n${nudge}`;
-        else if (Array.isArray(result.content)) result.content = [...result.content, { type: "text", text: nudge }];
-        else result.content = nudge;
-      }
-      notify(out?.systemMessage);
-    });
-
-    (async () => {
-      try {
-        for await (const ev of ctx.event.subscribe()) {
-          const t: string = ev?.type;
-          const p = ev?.properties ?? ev?.data ?? ev;
-          if (!t?.startsWith("session.")) continue;
-          const id: string = p?.sessionID;
-          if (!id) continue;
-          if (t === "session.step.started") {
-            const m = assistant(id, p.assistantMessageID);
-            m.info.modelID = p.model?.id ?? p.model?.modelID ?? m.info.modelID;
-          } else if (t === "session.step.ended") {
-            const m = assistant(id, p.assistantMessageID);
-            m.info.cost = p.cost ?? 0;
-            m.info.tokens = p.tokens;
-          } else if (t === "session.tool.input.started") {
-            names.set(p.id, p.name);
-          } else if (t === "session.tool.called") {
-            const m = assistant(id, p.assistantMessageID);
-            m.parts.push({ type: "tool", callID: p.id, tool: names.get(p.id) ?? "", state: { status: "running", input: p.input ?? {} } });
-          } else if (t === "session.tool.success" || t === "session.tool.failed") {
-            const part = toolPart(assistant(id, p.assistantMessageID), p.id);
-            if (part) {
-              part.state = t === "session.tool.success"
-                ? { status: "completed", input: part.state.input, output: textOf(p.content), metadata: p.metadata ?? {} }
-                : { status: "error", input: part.state.input, error: String(p.error?.message ?? textOf(p.content) ?? "") };
-            }
-          } else if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(t)) {
-            // A turn is over: export, and send the path with `Stop`.
-            await hook({ ...base(id, writeExport(id)), hook_event_name: "Stop", prompt_id: turns.get(id) ?? "", stop_hook_active: false });
-            if (mode() === "run") await end(id, "run");
-          } else if (t === "session.deleted") {
-            await end(id, "deleted");
+  (async () => {
+    try {
+      for await (const ev of ctx.event.subscribe()) {
+        const t: string = ev?.type;
+        const p = ev?.properties ?? ev?.data ?? ev;
+        if (!t?.startsWith("session.")) continue;
+        const id: string = p?.sessionID;
+        if (!id) continue;
+        if (t === "session.step.started") {
+          const m = assistant(id, p.assistantMessageID);
+          m.info.modelID = p.model?.id ?? p.model?.modelID ?? m.info.modelID;
+        } else if (t === "session.step.ended") {
+          const m = assistant(id, p.assistantMessageID);
+          m.info.cost = p.cost ?? 0;
+          m.info.tokens = p.tokens;
+        } else if (t === "session.tool.input.started") {
+          names.set(p.id, p.name);
+        } else if (t === "session.tool.called") {
+          const m = assistant(id, p.assistantMessageID);
+          m.parts.push({
+            type: "tool",
+            callID: p.id,
+            tool: names.get(p.id) ?? "",
+            state: { status: "running", input: p.input ?? {} },
+          });
+        } else if (t === "session.tool.success" || t === "session.tool.failed") {
+          const part = toolPart(assistant(id, p.assistantMessageID), p.id);
+          if (part) {
+            part.state = t === "session.tool.success"
+              ? { status: "completed", input: part.state.input, output: textOf(p.content),
+                  metadata: p.metadata ?? {} }
+              : { status: "error", input: part.state.input,
+                  error: String(p.error?.message ?? textOf(p.content) ?? "") };
           }
+        } else if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(t)) {
+          // A turn is over: export, and send the path with `Stop`.
+          await hook({
+            ...base(id, writeExport(id)),
+            hook_event_name: "Stop",
+            prompt_id: turns.get(id) ?? "",
+            stop_hook_active: false,
+          });
+          if (mode() === "run") await end(id, "run");
+        } else if (t === "session.deleted") {
+          await end(id, "deleted");
         }
-      } catch (e) {
       }
-    })();
+    } catch (e) {
+    }
+  })();
 };
 
 // One default export for both: v1 reads `server`, v2 reads `setup`.

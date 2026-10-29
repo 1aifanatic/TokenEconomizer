@@ -501,7 +501,8 @@ def test_an_opencode_list_export_and_a_missing_file(tmp_path):
     listed = str(tmp_path / "l.json")
     json.dump(json.load(open(src))["messages"], open(listed, "w"))
     assert trace.opencode_session_to_claude(listed, str(tmp_path / "t.jsonl")) == 3
-    assert trace.opencode_session_to_claude(str(tmp_path / "none.json"), str(tmp_path / "x")) is None
+    assert trace.opencode_session_to_claude(str(tmp_path / "none.json"),
+                                            str(tmp_path / "x")) is None
 
 
 def test_opencode_usage_counts_reasoning_as_output(tmp_path):
@@ -529,7 +530,8 @@ def _run_events(sid="ses_x"):
           {"type": "text", "sessionID": sid, "part": {"type": "text", "text": "ng"}},
           {"type": "step_finish", "sessionID": sid, "part": {
               "type": "step-finish", "cost": 0.5,
-              "tokens": {"input": 10, "output": 4, "reasoning": 1, "cache": {"read": 7, "write": 2}}}}]
+              "tokens": {"input": 10, "output": 4, "reasoning": 1,
+                         "cache": {"read": 7, "write": 2}}}}]
     return "\n".join(json.dumps(e) for e in ev) + "\nnot json\n"
 
 
