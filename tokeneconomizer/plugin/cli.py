@@ -440,7 +440,8 @@ def _config_view(cfg):
                       "toolprune_evidence": d.pop("toolprune_evidence"),
                       "toolprune_min_sessions": d.pop("toolprune_min_sessions"),
                       "toolprune_sessions": d.pop("toolprune_sessions"),
-                      "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes")},
+                      "toolprune_quiet_minutes": d.pop("toolprune_quiet_minutes"),
+                      "toolprune_protect": d.pop("toolprune_protect")},
         "loopguard": {
             "state": "off" if cfg.loopguard == "off" else "on",
             "loopguard": d.pop("loopguard"), "loopguard_aggr": d.pop("loopguard_aggr"),

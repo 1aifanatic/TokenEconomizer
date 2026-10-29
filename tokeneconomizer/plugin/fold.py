@@ -383,7 +383,8 @@ def fold_session(ctx, session_id, transcript_path=None):
             else:
                 run_dir = _run_dir(workdir, trace_path)
                 adapter = LiveAdapter(ctx.host, ctx.repo.root, vocabulary=ctx.config.vocabulary,
-                                      catalog=load_catalog(ctx.root, ctx.host.name))
+                                      catalog=load_catalog(ctx.root, ctx.host.name),
+                                      protect=ctx.config.toolprune_protect)
                 with ctx.store.locked("mechanisms"):
                     inj = _fold_microskills(ctx, adapter, run_dir, session_id,
                                             injected=sess.get("injected_ids"))

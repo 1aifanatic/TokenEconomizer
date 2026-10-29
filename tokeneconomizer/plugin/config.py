@@ -35,6 +35,9 @@ person can tune by hand:
   * toolprune_evidence          -- prompts a never-used tool must have stayed unused through,
                                    over at least toolprune_min_sessions sessions, before it is
                                    proposed -- or over toolprune_sessions sessions, however short;
+  * toolprune_protect           -- tools never proposed, by name or pattern (`mcp__headroom__*`),
+                                   comma-separated; a deny rule the plugin added for one is
+                                   removed at the next fold;
   * toolprune_quiet_minutes     -- how long every session of the repository must have been idle
                                    before `auto` writes a deny list (0: at once), so that no
                                    conversation resumed with a warm prompt cache loses it;
@@ -147,6 +150,7 @@ class LiveConfig:
     toolprune_min_sessions: int = 2
     toolprune_sessions: int = 5
     toolprune_quiet_minutes: int = 60
+    toolprune_protect: list = field(default_factory=list)
     loopguard: str = "nudge"
     loopguard_aggr: str = "default"
     loopguard_nudges: int = 1
@@ -198,7 +202,10 @@ class LiveConfig:
                 value = _VALUE_ALIASES.get(key, {}).get(word, value)
         cur = getattr(self, key)
         try:
-            if isinstance(cur, bool):
+            if isinstance(cur, list):
+                items = value if isinstance(value, list) else str(value).split(",")
+                v = [str(x).strip() for x in items if str(x).strip()]
+            elif isinstance(cur, bool):
                 v = value if isinstance(value, bool) else str(value).strip().lower() in (
                     "1", "true", "yes", "on")
             elif isinstance(cur, int):
@@ -256,6 +263,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",
         "TE_TOOLPRUNE_SESSIONS": "toolprune_sessions",
+        "TE_TOOLPRUNE_PROTECT": "toolprune_protect",
         "TE_LOOPGUARD": "loopguard", "TE_LOOPGUARD_AGGR": "loopguard_aggr",
         "TE_LOOPGUARD_NUDGES": "loopguard_nudges",
         "TE_REPOMAP": "repomap", "TE_REPOMAP_TOKENS": "repomap_tokens",
