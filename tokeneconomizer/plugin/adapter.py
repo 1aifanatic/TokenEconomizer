@@ -8,7 +8,8 @@ answers fit an interactive session instead of a sealed benchmark task:
     keeps Bash/Read/Edit/...; `toolprune.tools.INAPPLICABLE_TOOLS` then treats AskUserQuestion, plan
     mode and subagents as inapplicable "by construction" for a headless sealed task. A person
     does use them interactively, so those are protected here, and so are the web tools, however
-    long they go unused; only evidence (loaded but unused for N sessions) can propose anything
+    long they go unused, and whatever the person lists in `toolprune_protect` (names, or
+    patterns such as `mcp__headroom__*`); only evidence (loaded but unused for N sessions) can propose anything
     else.
   * `parse_catalog_with_source` reports what the session COULD call. An interactive transcript
     does not record the tool list the way `stream-json`'s init event does, so the catalog is the
@@ -23,6 +24,7 @@ answers fit an interactive session instead of a sealed benchmark task:
   * `problem_statements` is empty: there is no issue text to give the per-task tool judge.
 """
 import dataclasses
+import fnmatch
 import json
 import os
 
@@ -58,6 +60,19 @@ COPILOT_PROTECTED = frozenset({
 HIGH_RISK = frozenset({"NotebookEdit"})
 HIGH_RISK_FACTOR = 3
 
+
+class _Protected(frozenset):
+    """The protected names, plus patterns (`mcp__headroom__*`) a name may match instead."""
+
+    def __new__(cls, names, patterns=()):
+        obj = super().__new__(cls, names)
+        obj.patterns = tuple(patterns)
+        return obj
+
+    def __contains__(self, name):
+        return super().__contains__(name) or any(fnmatch.fnmatchcase(str(name), p)
+                                                 for p in self.patterns)
+
 _PY_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile",
                "tox.ini", "environment.yml")
 _NODE_MARKERS = ("package.json",)
@@ -91,11 +106,12 @@ def load_catalog(state_root, host):
 class LiveAdapter:
     name = "live"
 
-    def __init__(self, host, repo_root, vocabulary="auto", catalog=None):
+    def __init__(self, host, repo_root, vocabulary="auto", catalog=None, protect=()):
         self.host = host
         self.repo_root = repo_root
         self.vocabulary = vocabulary
         self.catalog = dict(catalog or {})
+        self.protect = tuple(protect)
 
     # ---- trajectory reading ----
     def load_trajectory(self, path):
@@ -127,7 +143,7 @@ class LiveAdapter:
     # ---- tool pruning ----
     def protected_tools(self):
         extra = COPILOT_PROTECTED if self.host.name == "copilot" else frozenset()
-        return PROTECTED_TOOLS | INTERACTIVE_PROTECTED | extra
+        return _Protected(PROTECTED_TOOLS | INTERACTIVE_PROTECTED | extra, self.protect)
 
     def inapplicable_tools(self):
         return ()                       # nothing is inapplicable by construction here

@@ -641,6 +641,27 @@ def test_a_high_risk_tool_needs_three_times_the_prompts(env, repo, tmp_path):
         "NotebookEdit", "Workflow"]
 
 
+def test_a_protected_tool_is_never_left_out_and_a_rule_already_written_comes_back(
+        env, repo, tmp_path):
+    """`toolprune_protect` takes names and patterns. A deny rule the plugin wrote before the tool
+    was protected is removed at the next fold; the person's own rules stay."""
+    _catalog(env, ["Bash", "mcp__headroom__headroom_retrieve", "Workflow"])
+    path = denylist.settings_path(repo, "claude")
+    os.makedirs(os.path.dirname(path))
+    json.dump({"permissions": {"deny": ["Mine"]}}, open(path, "w"))
+    for i in range(5):
+        _prompts(env, repo, tmp_path, f"a{i}", 3)
+    deny = json.load(open(path))["permissions"]["deny"]
+    assert "mcp__headroom__headroom_retrieve" in deny and "Workflow" in deny
+    env = dict(env, TE_TOOLPRUNE_PROTECT="mcp__headroom__*, Nothing")
+    _prompts(env, repo, tmp_path, "b", 3)
+    deny = json.load(open(path))["permissions"]["deny"]
+    assert "mcp__headroom__headroom_retrieve" not in deny
+    assert "Workflow" in deny and "Mine" in deny
+    assert "mcp__headroom__headroom_retrieve" not in store_for(env, repo).read(
+        "untool.json")["proposal"]
+
+
 def _pending_repo(env, repo, tmp_path, quiet="60"):
     """Five sessions that leave three tools unused, under the default wait before writing."""
     env = dict(env, TE_TOOLPRUNE_QUIET_MINUTES=quiet)
