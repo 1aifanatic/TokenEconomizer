@@ -286,25 +286,44 @@ from); `pi config` turns it off without removing it. Optional: `rm -rf ~/.tokene
 
 ## opencode
 
-**Experimental.** Written against the v1 plugin API (`@opencode-ai/plugin`) and run live on
-opencode 1.19.5 with `opencode run` (free `opencode/big-pickle` model): the plugin loads, each
-session is handed over and folded with real token usage, facts are learned over five sessions
-(`microskills=envfacts`), and the next session receives them through the system prompt. Not yet
-exercised: the interactive TUI (toasts, quitting), the loop guard's redirect, and the v2 plugin API.
-
-**1. Install.** Copy or link the plugin directory, and keep it next to `scripts/` and `lib/`:
+**1. Install.** One plugin file serves opencode 1.x (the `server` entry) and 2.x (the `setup`
+entry). Link it where opencode looks for plugins, keeping it next to `scripts/` and `lib/`:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
 ln -s /path/to/TokenEconomizer/plugin/opencode/tokeneconomizer.ts ~/.config/opencode/plugins/tokeneconomizer.ts
 ```
 
+(Per repository: `.opencode/plugins/`.) Python 3.10+ must be on `PATH`, or named by `TE_PYTHON`.
+
 **2. Check it.** Run a session, then `~/.tokeneconomizer/bin/te --host opencode status` in the
-repository. opencode has no plugin slash commands here, so every command runs from a terminal.
-Tool pruning does not apply yet. The plugin hands a session over when opencode deletes it, when the process
-exits, and after the one turn of a headless `opencode run`, exporting it with `opencode export`. Model calls of the plugin's own
-(micro-skills' proposer, the loop guard's judge) are not wired up for opencode yet, so it learns
-from repeated failures only.
+repository. opencode has no plugin slash commands, so every command runs from a terminal. Tool
+pruning does not apply. Micro-skills is off by default: `te --host opencode config set
+microskills=on` (or `envfacts`, without model calls).
+
+**How it hands a session over.** On 1.x the plugin exports the session with `opencode export` at
+the end of every turn and sends the path; on 2.x, which has no export command, it records the
+session from its events and writes the same JSON. A headless `opencode run` is folded when its
+turn ends and a deleted session when it is deleted. Quitting the TUI gives a plugin no chance to
+say so: that session is folded by the next session's start, once its export has been quiet for
+10 minutes.
+
+**Model calls.** The proposer and the loop guard's judge run through `opencode run` on your
+default opencode model (`paid_model` names another): tools that change anything are denied,
+the session is deleted afterwards, and no other plugin runs (`--pure` on 1.x; `--standalone` on
+2.x). On 2.x a reply that used no tool carries no usage, so its cost is estimated.
+
+**Verified live,** on opencode 1.19.5 and 2.2.0 (Python 3.12), with a scripted local model
+endpoint and, on 1.19.5, the free `opencode/big-pickle` model:
+the plugin loads; sessions are folded with real usage and model; facts learned over five sessions
+reach the next session through the system prompt; the loop guard's judge ran, nudged a
+failing edit-and-test loop, and the redirect arrived in the model's next tool results; the
+still-stuck notice was printed (`opencode run`) and the first notice shown as a TUI toast
+(1.19.5); a session quit with Ctrl+D in the TUI was folded by the next start.
+
+**Not covered:** the 2.x TUI, and notices on 2.x, which go to the server's stderr rather than a
+toast. A `read`, `task` or `*` permission denial stalls opencode 1.19.5 at start-up, which is why
+the side call denies only `bash`, `edit`, `webfetch` and `websearch`.
 
 ## What to expect
 

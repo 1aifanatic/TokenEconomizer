@@ -7,6 +7,7 @@ wraps exec-stream item fields in PascalCase `event_msg/item_completed` records.
 """
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -520,6 +521,56 @@ def test_the_opencode_host_reads_what_the_plugin_sends():
     assert h.headless({"TE_OPENCODE_MODE": "run"}) and not h.headless({"TE_OPENCODE_MODE": "tui"})
     assert h.turn_key({"prompt_id": "s:1"}) == "s:1"
     assert hosts.detect({}, hint="opencode").name == "opencode"
+
+
+def _run_events(sid="ses_x"):
+    ev = [{"type": "step_start", "sessionID": sid, "part": {"type": "step-start"}},
+          {"type": "text", "sessionID": sid, "part": {"type": "text", "text": "po"}},
+          {"type": "text", "sessionID": sid, "part": {"type": "text", "text": "ng"}},
+          {"type": "step_finish", "sessionID": sid, "part": {
+              "type": "step-finish", "cost": 0.5,
+              "tokens": {"input": 10, "output": 4, "reasoning": 1, "cache": {"read": 7, "write": 2}}}}]
+    return "\n".join(json.dumps(e) for e in ev) + "\nnot json\n"
+
+
+def test_an_opencode_run_reply_is_read_from_its_json_events():
+    text, usage, sid = trace.opencode_run_reply(_run_events())
+    assert (text, sid) == ("pong", "ses_x")
+    assert usage == {"input_tokens": 10, "cache_read_input_tokens": 7,
+                     "cache_creation_input_tokens": 2, "output_tokens": 5, "cost_usd": 0.5}
+    assert trace.opencode_run_reply("") == ("", None, "")
+
+
+def test_the_opencode_side_call_denies_tools_and_deletes_its_session(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append((cmd, kw))
+        out = _run_events() if "--format" in cmd else "--pure --standalone"
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    monkeypatch.setattr(sidecall.subprocess, "run", fake_run)
+    sidecall._OC_FLAGS.clear()
+    text, eff = sidecall.opencode_call("is it stuck?", model="p/m", cli="oc")
+    assert text == "pong" and eff
+    run = next(c for c, _ in seen if "--format" in c)
+    assert run[:2] == ["oc", "run"] and "--pure" in run and "--standalone" in run
+    assert run[-3:] == ["--model", "p/m", "is it stuck?"]
+    kw = next(k for c, k in seen if "--format" in c)
+    assert kw["env"]["TE_SIDECALL"] == "1"
+    perm = json.loads(kw["env"]["OPENCODE_CONFIG_CONTENT"])["permission"]
+    assert perm["bash"] == "deny" and perm["edit"] == "deny"
+    assert any(c[:3] == ["oc", "session", "delete"] and c[3] == "ses_x" for c, _ in seen)
+
+
+def test_the_opencode_side_call_adds_only_the_flags_its_cli_lists(monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    monkeypatch.setattr(sidecall.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, "  --format  json\n", ""))
+    sidecall._OC_FLAGS.clear()
+    assert sidecall.opencode_flags("oc") == []
+    assert sidecall.runner_for("opencode", type("C", (), {"paid_model": ""})()) is not None
 
 
 # ---- the guard sees edits made through the shell ---------------------------------------------

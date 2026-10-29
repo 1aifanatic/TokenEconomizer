@@ -143,3 +143,28 @@ def opencode_session_usage(path):
     totals.update(requests=requests, cost_usd_vendor=round(cost, 6),
                   model=max(models, key=models.get) if models else None)
     return totals
+
+
+def opencode_run_reply(stdout):
+    """(text, usage, session_id) of an `opencode run --format json` run: the reply text, the
+    usage of every finished step in ledger fields (with opencode's own cost as `cost_usd`), and
+    the session it created. `usage` is None when no step finished."""
+    text, usage, sid = [], None, ""
+    for line in (stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        sid = sid or str(ev.get("sessionID") or "")
+        part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+        if ev.get("type") == "text" and part.get("text"):
+            text.append(part["text"])
+        elif ev.get("type") == "step_finish":
+            u = _usage({"tokens": part.get("tokens"), "cost": part.get("cost")})
+            if u:
+                usage = usage or dict.fromkeys(u, 0)
+                for k, v in u.items():
+                    usage[k] += v
+    return "".join(text).strip(), usage, sid

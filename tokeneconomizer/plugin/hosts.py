@@ -352,14 +352,16 @@ class OpenCode(Host):
     """opencode (anomalyco/opencode), through the plugin in `plugin/opencode/`.
 
     opencode has no hook protocol of its own -- plugins are TypeScript functions on its hook and
-    event bus -- so the plugin speaks THIS one on opencode's behalf, as the Pi extension does: it
+    event bus (1.x: hook functions; 2.x: `setup` and domain hooks) -- so the plugin speaks THIS
+    one on opencode's behalf, as the Pi extension does: it
     calls the same dispatcher with a Claude-shaped payload per event and applies the answer with
     opencode's own levers (a system-prompt entry, a message into the session, a toast). What it
     sends:
 
       * `prompt_id`, which it numbers itself, for the turn identity opencode does not stamp;
-      * `transcript_path`, the session's export (`client.session.messages`) written as JSON when
-        the session ends, since opencode's own database is not a format to read;
+      * `transcript_path`, the session's export as JSON, written at the end of every turn (from
+        `opencode export` on 1.x; recorded by the plugin from its events on 2.x, which has no
+        export), since opencode's own database is not a format to read;
       * `tool_response = {content, isError, exit_code}`, with `exit_code` from the bash tool's
         `metadata.exit` when it reports one;
       * opencode's mode in `TE_OPENCODE_MODE`: `run` (headless, `opencode run`) or `tui`.
