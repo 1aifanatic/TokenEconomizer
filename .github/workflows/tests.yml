@@ -13,8 +13,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.13"]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # Git Bash on Windows: the launchers are `sh` scripts, run there as Claude Code runs them.
+        shell: bash
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

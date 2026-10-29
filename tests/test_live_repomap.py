@@ -23,6 +23,8 @@ echo "| def run(): ranked toward [$4]"
 
 
 def _fake(tmp_path, probe=0, slow=0):
+    if os.name == "nt":
+        pytest.skip("the stand-in Python is an sh script, which Windows cannot start")
     p = tmp_path / f"fakepy-{probe}-{slow}"
     p.write_text(FAKE.format(probe=probe, slow=slow))
     p.chmod(p.stat().st_mode | stat.S_IEXEC)

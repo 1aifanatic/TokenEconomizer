@@ -588,6 +588,7 @@ open-vocabulary. On a repository you do not trust, leave micro-skills off (the d
   * `refresh-catalog` is manual, once per machine and agent; until it runs, evidence pruning
     sees only the tools sessions used (plus, on Claude Code, the deferred ones). Running it at
     an agent's first session on a machine would close that gap.
-* Windows (the launcher is POSIX `sh`), Python 3.9, and compressed Codex rollouts (`.zst`).
+* Windows beyond Claude Code (Codex, the Copilot CLI and Pi there are untested; Copilot's `-p` is
+  not told apart, having no `ps`), Python 3.9, and compressed Codex rollouts (`.zst`).
 * Transcript formats are internal to each agent and change between versions; the readers are
   pinned by tests against the shapes observed on the versions above.

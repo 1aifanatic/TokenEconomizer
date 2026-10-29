@@ -11,6 +11,14 @@ for p in (_REPO, _TESTS):
         sys.path.insert(0, p)
 
 
+def symlink_or_skip(src, dst):
+    """`os.symlink`, or skip where this system makes none (Windows without Developer Mode)."""
+    try:
+        os.symlink(src, dst)
+    except OSError as e:
+        pytest.skip(f"this system makes no symlinks: {e}")
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_sidecalls: test the side-call functions themselves "
                                        "(their subprocess is faked inside the test)")

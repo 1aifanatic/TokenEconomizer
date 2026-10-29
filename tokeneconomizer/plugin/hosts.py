@@ -421,6 +421,8 @@ def _ancestor_args(limit=4):
     """The command lines of this process's nearest ancestors, nearest first."""
     import subprocess
     out, pid = [], os.getppid()
+    if os.name == "nt":
+        return out  # no `ps` there; Copilot's `-p` is then not told apart (a notice is kept)
     for _ in range(limit):
         if pid <= 1:
             break
@@ -462,9 +464,10 @@ def detect(payload, env=None, hint=None):
     if "turn_id" in (payload or {}):
         return Codex()
     tp = str((payload or {}).get("transcript_path") or "")
-    if os.path.basename(tp).startswith("rollout-") or f"{os.sep}.codex{os.sep}" in tp:
+    sp = tp.replace("\\", "/")              # a Windows path, with either separator
+    if sp.rsplit("/", 1)[-1].startswith("rollout-") or "/.codex/" in sp:
         return Codex()
-    if f"{os.sep}session-state{os.sep}" in tp and tp.endswith("events.jsonl"):
+    if "/session-state/" in sp and tp.endswith("events.jsonl"):
         return Copilot()
     # Claude Code always sends a transcript path; Copilot sends none before Stop, and marks its
     # hook processes. (Hooks inherit the parent's environment, so the marker alone would also

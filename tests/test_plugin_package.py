@@ -17,6 +17,8 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(REPO, "plugin")
+# Windows runs no shebang: the launchers go through Git Bash's `sh`.
+SH = ["sh"] if os.name == "nt" else []
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"}
 
 
@@ -82,14 +84,20 @@ def test_no_bin_directory():
 
 
 def _run_hook(launcher, payload, env):
-    p = subprocess.run([launcher], input=json.dumps(payload), capture_output=True, text=True,
+    p = subprocess.run(SH + [launcher], input=json.dumps(payload), capture_output=True, text=True,
                        env=env, timeout=60)
     return p.returncode, p.stdout, p.stderr
 
 
+# What every Windows process inherits, whatever runs it: the launchers know Windows by `OS`, and
+# Python and Git need the rest to start.
+WINDOWS_ENV = ("OS", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP")
+
+
 def _hook_env(tmp_path, **extra):
-    env = {"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
-           "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"}
+    env = {k: os.environ[k] for k in WINDOWS_ENV if os.name == "nt" and k in os.environ}
+    env.update({"PATH": os.environ.get("PATH", ""), "TOKENECONOMIZER_HOME": str(tmp_path / "home"),
+                "GIT_CEILING_DIRECTORIES": str(tmp_path), "TE_FOLD_SYNC": "1"})
     env.update(extra)
     return env
 
@@ -213,7 +221,7 @@ def test_the_plugin_ships_and_loads_no_benchmark_code():
     """The benchmark adapters, the facade, the workloads, the baselines and the benchmark-only
     controllers live with the experiments (`experiments/te_bench/`). The plugin's library is the
     package alone, and running every part of the plugin loads none of them."""
-    shipped = os.path.join(PLUGIN, "lib", "tokeneconomizer")
+    shipped = os.path.join(REPO, "tokeneconomizer")       # what lib/ links (below)
     assert sorted(n for n in os.listdir(shipped)
                   if os.path.isdir(os.path.join(shipped, n)) and n != "__pycache__") == sorted(
         MECHANISMS + ("plugin",))
@@ -261,7 +269,8 @@ def test_a_resumed_pi_conversation_keeps_the_section_it_carries():
         pytest.skip("node is not installed")
     ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
     script = """
-const { carriedSection } = await import(process.argv[1]);
+const { pathToFileURL } = await import("node:url");      // Windows: a path is no import URL
+const { carriedSection } = await import(pathToFileURL(process.argv[1]).href);
 const sys = (sections) => ({ type: "message", message: { role: "system", sections } });
 const compact = (sections) => ({ type: "compaction", systemMessage: { sections } });
 const user = { type: "message", message: { role: "user" } };
@@ -311,19 +320,23 @@ def test_the_plugin_directory_is_also_a_pi_package():
                    ("package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"))
 
 
+@pytest.mark.skipif(not os.path.islink(os.path.join(PLUGIN, "lib", "tokeneconomizer")),
+                    reason="checkout without symlinks (Windows): see the known_marketplaces test")
 def test_the_plugin_carries_the_core_as_symlinks_an_install_copy_follows(tmp_path):
     """Claude Code installs a COPY of plugin/ into its cache, even from a local checkout, so the
     core must be reachable from inside plugin/."""
     import shutil
     assert os.listdir(os.path.join(PLUGIN, "lib")) == ["tokeneconomizer"]
     link = os.path.join(PLUGIN, "lib", "tokeneconomizer")
-    assert os.path.islink(link) and os.readlink(link) == "../../tokeneconomizer"
+    assert os.path.islink(link)
+    # Windows reports the target with its own separator
+    assert os.readlink(link).replace(os.sep, "/") == "../../tokeneconomizer"
     assert os.path.isfile(os.path.join(link, "plugin", "hook.py"))
     # What an install does: copy the directory, following links. The copy runs on its own.
     copy = str(tmp_path / "cache" / "tokeneconomizer" / "0.1.0")
     shutil.copytree(PLUGIN, copy, symlinks=False,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    out = subprocess.run([os.path.join(copy, "scripts", "te"), "doctor"], capture_output=True,
+    out = subprocess.run(SH + [os.path.join(copy, "scripts", "te"), "doctor"], capture_output=True,
                          text=True, env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h")),
                          timeout=60)
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
@@ -343,7 +356,7 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
         (home / "config.toml").write_text(
             'check_for_update_on_startup = false\n\n[marketplaces.tokeneconomizer]\n'
             f'source_type = "local"\nsource = "{source}"\n')
-        return subprocess.run([str(copy / "scripts" / "te"), "doctor"], capture_output=True,
+        return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
                               text=True, timeout=60, cwd=str(tmp_path),
                               env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
                                        TE_CORE_PATH="", PYTHONPATH=""))
@@ -355,9 +368,38 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
     # A git marketplace (`codex plugin marketplace add owner/repo`): config.toml names the URL,
     # and Codex keeps its checkout under .tmp/marketplaces (seen on 0.153.1).
     (home / ".tmp" / "marketplaces").mkdir(parents=True)
-    os.symlink(REPO, str(home / ".tmp" / "marketplaces" / "tokeneconomizer"))
+    try:
+        os.symlink(REPO, str(home / ".tmp" / "marketplaces" / "tokeneconomizer"))
+    except OSError:
+        pytest.skip("symlinks need privileges on Windows")
     out = te("https://github.com/microsoft/TokenEconomizer.git")
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+
+
+def test_a_claude_install_copy_without_symlinks_finds_the_core_in_its_marketplace(tmp_path):
+    """On a checkout without symlinks (Windows), `lib/tokeneconomizer` is a file holding the
+    link's target, and Claude Code's install copy (`~/.claude/plugins/cache/...`) carries that
+    file, not the package. The copy finds the core through the marketplace Claude Code recorded
+    in `plugins/known_marketplaces.json`."""
+    home = tmp_path / "claude-home"
+    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
+    shutil.copytree(PLUGIN, str(copy), symlinks=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
+    (copy / "lib").mkdir()
+    (copy / "lib" / "tokeneconomizer").write_text("../../tokeneconomizer")
+
+    def te(path):
+        (home / "plugins" / "known_marketplaces.json").write_text(json.dumps(
+            {"tokeneconomizer": {"source": {"source": "directory", "path": path},
+                                 "installLocation": path}}))
+        return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
+                              text=True, timeout=60, cwd=str(tmp_path),
+                              env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
+                                       TE_CORE_PATH="", PYTHONPATH=""))
+    out = te(REPO)
+    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+    out = te(str(tmp_path / "nowhere"))
+    assert out.returncode == 1 and "core package was not found" in out.stderr
 
 
 def test_codex_gets_its_commands_as_plugin_skills_and_no_one_else_does():
