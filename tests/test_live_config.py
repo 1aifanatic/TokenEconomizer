@@ -6,6 +6,9 @@ mechanism does what the setting says.
 """
 import json
 import os
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -213,3 +216,154 @@ def test_the_quiet_window_before_a_deny_list_is_written_may_be_zero():
     assert not cfg.set("toolprune_evidence", "0")             # other numbers still start at 1
     assert load_config("/nonexistent", env={"TE_TOOLPRUNE_QUIET_MINUTES": "15"}
                        ).toolprune_quiet_minutes == 15
+
+
+@pytest.mark.parametrize("value", ["typo", "", None, 2, []])
+@pytest.mark.parametrize("key", ["enabled", "shadow"])
+def test_invalid_boolean_preserves_setting(key, value):
+    cfg = LiveConfig(shadow=True)
+    assert cfg.set(key, value) is False
+    assert getattr(cfg, key) is True
+    assert cfg.warnings
+
+@pytest.mark.parametrize("value,expected", [(True, True), (False, False), (" on ", True), ("off", False), (1, True), (0, False)])
+def test_valid_booleans(value, expected):
+    cfg = LiveConfig()
+    assert cfg.set("enabled", value)
+    assert cfg.enabled is expected
+
+
+@pytest.mark.parametrize('spelling', ['loopguard.min_turns', 'spiral.min_turns'])
+@pytest.mark.parametrize('operation', ['one', 'all', 'set'])
+def test_threshold_mutations_remove_flat_aliases(tmp_path, spelling, operation):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({spelling: 99, 'loopguard.error_outputs': 7, 'microskills': 'off'}))
+    if operation == 'one':
+        result = unset_config(str(path), ['loopguard.min_turns'])
+    elif operation == 'all':
+        result = unset_config(str(path), ['loopguard_thresholds'])
+    else:
+        result = write_config(str(path), {'loopguard.min_turns': 23})
+    cfg = load_config(str(tmp_path), env={})
+    assert spelling not in result
+    assert cfg.loopguard_thresholds.get('min_turns') == (23 if operation == 'set' else None)
+    assert cfg.loopguard_thresholds.get('error_outputs') == (None if operation == 'all' else 7)
+    assert result['microskills'] == 'off'
+    if operation == 'set':
+        unset_config(str(path), ['loopguard.min_turns'])
+        assert 'min_turns' not in load_config(str(tmp_path), env={}).loopguard_thresholds
+
+
+def test_table_update_removes_only_overridden_flat_keys(tmp_path):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'spiral.min_turns': 99, 'loopguard.error_outputs': 7}))
+    result = write_config(str(path), {'loopguard_thresholds': {'min_turns': 23}})
+    assert 'spiral.min_turns' not in result
+    assert load_config(str(tmp_path), env={}).loopguard_thresholds == {'min_turns': 23, 'error_outputs': 7}
+
+
+@pytest.mark.parametrize('raw', [b'{"microskills":"on",', b'[]', b'null', b'\xff'])
+@pytest.mark.parametrize('operation', ['set', 'unset'])
+def test_invalid_existing_config_is_not_overwritten(tmp_path, raw, operation):
+    path = tmp_path / 'config.json'
+    path.write_bytes(raw)
+    with pytest.raises(ValueError):
+        if operation == 'set':
+            write_config(str(path), {'loopguard': 'off'})
+        else:
+            unset_config(str(path), ['loopguard'])
+    assert path.read_bytes() == raw
+    # Hooks still fail open when reading a malformed configuration.
+    assert load_config(str(tmp_path), env={}).loopguard == 'nudge'
+
+
+def test_missing_config_can_be_created(tmp_path):
+    assert write_config(str(tmp_path / 'config.json'), {'loopguard': 'off'}) == {'loopguard': 'off'}
+
+
+@pytest.mark.parametrize('key', ['toolprune_evidence', 'microskills_propose_every', 'loopguard.min_turns'])
+@pytest.mark.parametrize('value', [1.5, 2.9, True])
+def test_integer_settings_reject_lossy_values(key, value):
+    cfg = LiveConfig()
+    before = cfg.as_dict()
+    assert cfg.set(key, value) is False
+    assert cfg.as_dict() == before
+    assert cfg.warnings
+
+@pytest.mark.parametrize('key', ['toolprune_evidence', 'loopguard.min_turns'])
+@pytest.mark.parametrize('value', [3, 3.0, '3'])
+def test_whole_numbers_still_work(key, value):
+    cfg = LiveConfig()
+    assert cfg.set(key, value)
+    assert (cfg.loopguard_thresholds['min_turns'] if '.' in key else cfg.toolprune_evidence) == 3
+
+
+_CONFIG_FIRST_WRITER = '''
+import sys, time
+from pathlib import Path
+from tokeneconomizer.plugin import config
+path, ready, release = map(Path, sys.argv[1:])
+original = config._read
+def read(*args, **kwargs):
+    result = original(*args, **kwargs)
+    ready.touch()
+    deadline = time.monotonic() + 10
+    while not release.exists():
+        if time.monotonic() > deadline:
+            raise RuntimeError("test release timed out")
+        time.sleep(0.01)
+    return result
+config._read = read
+config.write_config(str(path), {"microskills": "on"})
+'''
+
+@pytest.mark.parametrize('operation', ['set', 'unset'])
+def test_concurrent_config_edits_preserve_both_updates(tmp_path, operation):
+    path, ready, release = [tmp_path / name for name in ('config.json', 'ready', 'release')]
+    path.write_text(json.dumps({'loopguard': 'off'}))
+    first = subprocess.Popen([sys.executable, '-c', _CONFIG_FIRST_WRITER, str(path), str(ready), str(release)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    second = None
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert first.poll() is None
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        edit = 'config.write_config(sys.argv[1], {"toolprune": "off"})' if operation == 'set' else 'config.unset_config(sys.argv[1], ["loopguard"])'
+        second = subprocess.Popen([sys.executable, '-c', 'import sys; from tokeneconomizer.plugin import config; ' + edit, str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            second.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        release.touch()
+        _, error = first.communicate(timeout=10)
+        assert first.returncode == 0, error
+        _, error = second.communicate(timeout=10)
+        assert second.returncode == 0, error
+        result = json.loads(path.read_text())
+        assert result['microskills'] == 'envfacts+distiller'
+        if operation == 'set':
+            assert result['toolprune'] == 'off'
+        else:
+            assert 'loopguard' not in result
+    finally:
+        release.touch()
+        for child in (first, second):
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.communicate()
+
+
+def test_config_lock_timeout_preserves_file(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from tokeneconomizer.plugin import config
+    from tokeneconomizer.plugin.store import Store
+    path = tmp_path / 'config.json'
+    path.write_text('{"loopguard":"off"}')
+    @contextmanager
+    def unavailable(*args, **kwargs):
+        yield False
+    monkeypatch.setattr(Store, 'locked', unavailable)
+    with pytest.raises(ValueError, match='busy'):
+        config.write_config(str(path), {'toolprune': 'off'})
+    assert path.read_text() == '{"loopguard":"off"}'
