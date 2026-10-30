@@ -13,6 +13,8 @@ These tests are offline: they build a tiny tree of synthetic `row.json` files an
 import importlib.util
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -182,3 +184,91 @@ def test_unreached_webbench_tasks_are_not_graded_misses(tmp_path):
     assert rows["task-2"]["not_graded"] == "False"
     assert rows["task-3"]["not_graded"] == "True"
     assert rows["task-3"]["not_graded_reason"] == "unreached"
+
+
+@pytest.mark.parametrize("baseline,arm", [([0], [10]), ([0, 0, 100], [10, 20, 50]), ([100], [50])])
+def test_comparison_handles_zero_baselines(tmp_path, baseline, arm):
+    for name, costs in (("baseline", baseline), ("arm", arm)):
+        for index, cost in enumerate(costs):
+            run = tmp_path / name / f"20261030-{index}"
+            run.mkdir(parents=True)
+            (run / "row.json").write_text(json.dumps({"instance": str(index), "tokens_total": cost}))
+            (run / "run_config.json").write_text(json.dumps({"injection": {"present": index == 0, "chars": 4}}))
+    output = tmp_path / "comparison.json"
+    script = Path(__file__).resolve().parents[1] / "scripts/compare_arms.py"
+    result = subprocess.run([sys.executable, str(script), "--baseline", str(tmp_path / "baseline"),
+                             "--arm", str(tmp_path / "arm"), "--json", str(output)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(output.read_text())
+    assert data["pairs"] == len(baseline)
+    assert data["paired_delta_tasks"] == sum(b != 0 for b in baseline)
+    expected = -0.5 if any(baseline) else None
+    assert data["paired_delta_mean"] == expected
+    assert data["paired_delta_median"] == expected
+    if 0 in baseline:
+        assert "n/a" in result.stdout
+        assert "zero baseline" in result.stdout
+    else:
+        assert "-50.0%" in result.stdout
+
+
+def load_comparison():
+    path = Path(__file__).resolve().parents[1] / "scripts/compare_arms.py"
+    spec = importlib.util.spec_from_file_location("comparison_reruns", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+@pytest.mark.parametrize("new_config", [None, "{incomplete", '{}'])
+def test_latest_row_does_not_inherit_previous_run_configuration(tmp_path, new_config):
+    old = tmp_path / "20261029T000000Z__task"
+    new = tmp_path / "20261030T000000Z__task"
+    old.mkdir()
+    new.mkdir()
+    (old / "row.json").write_text(json.dumps({"instance": "task", "tokens_total": 100}))
+    (old / "run_config.json").write_text(json.dumps({
+        "routing": {"base_url": "https://old.invalid"},
+        "injection": {"present": True, "chars": 400},
+    }))
+    (new / "row.json").write_text(json.dumps({"instance": "task", "tokens_total": 200}))
+    if new_config is not None:
+        (new / "run_config.json").write_text(new_config)
+    rows, configs = load_comparison().load_cell(str(tmp_path))
+    assert rows["task"]["tokens_total"] == 200
+    assert configs.get("task", {}) == {}
+
+def test_latest_valid_configuration_stays_paired_with_latest_row(tmp_path):
+    for day in (29, 30):
+        run = tmp_path / f"202610{day}T000000Z__task"
+        run.mkdir()
+        (run / "row.json").write_text(json.dumps({"instance": "task", "tokens_total": day}))
+        (run / "run_config.json").write_text(json.dumps({"injection": {"present": day == 29}}))
+    rows, configs = load_comparison().load_cell(str(tmp_path))
+    assert rows["task"]["tokens_total"] == 30
+    assert configs["task"] == {"injection": {"present": False}}
+
+
+@pytest.mark.parametrize("raw", [True, False])
+def test_unknown_model_raw_summary(tmp_path, raw):
+    stream = tmp_path / "stream.jsonl"
+    stream.write_text(json.dumps({
+        "instance": "task", "position": 1, "model": "unlisted-test-model",
+        "tokens_total": 120, "input_tokens": 100, "output_tokens": 20,
+        "optimizer_tokens": 10, "resolved": True,
+    }) + "\n")
+    script = Path(__file__).resolve().parents[1] / "scripts/summarize_stream.py"
+    command = [sys.executable, str(script), str(stream), "--json"]
+    if raw:
+        command.append("--raw")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if not raw:
+        assert result.returncode != 0
+        assert "unlisted-test-model" in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    summary, = json.loads(result.stdout)
+    assert summary["cost_basis"] == "tokens_total (raw)"
+    assert summary["cum_exec_tokens"] == 120
+    assert summary["cum_optimizer_tokens"] == 10
+    assert summary["cum_total_tokens"] == 130
+    assert summary["curve"][0]["task_cost"] == 130
