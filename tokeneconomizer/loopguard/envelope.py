@@ -197,8 +197,10 @@ def record_turn(store, guard, level="default", stopped_normally=True, overrides=
     the experiments' envelope; a turn's own outcome gates only later turns."""
     # The snapshot is of the WHOLE turn (`guard.whole`), not the post-nudge segment: the
     # experiments snapshot a resolved task's full trajectory (`spiral_snapshot(transcript)`).
-    with store.locked("envelope"):
+    with store.locked("envelope") as acquired:
         tracker = load_envelope(store, level, overrides)
+        if not acquired:
+            return tracker
         tracker.update(guard.cum_turns, guard.resolved_proxy(stopped_normally),
                        snapshot=guard.whole.snapshot())
         save_envelope(store, tracker)
