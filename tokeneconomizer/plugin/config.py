@@ -274,12 +274,18 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")
 
 
-def _read(path):
+def _read(path, for_write=False):
     try:
         with open(path, encoding="utf-8") as fh:
             obj = json.load(fh)
-        return obj if isinstance(obj, dict) else {}
-    except (OSError, ValueError):
+        if not isinstance(obj, dict):
+            raise ValueError("configuration must be a JSON object")
+        return obj
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        if for_write:
+            raise ValueError(f"cannot edit {path}: {exc}") from exc
         return {}
 
 
@@ -333,7 +339,7 @@ def write_config(path, updates):
     bad = [k for k, v in updates.items() if not probe.set(k, v, source="te config")]
     if bad:
         raise ValueError("; ".join(probe.warnings))
-    current = _read(path)
+    current = _read(path, for_write=True)
     # an old file's thresholds move to the new name, so nothing pinned is lost
     if "spiral_thresholds" in current:
         old = current.pop("spiral_thresholds")
@@ -363,7 +369,7 @@ def unset_config(path, keys):
            LOOPGUARD_KEYS]
     if bad:
         raise ValueError(f"unknown key(s): {', '.join(bad)}")
-    current = _read(path)
+    current = _read(path, for_write=True)
     for k in keys:
         name = _threshold_name(k)
         if name is not None:
