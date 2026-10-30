@@ -111,7 +111,7 @@ def claude_session_usage(transcript_path, include_subagents=True):
     used one), `requests` (distinct assistant messages carrying usage) and `files` read."""
     files = [transcript_path] + (claude_subagent_files(transcript_path)
                                  if include_subagents else [])
-    by_id, models, anon = {}, {}, 0
+    by_id, model_by_id, anon = {}, {}, 0
     for path in files:
         for line in _lines(path):
             if '"usage"' not in line:
@@ -136,7 +136,10 @@ def claude_session_usage(transcript_path, include_subagents=True):
             by_id[mid] = {k: int(usage.get(k) or 0) for k in _CLAUDE_KEYS}
             model = msg.get("model")
             if model:
-                models[model] = models.get(model, 0) + 1
+                model_by_id[mid] = model
+    models = {}
+    for model in model_by_id.values():
+        models[model] = models.get(model, 0) + 1
     out = {k: sum(u[k] for u in by_id.values()) for k in _CLAUDE_KEYS}
     out["requests"] = len(by_id)
     out["model"] = max(models, key=models.get) if models else None
