@@ -1,5 +1,13 @@
 """Trace seam: load_trajectory / tool_usage / parse_catalog over synthetic transcripts."""
 import os
+import json
+
+import pytest
+
+from tokeneconomizer.trace import load_trajectory
+from tokeneconomizer.trace.catalog import parse_tool_catalog
+from tokeneconomizer.trace.claude import claude_session_usage, claude_subagent_files, claude_tool_usage
+from tokeneconomizer.trace.codex import codex_rollout_to_exec
 
 from tokeneconomizer import trace
 from fixtures import write_claude_transcript, write_codex_transcript
@@ -232,3 +240,173 @@ def test_a_pi_session_counts_the_prompts_on_its_active_branch(tmp_path):
         msg("x", "b", "user"), msg("y", "x", "assistant"),        # abandoned
         msg("c", "b", "user"), msg("d", "c", "toolResult"), msg("e", "d", "assistant")])
     assert trace.pi_prompt_count(p) == 2
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('description', ['Run a command', 'Read "quoted" paths', r'Use C:\tools\bin', 'First line\nSecond line', '', '雪のファイル'])
+def test_descriptions_are_json_strings_not_trailing_schema(description, wrapped):
+    payload = json.dumps({'tools': [{'name': 'bash', 'description': description,
+                                    'parameters': {'type': 'object'}}]})
+    log = json.dumps({'body': payload}) if wrapped else payload
+    assert parse_tool_catalog('DEBUG ' + log) == {'bash': description.split('\n')[0]}
+
+
+def test_limit_applies_to_decoded_description():
+    payload = json.dumps({'name': 'read', 'description': '雪' * 20})
+    assert parse_tool_catalog(payload, max_desc=5) == {'read': '雪' * 5}
+
+
+def test_truncated_description_does_not_swallow_next_log_line():
+    log = '{"name":"bash","description":"truncated\n' + json.dumps({'name': 'read', 'description': 'Read file'})
+    assert parse_tool_catalog(log) == {'read': 'Read file'}
+
+
+@pytest.mark.parametrize('folder', ['project[dev]', 'project[ab]', 'project'])
+def test_subagents_are_found_under_literal_parent_paths(tmp_path, folder):
+    parent = tmp_path / folder
+    parent.mkdir()
+    transcript = parent / 'session.jsonl'
+    transcript.write_text('')
+    directory = parent / 'session' / 'subagents'
+    directory.mkdir(parents=True)
+    child = directory / 'agent.jsonl'
+    child.write_text(json.dumps({'type': 'assistant', 'message': {
+        'id': 'child-message', 'model': 'claude-sonnet-4',
+        'usage': {'input_tokens': 10, 'output_tokens': 2},
+        'content': [{'type': 'tool_use', 'id': 'call', 'name': 'Read', 'input': {'path': 'x'}}]
+    }}))
+    # A similarly named sibling must not be included by glob expansion.
+    sibling = tmp_path / 'projecta' / 'session' / 'subagents'
+    sibling.mkdir(parents=True)
+    (sibling / 'unrelated.jsonl').write_text('{}')
+    assert claude_subagent_files(str(transcript)) == [str(child)]
+    assert claude_session_usage(str(transcript))['input_tokens'] == 10
+    assert claude_tool_usage(str(transcript)) == {'Read': 1}
+
+
+@pytest.mark.parametrize('error', ['command not found', {'message': 'command not found'}])
+@pytest.mark.parametrize('content', ['', 'partial stdout'])
+def test_failed_calls_preserve_error_details(tmp_path, error, content):
+    events = [
+        {'type': 'tool.execution_start', 'data': {'toolCallId': '1', 'toolName': 'bash', 'arguments': {'command': 'missing'}}},
+        {'type': 'tool.execution_complete', 'data': {'toolCallId': '1', 'success': False, 'result': {'content': content}, 'error': error}},
+    ]
+    path = tmp_path / 'events.jsonl'
+    path.write_text('\n'.join(map(json.dumps, events)))
+    calls = load_trajectory(path)
+    assert len(calls) == 1
+    assert calls[0][0] == 'bash'
+    assert calls[0][3] is False
+    assert 'command not found' in calls[0][2]
+    if content:
+        assert content in calls[0][2]
+
+
+def test_success_does_not_include_stale_error_field(tmp_path):
+    path = tmp_path / 'events.jsonl'
+    path.write_text(json.dumps({'type': 'tool.execution_complete', 'data': {'success': True, 'result': {'content': 'ok'}, 'error': 'old'}}))
+    assert load_trajectory(path)[0][2] == 'ok'
+
+
+_NONOBJECT_RECORDS = ['null', '[]', '42', '"diagnostic"', 'not json']
+
+@pytest.mark.parametrize('agent', ['claude', 'codex', 'copilot'])
+def test_nonobject_records_do_not_discard_valid_calls(tmp_path, agent):
+    if agent == 'claude':
+        events = [{'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': 'c', 'name': 'bash', 'input': {'command': 'echo ok'}}]}}]
+    elif agent == 'codex':
+        events = [{'type': 'item.completed', 'item': {'type': 'command_execution', 'command': 'echo ok', 'exit_code': 0}}]
+    else:
+        events = [{'type': 'tool.execution_start', 'data': {'toolCallId': 'c', 'toolName': 'bash', 'arguments': {'command': 'echo ok'}}}, {'type': 'tool.execution_complete', 'data': {'toolCallId': 'c', 'success': True}}]
+    path = tmp_path / 'trace.jsonl'
+    path.write_text('\n'.join(_NONOBJECT_RECORDS + list(map(json.dumps, events)) + _NONOBJECT_RECORDS))
+    calls = load_trajectory(path)
+    assert len(calls) == 1
+    assert calls[0][1]['command'] == 'echo ok'
+
+
+def test_rollout_converter_skips_nonobject_records(tmp_path):
+    path, output = tmp_path / 'rollout.jsonl', tmp_path / 'out.jsonl'
+    event = {'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {'type': 'CommandExecution', 'command': ['echo', 'ok'], 'exit_code': 0}}}
+    path.write_text('\n'.join(_NONOBJECT_RECORDS + [json.dumps(event)]))
+    assert codex_rollout_to_exec(str(path), str(output)) == 1
+    assert len(load_trajectory(output)) == 1
+
+
+def test_usage_reader_ignores_nonobject_with_usage_marker(tmp_path):
+    path = tmp_path / 'session.jsonl'
+    path.write_text('["usage"]\n' + json.dumps({'type': 'assistant', 'message': {'id': 'm', 'usage': {'input_tokens': 5}}}))
+    assert claude_session_usage(str(path))['input_tokens'] == 5
+
+
+def test_copilot_directory_reader_skips_nonobjects():
+    from tokeneconomizer.trace.copilot import copilot_session_cwd
+    lines = ['["session.start"]', json.dumps({'type': 'session.start', 'data': {'context': {'cwd': '/repo'}}})]
+    assert copilot_session_cwd(lines) == '/repo'
+
+
+def _claude_usage_entry(mid, model, tokens=10):
+    return {'type': 'assistant', 'message': {'id': mid, 'model': model,
+                                           'usage': {'input_tokens': tokens}}}
+
+
+def test_model_selection_counts_requests_not_content_blocks(tmp_path):
+    path = tmp_path / 'session.jsonl'
+    events = [_claude_usage_entry('a', 'claude-haiku-4.5', n) for n in range(1, 6)]
+    events += [_claude_usage_entry('b', 'claude-sonnet-4.5'), _claude_usage_entry('c', 'claude-sonnet-4.5')]
+    path.write_text('\n'.join(map(json.dumps, events)))
+    usage = claude_session_usage(str(path))
+    assert usage['model'] == 'claude-sonnet-4.5'
+    assert usage['requests'] == 3
+    assert usage['input_tokens'] == 25
+
+
+def test_repeated_message_uses_latest_model_metadata(tmp_path):
+    path = tmp_path / 'session.jsonl'
+    events = [_claude_usage_entry('a', 'old-model'), _claude_usage_entry('a', 'final-model')]
+    path.write_text('\n'.join(map(json.dumps, events)))
+    usage = claude_session_usage(str(path))
+    assert usage['model'] == 'final-model'
+    assert usage['requests'] == 1
+
+
+@pytest.mark.parametrize("separator", [":", ": ", ":\t"])
+def test_codex_detection_accepts_json_whitespace(tmp_path, separator):
+    path = tmp_path / "codex.jsonl"
+    record = {"type": "item.completed", "item": {"type": "command_execution",
+              "command": "pytest -q", "aggregated_output": "1 passed", "exit_code": 0}}
+    path.write_text(json.dumps(record, separators=(",", separator)) + "\n")
+    assert trace.load_trajectory(str(path)) == [("shell", {"command": "pytest -q"}, "1 passed", True)]
+    assert trace.call_cwds(str(path)) == [None]
+    assert trace.tool_usage(str(path)) == {"shell": 1}
+
+
+def test_nested_codex_event_does_not_change_claude_transcript_format(tmp_path):
+    path = tmp_path / "claude.jsonl"
+    args = {"payload": {"type": "item.completed", "item": {"type": "agent_message"}}}
+    records = [
+        {"type": "assistant", "cwd": "/repo", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "call-1", "name": "send_event", "input": args}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "call-1", "content": "ok"}]}},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records))
+    assert trace.load_trajectory(str(path)) == [("send_event", args, "ok", True)]
+    assert trace.call_cwds(str(path)) == ["/repo"]
+    assert trace.tool_usage(str(path)) == {"send_event": 1}
+
+
+@pytest.mark.parametrize("payload", [{"type": "assistant"}, {"type": "tool_use"}])
+def test_nested_claude_data_does_not_change_copilot_format(tmp_path, payload):
+    path = tmp_path / "copilot.jsonl"
+    records = [
+        {"type": "session.start", "data": {"context": {"cwd": "/repo"}}},
+        {"type": "tool.execution_start", "data": {"toolCallId": "1", "toolName": "send_event",
+                                                     "arguments": {"payload": payload}}},
+        {"type": "tool.execution_complete", "data": {"toolCallId": "1", "success": True,
+                                                        "result": {"content": "ok"}}},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records))
+    assert trace.load_trajectory(str(path)) == [("send_event", {"payload": payload}, "ok", True)]
+    assert trace.call_cwds(str(path)) == ["/repo"]
+    assert trace.tool_usage(str(path)) == {"send_event": 1}
