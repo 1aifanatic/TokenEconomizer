@@ -83,8 +83,9 @@ NUDGE_WRITER_SYSTEM = (
 def llm_nudge_writer(digest, runner, model="agent"):
     """The sampled redirect writer. `digest` is the same leakage-safe recent-process
     string the judge reads. Returns {"text": str, "_tokens": number}: a targeted redirect and
-    the effective token cost of the call, on the judge's basis. On any failure returns
-    {"text": "", "_tokens": 0} so the caller falls back to `rules.nudge_text`."""
+    the effective token cost of the call, on the judge's basis. An empty reply keeps its
+    cost while allowing the caller to fall back to `rules.nudge_text`. No runner, or a
+    runner that raises before returning usage, produces {"text": "", "_tokens": 0}."""
     if runner is None or not digest:
         return {"text": "", "_tokens": 0}
     prompt = (NUDGE_WRITER_SYSTEM + "\n\nRecent process digest:\n" + digest
@@ -94,8 +95,6 @@ def llm_nudge_writer(digest, runner, model="agent"):
     except Exception:
         return {"text": "", "_tokens": 0}
     raw = (raw or "").strip()
-    if not raw:
-        return {"text": "", "_tokens": 0}
     # EFFECTIVE (cache-aware) cost when the runner recovered usage; else approximate on the
     # SAME model-priced basis as llm_stuck_judge.
     _tokens = _runner_effective_or_approx(runner, prompt, raw, _real)
