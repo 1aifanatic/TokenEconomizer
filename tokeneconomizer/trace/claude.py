@@ -97,7 +97,7 @@ def claude_subagent_files(transcript_path):
     if not transcript_path:
         return []
     stem = os.path.splitext(transcript_path)[0]
-    return sorted(glob.glob(os.path.join(stem, "subagents", "*.jsonl")))
+    return sorted(glob.glob(os.path.join(glob.escape(stem), "subagents", "*.jsonl")))
 
 
 def claude_session_usage(transcript_path, include_subagents=True):
