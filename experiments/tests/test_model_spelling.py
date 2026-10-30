@@ -154,3 +154,39 @@ def test_copilot_model_check_can_be_made_strict(stub_copilot):
     p = _sh('te_check_copilot_model claude-opus-4-8 high', dict(env, TE_STRICT_MODEL_ID="1"))
     assert p.returncode == 2
     assert log.read_text().split() == ["claude-opus-4-8"]                     # no retry
+
+
+@pytest.mark.parametrize("probe", ["auth", "model"])
+@pytest.mark.parametrize("status", [1, 124])
+def test_copilot_probe_failure_does_not_report_success(stub_copilot, probe, status):
+    env, _ = stub_copilot
+    with open(env["COPILOT_HOST_BIN"], "w") as f:
+        f.write(f'#!/usr/bin/env bash\necho "transport failed" >&2\nexit {status}\n')
+    call = ('te_check_copilot_auth' if probe == "auth" else
+            'te_check_copilot_model claude-sonnet-5 high')
+    p = _sh(call + '; echo "SWEEP_STARTED"', env)
+    assert p.returncode == 2
+    assert "SWEEP_STARTED" not in p.stdout
+    assert "serves" not in p.stdout
+    assert "token warm" not in p.stdout
+    assert f"exit {status}" in p.stderr
+
+
+def test_failed_alternate_model_probe_is_not_promoted(stub_copilot):
+    env, _ = stub_copilot
+    with open(env["COPILOT_HOST_BIN"], "w") as f:
+        f.write(_STUB.replace('claude-opus-4.8|claude-sonnet-5|claude-opus-5) echo "ok" ;;',
+                             'claude-opus-4.8) exit 124 ;;'))
+    p = _sh('te_check_copilot_model claude-opus-4-8 high; echo SWEEP_STARTED', env)
+    assert p.returncode == 2
+    assert "DOES serve" not in p.stderr
+    assert "SWEEP_STARTED" not in p.stdout
+
+
+def test_known_unsupported_effort_remains_a_nonfatal_probe_result(stub_copilot):
+    env, _ = stub_copilot
+    with open(env["COPILOT_HOST_BIN"], "w") as f:
+        f.write('#!/usr/bin/env bash\necho "model does not support reasoning effort"\nexit 1\n')
+    p = _sh('te_check_copilot_model claude-sonnet-5 high; echo "APPLIES=$TE_EFFORT_APPLIES"', env)
+    assert p.returncode == 0
+    assert "APPLIES=0" in p.stdout

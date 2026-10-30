@@ -319,10 +319,11 @@ te_check_copilot_auth() {
     echo "[env] routing: native Copilot (on-disk GitHub auth, not probed on a dry run)"
     return 0
   fi
-  local try
+  local try rc
   for try in 1 2; do
+    rc=0
     out="$(timeout 120 "$bin" -p "ok" --no-color --output-format json \
-             --log-level none 2>&1)"
+             --log-level none 2>&1)" || rc=$?
     if ! printf '%s' "$out" | grep -qi "No authentication information found"; then
       ok=1; break
     fi
@@ -335,7 +336,16 @@ te_check_copilot_auth() {
     exit 2
   fi
   te_copilot_refused_die "$out" "auth"
+  te_copilot_probe_exit "$rc" "auth"
   echo "[env] routing: native Copilot (on-disk GitHub auth, token warm)"
+}
+
+# An unrecognized process failure (including timeout's 124) is not a successful probe.
+te_copilot_probe_exit() {
+  if (( $1 != 0 )); then
+    echo "!! copilot $2 probe failed (exit $1); validation did not complete." >&2
+    exit 2
+  fi
 }
 
 # te_copilot_model_unserved <probe-output> — did the CLI say the model does not exist?
@@ -357,7 +367,7 @@ te_copilot_model_unserved() {
 #                              it just cannot control reasoning effort, and the rows record
 #                              effort: null so nobody later assumes it was held fixed.
 te_check_copilot_model() {
-  local model="$1" effort="$2" bin out
+  local model="$1" effort="$2" bin out rc=0
   # 'auto' (the router) never takes an effort level; the runner already records null.
   [[ -z "$model" || "$model" == "auto" ]] && return 0
   te_dryrun_skips_billed "copilot model/effort" && return 0
@@ -370,7 +380,7 @@ te_check_copilot_model() {
   [[ -x "$bin" ]] || bin="$(command -v copilot || true)"
   [[ -n "$bin" ]] || return 0                # te_check_copilot_auth already reported this
   out="$(timeout 120 "$bin" -p "ok" --no-color --log-level none \
-           --model "$model" ${effort:+--effort "$effort"} 2>&1)"
+           --model "$model" ${effort:+--effort "$effort"} 2>&1)" || rc=$?
   # Before the model verdict: a refused probe says nothing about the model, and reading it
   # as "serves" would put a spent quota on the run banner as all-green.
   te_copilot_refused_die "$out" "model"
@@ -383,7 +393,7 @@ te_check_copilot_model() {
     # the older Opus `claude-opus-4.8` while an Anthropic-wire BYOK provider takes
     # `claude-opus-4-8`. te_model_for_agent already picked the likely one; this is the
     # verified fallback for when a catalog moves. One more billed probe, only on failure.
-    local alt out2
+    local alt out2 rc2=0
     alt="$(te_model_alt_spelling "$model")"
     if [[ -n "$alt" && -z "${TE_STRICT_MODEL_ID:-}" ]]; then
       case "$model" in claude-*) ;; *) alt="" ;; esac
@@ -392,14 +402,17 @@ te_check_copilot_model() {
     fi
     if [[ -n "$alt" ]]; then
       out2="$(timeout 120 "$bin" -p "ok" --no-color --log-level none \
-                --model "$alt" ${effort:+--effort "$effort"} 2>&1)"
+                --model "$alt" ${effort:+--effort "$effort"} 2>&1)" || rc2=$?
       te_copilot_refused_die "$out2" "model"
       if ! te_copilot_model_unserved "$out2"; then
+        if ! printf '%s' "$out2" | grep -qi "does not support reasoning effort"; then
+          te_copilot_probe_exit "$rc2" "alternate model"
+        fi
         echo "[env] !! copilot does not serve '$model' but DOES serve '$alt' -- the same model," >&2
         echo "[env] !! other separator. Using '$alt' for this lane (tree tag $(te_model_tag "$model")" >&2
         echo "[env] !! either way; TE_STRICT_MODEL_ID=1 to refuse instead)."                    >&2
         MODEL="$alt"; export MODEL
-        model="$alt"; out="$out2"
+        model="$alt"; out="$out2"; rc="$rc2"
       fi
     fi
   fi
@@ -423,6 +436,7 @@ te_check_copilot_model() {
     export TE_EFFORT_APPLIES=0 TE_EFFORT_APPLIES_FOR="$model"
     return 0
   fi
+  te_copilot_probe_exit "$rc" "model"
   export TE_EFFORT_APPLIES=1 TE_EFFORT_APPLIES_FOR="$model"
   echo "[env] copilot model '$model' serves; effort=${effort:-<unset>} accepted"
 
