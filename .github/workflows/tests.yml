@@ -65,7 +65,8 @@ jobs:
       - run: npm install -g @openai/codex@0.164.0
       - run: python -m pip install pytest
       # What Codex wrote for the marketplace goes out as a notice, and on failure the summary
-      # lines as an annotation, both shown on the check run without signing in.
+      # lines and what Codex said about the hooks as annotations, all shown on the check run
+      # without signing in.
       - run: |
           set -o pipefail
           status=0
@@ -74,6 +75,8 @@ jobs:
           grep -h " wrote: " pytest.log | sort -u | sed 's/^/::notice title=codex config.toml::/' \
             || true
           if [ "$status" -ne 0 ]; then
+            grep -h '^codex: ' pytest.log | sort -u | head -20 | sed 's/%/%25/g' \
+              | sed 's/^/::warning title=codex output::/' || true
             msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \
                   | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=pytest::${msg}"

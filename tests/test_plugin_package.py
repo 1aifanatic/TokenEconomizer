@@ -66,8 +66,45 @@ def test_hook_files_run_the_launcher_on_every_event(name, host):
             assert f"--host {host}" in h["command"]
         if host == "copilot":
             assert h["command"].startswith('"${PLUGIN_ROOT}/scripts/te-hook"')
-            if event == "SessionEnd" and host == "codex":
+        if host == "codex":
+            assert h["commandWindows"] == CODEX_WINDOWS
+            if event == "SessionEnd":
                 assert h["timeout"] <= 3                  # Codex's cap for SessionEnd
+        else:
+            assert "commandWindows" not in h
+
+
+# Codex on Windows runs a hook's `commandWindows` in a native shell, cmd.exe or PowerShell, where
+# `command`'s sh syntax means nothing (0.164.0). This one reads the same in both: Python finds the
+# plugin in the environment Codex sets, so no path or variable is on the line; the code has no
+# space, double quote, `%` or `$`; and `--%`, PowerShell's stop-parsing token, keeps its `;` and
+# parentheses from PowerShell, while cmd.exe passes it on to Python as `-X --%`, which Python
+# ignores (PowerShell drops it, so there `-X` takes the `-u` instead).
+CODEX_WINDOWS = (
+    "python -X --% -u -X utf8 -c e=__import__('os').environ;r=e.get('PLUGIN_ROOT')"
+    "or(e['CLAUDE_PLUGIN_ROOT']);s=__import__('sys');"
+    "s.argv[:]=[r+'/scripts/te_bootstrap.py','hook','--host','codex'];"
+    "__import__('runpy').run_path(s.argv[0],run_name='__main__')")
+
+
+@pytest.mark.parametrize("shell", ["cmd", "powershell"])
+def test_codex_windows_command_runs_the_hook_as_either_shell_passes_it(tmp_path, shell):
+    """Each shell's reading of `commandWindows`, as the argv Python receives: cmd.exe passes the
+    line on as it is, PowerShell without its `--%`. Neither has a quote to strip."""
+    argv = CODEX_WINDOWS.split()
+    if shell == "powershell":
+        argv.remove("--%")
+    assert argv[0] == "python"
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = {"hook_event_name": "SessionStart", "session_id": "s", "cwd": str(work),
+               "source": "startup", "turn_id": "t"}
+    p = subprocess.run([sys.executable] + argv[1:], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=60,
+                       env=_hook_env(tmp_path, PLUGIN_ROOT=PLUGIN))
+    assert p.returncode == 0 and json.loads(p.stdout) == {}, p.stderr[-1000:]
+    assert list((tmp_path / "home" / "repos").glob("*/codex/sessions/s.json"))   # it ran
+    assert not os.path.exists(tmp_path / "home" / "errors.log")
 
 
 def test_marketplace_lists_the_plugin_directory():

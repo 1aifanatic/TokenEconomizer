@@ -142,6 +142,10 @@ def test_a_codex_session_runs_the_hooks_and_is_learned_from(tmp_path, model):
     # hooks, which is what the flag is for.
     out = _codex(env, "exec", "--dangerously-bypass-hook-trust", "--skip-git-repo-check",
                  "Say hi.", cwd=str(proj), timeout=180)
+    # What Codex said about the hooks, for CI to show when this fails.
+    for line in (out.stdout + out.stderr).splitlines():
+        if "hook" in line.lower():
+            print(f"codex: {line}")
     assert ("POST", "/v1/responses") in _Model.requests, (out.stdout[-1000:], out.stderr[-2000:])
 
     root = env["TOKENECONOMIZER_HOME"]
