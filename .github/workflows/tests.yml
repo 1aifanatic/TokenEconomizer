@@ -39,3 +39,46 @@ jobs:
           }
         env:
           COLUMNS: "200"
+
+  codex:
+    # The plugin installed and run by a real Codex CLI (tests/test_codex_cli.py): its install
+    # copy finds the package through the `source` Codex writes, which Codex writes differently on
+    # Windows, and a `codex exec` session runs its hooks. The model is a local stand-in, so the
+    # job needs no key and makes no model call.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      # Pinned: a new Codex can change how it installs a plugin; move it on purpose.
+      - run: npm install -g @openai/codex@0.164.0
+      - run: python -m pip install pytest
+      # What Codex wrote for the marketplace goes out as a notice, and on failure the summary
+      # lines as an annotation, both shown on the check run without signing in.
+      - run: |
+          set -o pipefail
+          status=0
+          python -m pytest tests/test_codex_cli.py -rfEsP --tb=short 2>&1 | tee pytest.log \
+            || status=$?
+          grep -h " wrote: " pytest.log | sort -u | sed 's/^/::notice title=codex config.toml::/' \
+            || true
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -E '^(FAILED|ERROR) |\.py:[0-9]+: ' pytest.log | head -60 \
+                  | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=pytest::${msg}"
+          fi
+          exit $status
+        env:
+          TE_CODEX_E2E: "1"
+          COLUMNS: "200"
