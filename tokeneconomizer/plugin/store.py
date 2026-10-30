@@ -68,9 +68,15 @@ class Store:
         target = self.path(name)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = f"{target}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, indent=2, sort_keys=True)
-        os.replace(tmp, target)
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh, indent=2, sort_keys=True)
+            os.replace(tmp, target)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
         return target
 
     def append(self, name, record):
