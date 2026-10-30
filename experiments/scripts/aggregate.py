@@ -381,7 +381,12 @@ def main():
     # that runs one arm per invocation (the Codex lane) is the easy way to do it. So a
     # subset write to the canonical path is refused rather than warned about -- pass --out
     # to put the subset somewhere of its own, or drop --arms and aggregate the tree.
-    if args.arms and args.out is None:
+    canonical = os.path.join(root, "index")
+    writes_canonical = (os.path.normcase(os.path.realpath(out))
+                        == os.path.normcase(os.path.realpath(canonical)))
+    if os.path.exists(out) and os.path.exists(canonical):
+        writes_canonical = writes_canonical or os.path.samefile(out, canonical)
+    if args.arms and writes_canonical:
         dropped = [a for a in present if a not in arms]
         if dropped:
             ap.error(
