@@ -426,9 +426,12 @@ def _apply_codex(repo_root, capabilities, store):
     for cap in capabilities:
         if cap not in CODEX_TOGGLES or cap in applied(store, path):
             continue
+        changed = False
         for table, key, value in CODEX_TOGGLES[cap]:
-            text, _ = _toml_insert(text, table, key, value, f"{MARK}:{cap}")
-        added.append(cap)
+            text, inserted = _toml_insert(text, table, key, value, f"{MARK}:{cap}")
+            changed = changed or inserted
+        if changed:
+            added.append(cap)
     if not added:
         return []
     if not _toml_valid(text):

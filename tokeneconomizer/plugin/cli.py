@@ -326,7 +326,7 @@ def cmd_toolprune(args):
             return 1
         # Named by the person: no longer one they gave back, whatever `restore` said before.
         denylist.set_kept(ctx.store, ctx.repo.root, host, remove=tools)
-        print(f"added: {', '.join(added) or '(already present)'}\n"
+        print(f"added: {', '.join(added) or '(no new entries)'}\n"
               f"in {denylist.settings_path(ctx.repo.root, host)} -- takes effect from the next "
               f"session.")
         if host == "copilot" and added:
