@@ -28,15 +28,22 @@ def strip_rtk_prefix(command):
     return RTK_PREFIX_RE.sub("", (command or "").lstrip(), count=1)
 
 
-def _is_codex_exec(lines):
+def _transcript_format(lines):
+    """Identify event envelopes without interpreting tool payloads as format markers."""
+    kind = "copilot"
     for line in lines:
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("type") == "item.completed":
-            return True
-    return False
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "item.completed":
+            return "codex"
+        if (event.get("type", "assistant") in ("assistant", "user")
+                and isinstance(event.get("message"), dict)):
+            kind = "claude"
+    return kind
 
 
 def load_trajectory(path):
@@ -47,10 +54,10 @@ def load_trajectory(path):
     if not os.path.exists(path):
         return []
     lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
-    if _is_codex_exec(lines):
+    kind = _transcript_format(lines)
+    if kind == "codex":
         return codex_exec_calls(lines)
-    if any('"tool_use"' in line or '"type": "assistant"' in line or '"type":"assistant"' in line
-           for line in lines):
+    if kind == "claude":
         return [c[:4] for c in claude_calls(lines)]
     return copilot_event_calls(lines)
 
@@ -66,7 +73,7 @@ def call_cwds(path):
     if not calls or not os.path.exists(path):
         return [None] * len(calls)
     lines = [l.strip() for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
-    if _is_codex_exec(lines):
+    if _transcript_format(lines) == "codex":
         return [None] * len(calls)
     cwds = [c[4] for c in claude_calls(lines)]
     if len(cwds) == len(calls):

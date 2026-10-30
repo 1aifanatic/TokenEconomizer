@@ -30,3 +30,19 @@ def test_nested_codex_event_does_not_change_claude_transcript_format(tmp_path):
     assert trace.load_trajectory(str(path)) == [("send_event", args, "ok", True)]
     assert trace.call_cwds(str(path)) == ["/repo"]
     assert trace.tool_usage(str(path)) == {"send_event": 1}
+
+
+@pytest.mark.parametrize("payload", [{"type": "assistant"}, {"type": "tool_use"}])
+def test_nested_claude_data_does_not_change_copilot_format(tmp_path, payload):
+    path = tmp_path / "copilot.jsonl"
+    records = [
+        {"type": "session.start", "data": {"context": {"cwd": "/repo"}}},
+        {"type": "tool.execution_start", "data": {"toolCallId": "1", "toolName": "send_event",
+                                                     "arguments": {"payload": payload}}},
+        {"type": "tool.execution_complete", "data": {"toolCallId": "1", "success": True,
+                                                        "result": {"content": "ok"}}},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records))
+    assert trace.load_trajectory(str(path)) == [("send_event", {"payload": payload}, "ok", True)]
+    assert trace.call_cwds(str(path)) == ["/repo"]
+    assert trace.tool_usage(str(path)) == {"send_event": 1}
