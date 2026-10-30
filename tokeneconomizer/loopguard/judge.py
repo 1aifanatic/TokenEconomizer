@@ -8,6 +8,7 @@ pattern it sees. Each returns its effective-token cost so the caller can charge 
 session's ledger, and falls back to the free path on any failure.
 """
 import json
+import math
 import re
 
 from ..pricing import runner_effective_or_approx as _runner_effective_or_approx
@@ -54,10 +55,13 @@ def llm_stuck_judge(digest, runner, model="agent"):
     if m:
         try:
             obj = json.loads(m.group(0))
-            verdict["stuck"] = (bool(obj["stuck"]) if "stuck" in obj
-                                and obj["stuck"] is not None else None)
-            verdict["confidence"] = max(0.0, min(1.0, float(obj.get("confidence", 0) or 0)))
-            verdict["reason"] = str(obj.get("reason", ""))[:160]
+            stuck, confidence = obj.get("stuck"), obj.get("confidence")
+            if not isinstance(stuck, bool) or type(confidence) not in (int, float):
+                return verdict
+            if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                return verdict
+            verdict.update(stuck=stuck, confidence=float(confidence),
+                           reason=str(obj.get("reason", ""))[:160])
         except Exception:
             pass
     return verdict
