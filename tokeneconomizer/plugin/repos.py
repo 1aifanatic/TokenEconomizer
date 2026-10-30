@@ -345,7 +345,7 @@ def _locks(stores, timeout):
         yield ok
 
 
-def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
+def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S, *, locks_held=False):
     """Move sessions `sids` of one agent's state `src` into `dst` (both Stores).
 
     Learned state is not additive, so one side keeps its own: with `whole`, `src`'s if it
@@ -353,7 +353,8 @@ def _merge_host(src, dst, sids, whole, label="", timeout=LOCK_WAIT_S):
     surviving learned state never saw are unmarked as folded, so the destination's next session
     start folds them again from their logs; one whose log is gone keeps its ledger record and
     stays folded. Returns {"moved", "refold"}, or None when a lock could not be taken."""
-    with _locks((src, dst), timeout) as ok:
+    lock = contextlib.nullcontext(True) if locks_held else _locks((src, dst), timeout)
+    with lock as ok:
         if not ok:
             return None
         s_folded, d_folded = src.read("folded.json") or {}, dst.read("folded.json") or {}
@@ -434,12 +435,16 @@ def merge_whole(root, src_key, dst_key, label="", timeout=LOCK_WAIT_S):
     src_dir, dst_dir = _repo_dir(root, src_key), _repo_dir(root, dst_key)
     label = label or dir_label(dst_dir) or dir_label(src_dir)
     out = {}
-    for h in _host_dirs(src_dir):
-        src, dst = Store(os.path.join(src_dir, h)), Store(os.path.join(dst_dir, h))
-        r = _merge_host(src, dst, list(_sessions(src)), whole=True, label=label, timeout=timeout)
-        if r is None:
+    pairs = [(h, Store(os.path.join(src_dir, h)), Store(os.path.join(dst_dir, h)))
+             for h in _host_dirs(src_dir)]
+    # A later busy host must not leave earlier hosts copied but still present in the source:
+    # retrying would append their envelope samples and events a second time.
+    with _locks([st for _, src, dst in pairs for st in (src, dst)], timeout) as ok:
+        if not ok:
             return None
-        out[h] = r
+        for h, src, dst in pairs:
+            out[h] = _merge_host(src, dst, list(_sessions(src)), whole=True, label=label,
+                                 timeout=timeout, locks_held=True)
     for name in ("config.json",):           # a repository's own settings, if it had none
         if os.path.exists(os.path.join(src_dir, name)) and \
                 not os.path.exists(os.path.join(dst_dir, name)):
