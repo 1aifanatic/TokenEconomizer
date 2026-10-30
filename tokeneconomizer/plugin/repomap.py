@@ -155,10 +155,11 @@ def refresh(ctx):
     """Make the cached map for the current commit. Returns the new state."""
     t0 = time.time()
     commit = head_commit(ctx.repo.root)
+    prior = read_state(ctx)
     python = find_python(ctx)
     if not python:
         named = ctx.config.repomap_python
-        state = dict(read_state(ctx), commit=commit, updated=time.time(), error=(
+        state = dict(prior, updated=time.time(), error=(
             f"repomap_python {named} cannot import aider" if named else
             "no Python with aider found (install aider-chat, or set repomap_python)"))
         _write_state(ctx, state)
@@ -167,9 +168,9 @@ def refresh(ctx):
     state = {"commit": commit, "python": python, "map": text, "chars": len(text),
              "tokens_budget": ctx.config.repomap_tokens, "secs": round(time.time() - t0, 1),
              "error": err or None, "updated": time.time()}
-    if not text and read_state(ctx).get("map"):
-        prior = read_state(ctx)
-        state.update(map=prior["map"], chars=len(prior["map"]), commit=prior.get("commit"))
+    if not text and prior.get("map"):
+        for key in ("map", "chars", "commit", "tokens_budget", "python"):
+            state[key] = prior.get(key)
     _write_state(ctx, state)
     return state
 
@@ -211,6 +212,9 @@ def for_prompt(ctx, prompt):
     be made in time, else the cached one."""
     idents = prompt_idents(prompt)
     python = read_state(ctx).get("python")
+    if ctx.config.repomap_python and python != ctx.config.repomap_python:
+        # Wait for a successful refresh with the chosen interpreter; do not run the old one.
+        python = None
     if idents and python:
         text, err = generate(ctx, python, idents, timeout=ctx.config.repomap_timeout)
         if text.strip():
