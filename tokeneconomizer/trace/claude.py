@@ -29,6 +29,8 @@ def claude_calls(lines):
     for line in lines:
         try:
             ev = json.loads(line)
+            if not isinstance(ev, dict):
+                continue
         except Exception:
             continue
         if ev.get("type", "assistant") not in CONVERSATION:
@@ -85,6 +87,8 @@ def claude_prompt_count(transcript_path):
     for line in _lines(transcript_path):
         try:
             ev = json.loads(line)
+            if not isinstance(ev, dict):
+                continue
         except ValueError:
             continue
         n += isinstance(ev, dict) and _is_prompt(ev)
@@ -114,6 +118,8 @@ def claude_session_usage(transcript_path, include_subagents=True):
                 continue
             try:
                 ev = json.loads(line)
+                if not isinstance(ev, dict):
+                    continue
             except ValueError:
                 continue
             if ev.get("type") != "assistant":

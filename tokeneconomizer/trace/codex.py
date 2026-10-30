@@ -44,6 +44,8 @@ def codex_exec_calls(lines):
     for line in lines:
         try:
             ev = json.loads(line)
+            if not isinstance(ev, dict):
+                continue
         except Exception:
             continue
         if ev.get("type") != "item.completed":
@@ -146,6 +148,8 @@ def codex_rollout_to_exec(rollout_path, out_path):
         for line in _lines(rollout_path):
             try:
                 ev = json.loads(line)
+                if not isinstance(ev, dict):
+                    continue
             except ValueError:
                 continue
             payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
@@ -182,6 +186,8 @@ def codex_capability_trace(rollout_path, out_path):
                 continue
             try:
                 ev = json.loads(line)
+                if not isinstance(ev, dict):
+                    continue
             except ValueError:
                 continue
             p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
@@ -224,6 +230,8 @@ def codex_session_meta(rollout_path):
             continue
         try:
             ev = json.loads(line)
+            if not isinstance(ev, dict):
+                continue
         except ValueError:
             continue
         p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
@@ -247,6 +255,8 @@ def codex_session_usage(rollout_path):
             continue
         try:
             ev = json.loads(line)
+            if not isinstance(ev, dict):
+                continue
         except ValueError:
             continue
         p = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
