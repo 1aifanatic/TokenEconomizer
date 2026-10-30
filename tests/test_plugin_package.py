@@ -587,3 +587,54 @@ def test_build_rejects_source_overlap_before_mutation(tmp_path, monkeypatch, suf
     with pytest.raises(ValueError, match="overlap"):
         build_plugin.build(str(repo / suffix))
     assert sentinel.read_text() == "keep"
+
+
+@pytest.mark.parametrize("link_kind", ["directory", "manifest"])
+def test_build_rejects_marketplace_symlink_to_source_before_mutation(tmp_path, monkeypatch, link_kind):
+    repo = tmp_path / "repo"
+    for name in ("plugin", "tokeneconomizer", ".claude-plugin"):
+        (repo / name).mkdir(parents=True)
+    source = repo / ".claude-plugin" / "marketplace.json"
+    original = '{"plugins": [{"name": "tokeneconomizer", "source": "./plugin"}]}'
+    source.write_text(original)
+    out = tmp_path / "bundle"
+    (out / "tokeneconomizer").mkdir(parents=True)
+    sentinel = out / "tokeneconomizer" / "keep.txt"
+    sentinel.write_text("previous bundle")
+    try:
+        if link_kind == "directory":
+            (out / ".claude-plugin").symlink_to(source.parent, target_is_directory=True)
+        else:
+            (out / ".claude-plugin").mkdir()
+            (out / ".claude-plugin" / "marketplace.json").symlink_to(source)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    monkeypatch.setattr(build_plugin, "REPO", str(repo))
+    with pytest.raises(ValueError, match="overlap"):
+        build_plugin.build(str(out))
+    assert source.read_text() == original
+    assert sentinel.read_text() == "previous bundle"
+
+
+def test_build_allows_output_on_a_different_windows_drive(tmp_path, monkeypatch):
+    import ntpath
+
+    repo = tmp_path / "repo"
+    out = tmp_path / "bundle"
+    for name in ("plugin", "tokeneconomizer", ".claude-plugin"):
+        (repo / name).mkdir(parents=True)
+    (repo / ".claude-plugin" / "marketplace.json").write_text('{"plugins": []}')
+    # Exercise the real Windows commonpath behavior while keeping disk I/O portable.
+    calls = []
+    def windows_commonpath(paths):
+        calls.append(paths)
+        translated = [p.replace(str(repo), "C:/repo").replace(str(out), "D:/bundle")
+                      for p in paths]
+        return ntpath.commonpath(translated)
+
+    monkeypatch.setattr(build_plugin, "REPO", str(repo))
+    monkeypatch.setattr(build_plugin.os.path, "commonpath", windows_commonpath)
+    assert build_plugin.build(str(out)) == str(out / "tokeneconomizer")
+    assert calls
+    assert (out / "tokeneconomizer" / "lib" / "tokeneconomizer").is_dir()
+    assert json.loads((out / ".claude-plugin" / "marketplace.json").read_text()) == {"plugins": []}
