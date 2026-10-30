@@ -60,6 +60,7 @@ a warning recorded in the result rather than raised: a typo in a config file mus
 agent's hooks.
 """
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, field, fields
 
@@ -217,7 +218,7 @@ class LiveConfig:
                     raise ValueError(f"must be >= {lo}")
             else:
                 v = str(value).strip()
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: {key}={value!r} rejected ({e})")
             return False
         choices = self._CHOICES.get(key)
@@ -237,8 +238,10 @@ class LiveConfig:
         try:
             if isinstance(value, bool):
                 raise ValueError("not a number")
+            if not math.isfinite(float(value)):
+                raise ValueError("must be finite")
             v = kind(float(value)) if kind is int and float(value).is_integer() else kind(value)
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: loopguard.{name}={value!r} rejected ({e})")
             return False
         if (lo is not None and v < lo) or (hi is not None and v > hi):
