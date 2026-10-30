@@ -1377,6 +1377,31 @@ def test_copilot_trust_is_read_from_its_config(tmp_path, repo):
     assert denylist.copilot_folder_trusted(repo, env) is False
 
 
+@pytest.mark.parametrize("doc", [
+    [], None, "settings", {"trustedFolders": "/not-the-repo"},
+    {"trustedFolders": 123}, {"trustedFolders": {"/": True}},
+    {"trustedFolders": ["/", 123]}, {"trustedFolders": None},
+])
+def test_copilot_trust_rejects_malformed_settings(tmp_path, doc):
+    home = tmp_path / "copilot-home"
+    home.mkdir()
+    config = home / "config.json"
+    original = json.dumps(doc)
+    config.write_text(original)
+    env = {"COPILOT_HOME": str(home)}
+    assert denylist.copilot_trusted_folders(env) is None
+    assert denylist.copilot_folder_trusted(str(tmp_path / "project"), env) is None
+    assert config.read_text() == original
+
+
+@pytest.mark.parametrize("doc", [{}, {"trustedFolders": []}])
+def test_copilot_empty_trust_list_is_untrusted(tmp_path, doc):
+    (tmp_path / "config.json").write_text(json.dumps(doc))
+    env = {"COPILOT_HOME": str(tmp_path)}
+    assert denylist.copilot_trusted_folders(env) == []
+    assert denylist.copilot_folder_trusted(str(tmp_path / "project"), env) is False
+
+
 # ---- a failed call reaches the guard on Claude Code -------------------------------------------
 # Claude Code 2.1.299 reports a failed call -- a non-zero exit, a refused command -- only as
 # PostToolUseFailure, with an `error` string and no `tool_response` (payload as captured). Before

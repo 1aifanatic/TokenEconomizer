@@ -493,7 +493,14 @@ def copilot_trusted_folders(env=None):
                                    if not ln.lstrip().startswith("//")))
     except (OSError, ValueError):
         return None
-    return [f for f in (doc.get("trustedFolders") or []) if isinstance(f, str)]
+    if not isinstance(doc, dict):
+        return None
+    folders = doc.get("trustedFolders", [])
+    # A string is iterable too: treating its characters as paths can turn its leading
+    # slash into a claim that every repository is trusted. Malformed settings are unknown.
+    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+        return None
+    return folders
 
 
 def copilot_folder_trusted(path, env=None):
