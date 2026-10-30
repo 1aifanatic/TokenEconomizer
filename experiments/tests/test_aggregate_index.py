@@ -122,3 +122,34 @@ def test_superseded_run_dirs_are_not_double_counted(tree):
     with open(os.path.join(tree, "index", "all_rows.csv")) as f:
         kept = [r for r in csv.DictReader(f) if r["arm"] == "repomap"]
     assert [r["num_turns"] for r in kept] == ["99"]
+
+
+def test_unreached_webbench_tasks_are_not_graded_misses(tmp_path):
+    import csv
+
+    root = str(tmp_path / "webbench")
+    _row(root, "baseline", "project_s0", "20260916T000000Z", "task-1",
+         domain="webbench", resolved=True, resolved_p1=True, resolved_p2=True,
+         webbench_attempts=1)
+    _row(root, "baseline", "project_s0", "20260916T000100Z", "task-2",
+         domain="webbench", resolved=False, resolved_p1=False, resolved_p2=False,
+         webbench_attempts=2)
+    # This is the shape WebBenchRunner emits after its sequential stream stops.
+    _row(root, "baseline", "project_s0", "20260916T000200Z", "task-3",
+         domain="webbench", resolved=False, stream_broken=True, unreached=True,
+         resolved_p1=None, resolved_p2=None, webbench_attempts=0,
+         webbench_attempt_results=[], tokens_total=0, input_tokens=0,
+         output_tokens=0, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    _run([root])
+    with open(os.path.join(root, "index", "summary_by_cell.csv")) as f:
+        summary, = csv.DictReader(f)
+    assert summary["n_tasks"] == "3"
+    assert summary["n_graded"] == "2"
+    assert summary["n_not_graded"] == "1"
+    assert summary["resolve_rate"] == "0.5"
+    assert summary["n_attempted"] == "2"
+    with open(os.path.join(root, "index", "all_rows.csv")) as f:
+        rows = {r["instance"]: r for r in csv.DictReader(f)}
+    assert rows["task-2"]["not_graded"] == "False"
+    assert rows["task-3"]["not_graded"] == "True"
+    assert rows["task-3"]["not_graded_reason"] == "unreached"

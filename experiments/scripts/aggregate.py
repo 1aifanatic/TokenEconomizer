@@ -155,6 +155,10 @@ def not_graded(d):
     is precisely the trap: an ungraded row read as a graded miss depresses a resolve rate
     with a task nobody evaluated. Counted separately and excluded from the denominator.
     """
+    # A stopped sequential Web-Bench stream emits placeholder rows for later tasks.
+    # Their resolved=False is not a verdict: no attempt or evaluation took place.
+    if d.get("unreached") is True:
+        return True, "unreached"
     rep = d.get("eval_report") or {}
     if isinstance(rep, dict) and rep.get("eval_exec_failed"):
         return True, (rep.get("eval_exec_error")
@@ -460,7 +464,7 @@ def main():
     if never:
         by_arm = collections.Counter(r["arm"] for r in never)
         print(f"!! not_graded: {len(never)} of {len(rows)} rows were NEVER GRADED -- their "
-              f"eval script did not run, so `resolved` is an absence, not a miss. They are "
+              f"task was not reached or evaluation did not run, so `resolved` is an absence, not a miss. They are "
               f"excluded from n_graded/resolve_rate; re-run those cells")
         for arm, k in sorted(by_arm.items()):
             print(f"     {arm}: {k}")
