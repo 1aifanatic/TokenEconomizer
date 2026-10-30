@@ -1,0 +1,68 @@
+name: submission limit
+
+# Paces the accounts listed in the job's `if` below: one new pull request or issue per 24 hours,
+# counting ones this closed, and at most three pull requests open at once. One past either is
+# closed with a comment saying why. Everyone else's submissions, and a maintainer reopening a
+# listed account's, skip the job.
+#
+# pull_request_target, so that the token can close a fork's pull request: the job reads only the
+# event's metadata and never checks out or runs the pull request's code.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  limit:
+    # The paced logins, each between commas: ',one,two,'.
+    if: >-
+      contains(',1aifanatic,',
+               format(',{0},', github.event.pull_request.user.login || github.event.issue.user.login)) &&
+      github.event.sender.login == (github.event.pull_request.user.login || github.event.issue.user.login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+          NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          KIND: ${{ github.event.pull_request && 'pr' || 'issue' }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          since=$(( $(date -u +%s) - 86400 ))
+          # The issues API lists pull requests too.
+          gh api "repos/$REPO/issues?creator=$AUTHOR&state=all&sort=created&direction=desc&per_page=100" > all.json
+          gh api "repos/$REPO/issues?creator=$AUTHOR&state=open&per_page=100" > open.json
+          # Others opened in the last 24 hours: on `opened` only earlier ones, so the first of a
+          # burst stays open.
+          prior=$(jq -r --argjson n "$NUMBER" --argjson since "$since" --arg action "$ACTION" '
+            [.[] | select(.number != $n and (.created_at | fromdateiso8601) >= $since
+                          and ($action == "reopened" or .number < $n)) | "#\(.number)"]
+            | join(", ")' all.json)
+          open_prs=$(jq -r --argjson n "$NUMBER" '
+            [.[] | select(.pull_request and .number != $n) | "#\(.number)"] | join(", ")' open.json)
+          open_count=$(jq --argjson n "$NUMBER" '[.[] | select(.pull_request and .number != $n)] | length' open.json)
+          if [ -n "$prior" ]; then
+            next=$(jq -r --argjson since "$since" '
+              [.[] | .created_at | fromdateiso8601 | select(. >= $since)] | max + 86400 | todate' all.json)
+            reason="for now this repository takes one new pull request or issue per 24 hours from this account, and $prior came in the 24 hours before this. Please open the next one after $next; one opened before then is closed too."
+          elif [ "$KIND" = pr ] && [ "$open_count" -ge 3 ]; then
+            reason="for now this repository takes at most three open pull requests at a time from this account, and $open_prs are open. Please open this again once one of them is merged or closed."
+          else
+            echo "#$NUMBER is within the limit"
+            exit 0
+          fi
+          gh api "repos/$REPO/issues/$NUMBER/comments" -f body="Closed automatically: $reason" > /dev/null
+          if [ "$KIND" = pr ]; then
+            gh api -X PATCH "repos/$REPO/pulls/$NUMBER" -f state=closed > /dev/null
+          else
+            gh api -X PATCH "repos/$REPO/issues/$NUMBER" -f state=closed -f state_reason=not_planned > /dev/null
+          fi
+          echo "closed #$NUMBER: $reason"
