@@ -158,7 +158,32 @@ def _git_common_dir(root):
 
 
 _REMOTE_RE = re.compile(r'^\s*\[remote\s+"([^"]+)"\]\s*$')
-_URL_RE = re.compile(r"^\s*url\s*=\s*(\S+)\s*$")
+_URL_RE = re.compile(r"^\s*url\s*=\s*(.*?)\s*$")
+
+
+def _git_config_value(value):
+    """Decode a single-line Git config value, preserving quoted whitespace and escapes."""
+    chars, quoted, escaped = [], False, False
+    escapes = {"n": "\n", "t": "\t", "b": "\b", "\\": "\\", '"': '"'}
+    for char in value:
+        if escaped:
+            if char not in escapes:
+                return None
+            chars.append((escapes[char], True))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif not quoted and char in "#;":
+            break
+        else:
+            chars.append((char, quoted))
+    if quoted or escaped:
+        return None
+    while chars and not chars[-1][1] and chars[-1][0].isspace():
+        chars.pop()
+    return "".join(char for char, _ in chars)
 
 
 def origin_url(root):
@@ -181,7 +206,9 @@ def origin_url(root):
             continue
         m = _URL_RE.match(line)
         if current and m and current not in remotes:
-            remotes[current] = m.group(1)
+            value = _git_config_value(m.group(1))
+            if value is not None:
+                remotes[current] = value
     return remotes.get("origin") or (next(iter(remotes.values())) if remotes else None)
 
 
