@@ -525,14 +525,15 @@ def codex_project_trusted(repo_root, env=None):
     want = {os.path.abspath(repo_root), os.path.realpath(repo_root)}
     current = None
     for line in text.splitlines():
-        m = re.match(r'^\s*\[projects\.(?:"([^"]+)"|\'([^\']+)\')\]\s*$', line)
+        m = re.match(r'^\s*\[projects\.(?:"([^"]+)"|\'([^\']+)\')\]\s*(?:#.*)?$', line)
         if m:
             current = m.group(1) or m.group(2)
             continue
         if _ANY_HEADER_RE.match(line):
             current = None
             continue
-        if current in want and re.match(r'^\s*trust_level\s*=\s*"trusted"', line):
+        if current in want and re.match(
+                r"^\s*trust_level\s*=\s*(?:\"trusted\"|'trusted')\s*(?:#.*)?$", line):
             return True
     return False
 
