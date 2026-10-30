@@ -769,8 +769,18 @@ def _recent_host(cwd):
     for name in hosts.HOSTS:
         d = repo_state_dir(repo, name)
         if os.path.isdir(d):
-            seen[name] = max([os.path.getmtime(d)] + [os.path.getmtime(os.path.join(d, f))
-                                                      for f in os.listdir(d)])
+            try:
+                latest = os.path.getmtime(d)
+                entries = os.listdir(d)
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    latest = max(latest, os.path.getmtime(os.path.join(d, entry)))
+                except OSError:
+                    # A background writer may have renamed or removed a temporary file.
+                    continue
+            seen[name] = latest
     return max(seen, key=seen.get) if seen else None
 
 
