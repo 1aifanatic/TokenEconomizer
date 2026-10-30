@@ -241,11 +241,25 @@ def _json_list_keys(host):
     return ("permissions", "deny") if host == "claude" else (None, "disabledMcpServers")
 
 
+
+def _validate_json_list(data, host, path):
+    """Refuse malformed nested settings before editing them or updating ownership."""
+    outer, key = _json_list_keys(host)
+    holder = data.get(outer, {}) if outer else data
+    if not isinstance(holder, dict):
+        raise RuntimeError(f"refusing to edit {path}: {outer} must be a JSON object")
+    entries = holder.get(key, [])
+    if not isinstance(entries, list) or any(not isinstance(item, str) for item in entries):
+        field = f"{outer}.{key}" if outer else key
+        raise RuntimeError(f"refusing to edit {path}: {field} must be a list of strings")
+
+
 def _apply_json_list(repo_root, items, store, host):
     path = settings_path(repo_root, host)
     _guard_target(repo_root, path)
     created = not os.path.exists(path)
     data = _read_settings(path)
+    _validate_json_list(data, host, path)
     outer, key = _json_list_keys(host)
     holder = data.setdefault(outer, {}) if outer else data
     lst = holder.setdefault(key, [])
@@ -268,6 +282,7 @@ def _restore_json_list(repo_root, store, items, host):
     path = settings_path(repo_root, host)
     _guard_target(repo_root, path)
     data = _read_settings(path)
+    _validate_json_list(data, host, path)
     outer, key = _json_list_keys(host)
     holder = (data.get(outer) or {}) if outer else data
     lst = holder.get(key) or []
