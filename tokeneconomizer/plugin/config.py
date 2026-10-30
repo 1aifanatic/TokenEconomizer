@@ -322,6 +322,14 @@ def _drop_old_names(current, key):
             current.pop(old, None)
 
 
+def _drop_flat_thresholds(current, names=None):
+    """Remove dotted threshold spellings that would otherwise survive a set or unset."""
+    for key in list(current):
+        name = _threshold_name(key)
+        if name is not None and (names is None or name in names):
+            current.pop(key)
+
+
 def write_config(path, updates):
     """Merge `updates` into the JSON config at `path` (validating each key first), under the
     settings' current names. A `loopguard.<name>` key lands in `loopguard_thresholds`."""
@@ -344,9 +352,11 @@ def write_config(path, updates):
         name = _threshold_name(k)
         key = canonical(k)
         if name is not None:
+            _drop_flat_thresholds(current, {name})
             current.setdefault("loopguard_thresholds", {})[name] = \
                 probe.loopguard_thresholds[name]
         elif key == "loopguard_thresholds":
+            _drop_flat_thresholds(current, probe.loopguard_thresholds)
             current.setdefault("loopguard_thresholds", {}).update(probe.loopguard_thresholds)
         else:
             _drop_old_names(current, key)
@@ -367,12 +377,15 @@ def unset_config(path, keys):
     for k in keys:
         name = _threshold_name(k)
         if name is not None:
+            _drop_flat_thresholds(current, {name})
             for table in ("loopguard_thresholds", "spiral_thresholds"):
                 (current.get(table) or {}).pop(name, None)
                 if not current.get(table):
                     current.pop(table, None)
         else:
             key = canonical(k)
+            if key == "loopguard_thresholds":
+                _drop_flat_thresholds(current)
             current.pop(key, None)
             _drop_old_names(current, key)
     _write(path, current)
