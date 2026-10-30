@@ -156,7 +156,8 @@ def _exclude_from_git(repo_root, rel=SETTINGS_REL):
     entry = "/" + rel.replace(os.sep, "/")
     try:
         existing = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-        if entry in existing.split():
+        # Ignore rules occupy complete lines; a path mentioned in a comment is not one.
+        if entry in existing.splitlines():
             return True
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
