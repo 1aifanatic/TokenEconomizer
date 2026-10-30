@@ -6,6 +6,7 @@ tuples, so a mechanism never needs to know which agent wrote the file. A Codex r
 session are converted into one of these first (`codex.codex_rollout_to_exec`,
 `pi.pi_session_to_claude`).
 """
+import json
 import os
 import re
 
@@ -28,7 +29,14 @@ def strip_rtk_prefix(command):
 
 
 def _is_codex_exec(lines):
-    return any('"type":"item.completed"' in line.replace(" ", "") for line in lines)
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "item.completed":
+            return True
+    return False
 
 
 def load_trajectory(path):
