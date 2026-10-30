@@ -206,8 +206,10 @@ class LiveConfig:
                 items = value if isinstance(value, list) else str(value).split(",")
                 v = [str(x).strip() for x in items if str(x).strip()]
             elif isinstance(cur, bool):
-                v = value if isinstance(value, bool) else str(value).strip().lower() in (
-                    "1", "true", "yes", "on")
+                word = str(value).strip().lower()
+                if word not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+                    raise ValueError("must be a boolean (on/off, true/false, yes/no, 1/0)")
+                v = word in ("1", "true", "yes", "on")
             elif isinstance(cur, int):
                 v = int(value)
                 lo = self._MIN.get(key, 1)
