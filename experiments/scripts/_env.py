@@ -12,6 +12,7 @@ Contract (matches scripts/launch/_env.sh so both loaders agree):
     ``$VAR`` interpolation, no command substitution;
   * an existing ``os.environ`` entry always WINS (``override=False``), so a one-off
     ``FOO=bar python scripts/run_experiment.py ...`` still overrides the file;
+  * repeated keys use the last nonempty assignment in the file;
   * an empty value (``KEY=``) is treated as unset and skipped, so the committed
     ``.env.example`` placeholders never mask a real shell export.
 

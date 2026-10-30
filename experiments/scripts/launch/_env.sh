@@ -17,7 +17,8 @@ te_env_file() {
 te_load_env() {
   local file; file="$(te_env_file)"
   [[ -f "$file" ]] || return 0
-  local line key val
+  local line key val te_env_count=0 te_env_index
+  local -a te_env_keys=() te_env_values=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line#"${line%%[![:space:]]*}"}"                 # ltrim
     [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
@@ -27,9 +28,17 @@ te_load_env() {
     val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
     [[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:${#val}-2}"
     [[ -z "$key" || -z "$val" ]] && continue                # KEY= means "not set here"
-    [[ -n "${!key:-}" ]] && continue                        # shell export wins
-    export "$key=$val"
+    te_env_keys[te_env_count]="$key"
+    te_env_values[te_env_count]="$val"
+    te_env_count=$((te_env_count + 1))
   done < "$file"
+  # Apply the last nonempty assignment first, matching the Python loader. Existing
+  # exports still win; earlier duplicates then see the value already applied here.
+  for ((te_env_index=te_env_count-1; te_env_index>=0; te_env_index--)); do
+    key="${te_env_keys[te_env_index]}"; val="${te_env_values[te_env_index]}"
+    [[ -n "${!key:-}" ]] && continue
+    export "$key=$val"
+  done
 }
 
 # te_dryrun_skips_billed <what> — true when this is a DRYRUN, so a BILLED probe must not run.
