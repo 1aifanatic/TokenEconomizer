@@ -7,6 +7,9 @@ wraps exec-stream item fields in PascalCase `event_msg/item_completed` records.
 """
 import json
 import os
+from contextlib import contextmanager
+from tokeneconomizer.loopguard.envelope import record_turn
+from tokeneconomizer.plugin import store
 import subprocess
 
 import pytest
@@ -1155,3 +1158,34 @@ def test_codex_exec_and_copilot_p_are_told_from_their_terminal_uis(tmp_path, mon
     assert cp.headless({})
     assert cp.stop_hint(True) == "Press Ctrl+C to end the run."
     assert cp.stop_hint(False) == "Press Esc twice to interrupt it."
+
+
+def test_record_turn_does_not_write_without_lock(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    original = {"resolved_turns": [12], "resolved_snaps": []}
+    store.write("envelope.json", original)
+    @contextmanager
+    def unavailable(*args, **kwargs):
+        yield False
+    monkeypatch.setattr(store, "locked", unavailable)
+    tracker = record_turn(store, object())
+    assert tracker.resolved_turns == [12]
+    assert store.read("envelope.json") == original
+
+
+@pytest.mark.parametrize('wall_step', [-100, 100])
+def test_lock_timeout_tracks_elapsed_time_despite_wall_clock_adjustments(tmp_path, monkeypatch, wall_step):
+    elapsed = [0.0]
+    monkeypatch.setattr(store.time, 'time', lambda: 1000 + wall_step * elapsed[0])
+    monkeypatch.setattr(store.time, 'monotonic', lambda: elapsed[0])
+    def sleep(seconds):
+        elapsed[0] += seconds
+        if elapsed[0] > 1:
+            raise AssertionError('timeout did not expire after one second')
+    monkeypatch.setattr(store.time, 'sleep', sleep)
+    def busy(fh):
+        raise OSError('lock is held')
+    monkeypatch.setattr(store, '_try_lock', busy)
+    with store.Store(tmp_path).locked(timeout=0.2) as acquired:
+        assert acquired is False
+    assert 0.2 <= elapsed[0] <= 0.25
