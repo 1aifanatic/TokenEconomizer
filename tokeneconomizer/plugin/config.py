@@ -60,9 +60,24 @@ a warning recorded in the result rather than raised: a typo in a config file mus
 agent's hooks.
 """
 import json
+from functools import wraps
 import math
 import os
 from dataclasses import asdict, dataclass, field, fields
+
+from .store import Store
+
+def _serialized_edit(fn):
+    """Serialize the entire settings read-modify-write across CLI processes."""
+    @wraps(fn)
+    def edit(path, *args, **kwargs):
+        path = os.path.abspath(path)
+        with Store(os.path.dirname(path)).locked("config") as acquired:
+            if not acquired:
+                raise ValueError("configuration is busy; retry the edit")
+            return fn(path, *args, **kwargs)
+    return edit
+
 
 MICROSKILLS = ("off", "envfacts", "envfacts+distiller", "distiller")
 TOOLPRUNE = ("off", "propose", "auto")
@@ -322,6 +337,7 @@ def _drop_old_names(current, key):
             current.pop(old, None)
 
 
+@_serialized_edit
 def write_config(path, updates):
     """Merge `updates` into the JSON config at `path` (validating each key first), under the
     settings' current names. A `loopguard.<name>` key lands in `loopguard_thresholds`."""
@@ -355,6 +371,7 @@ def write_config(path, updates):
     return current
 
 
+@_serialized_edit
 def unset_config(path, keys):
     """Remove keys (by either name) from the JSON config at `path`, so the next source down
     applies again. `loopguard.<name>` removes one threshold; `loopguard_thresholds` all."""
