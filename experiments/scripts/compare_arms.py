@@ -54,6 +54,11 @@ def cost(r):
     return pricing.effective_tokens(r) + ledger.overhead(r)
 
 
+def percent_delta(arm, baseline):
+    """A zero baseline has no defined relative change."""
+    return f"{100 * (arm - baseline) / baseline:+.1f}%" if baseline else "n/a"
+
+
 def describe(rows, cfgs, label):
     r0 = next(iter(rows.values()), {})
     c0 = next(iter(cfgs.values()), {})
@@ -90,7 +95,9 @@ def main():
 
     bc = [cost(base[i]) for i in pairs]
     ac = [cost(arm[i]) for i in pairs]
-    deltas = [(a - b) / b if b else 0.0 for a, b in zip(ac, bc)]
+    deltas = [(a - b) / b for a, b in zip(ac, bc) if b]
+    delta_mean = st.mean(deltas) if deltas else None
+    delta_median = st.median(deltas) if deltas else None
     br = sum(1 for i in pairs if base[i].get("resolved") is True)
     ar = sum(1 for i in pairs if arm[i].get("resolved") is True)
     flips_lost = [i for i in pairs if base[i].get("resolved") is True and arm[i].get("resolved") is not True]
@@ -101,15 +108,18 @@ def main():
     print(f"  {'':22s} {'baseline':>12s} {'arm':>12s} {'delta':>9s}")
     print(f"  {'resolved':22s} {br:12d} {ar:12d} {ar - br:+9d}")
     print(f"  {'mean eff tokens':22s} {st.mean(bc):12,.0f} {st.mean(ac):12,.0f} "
-          f"{100 * (st.mean(ac) - st.mean(bc)) / st.mean(bc):+8.1f}%")
+          f"{percent_delta(st.mean(ac), st.mean(bc)):>9s}")
     print(f"  {'median eff tokens':22s} {st.median(bc):12,.0f} {st.median(ac):12,.0f} "
-          f"{100 * (st.median(ac) - st.median(bc)) / st.median(bc):+8.1f}%")
+          f"{percent_delta(st.median(ac), st.median(bc)):>9s}")
     print(f"  {'pooled eff tokens':22s} {sum(bc):12,.0f} {sum(ac):12,.0f} "
-          f"{100 * (sum(ac) - sum(bc)) / sum(bc):+8.1f}%")
+          f"{percent_delta(sum(ac), sum(bc)):>9s}")
     print(f"  {'mean steps':22s} {st.mean(base[i].get('num_turns') or 0 for i in pairs):12.1f} "
           f"{st.mean(arm[i].get('num_turns') or 0 for i in pairs):12.1f}")
-    print(f"  paired per-task delta: mean {100 * st.mean(deltas):+.1f}%, median "
-          f"{100 * st.median(deltas):+.1f}%; arm cheaper on {sum(1 for d in deltas if d < 0)}/{len(deltas)} tasks")
+    delta_summary = (f"mean {100 * delta_mean:+.1f}%, median {100 * delta_median:+.1f}%"
+                     if deltas else "mean n/a, median n/a")
+    print(f"  paired per-task delta: {delta_summary}; "
+          f"{len(pairs) - len(deltas)} zero baseline tasks excluded from relative deltas; "
+          f"arm cheaper on {sum(a < b for a, b in zip(ac, bc))}/{len(pairs)} tasks")
     print(f"  mechanism overhead charged to the arm: {oh:,.0f} eff tokens")
     print(f"  resolve flips: lost {len(flips_lost)} {flips_lost[:6]}  won {len(flips_won)} {flips_won[:6]}")
 
@@ -127,7 +137,7 @@ def main():
             if grp:
                 print(f"  {name:12s} n={len(grp):3d} arm mean={st.mean(cost(arm[i]) for i in grp):,.0f} "
                       f"baseline mean={st.mean(cost(base[i]) for i in grp):,.0f} "
-                      f"delta={100 * (st.mean(cost(arm[i]) for i in grp) / st.mean(cost(base[i]) for i in grp) - 1):+.1f}% "
+                      f"delta={percent_delta(st.mean(cost(arm[i]) for i in grp), st.mean(cost(base[i]) for i in grp))} "
                       f"resolved arm={sum(1 for i in grp if arm[i].get('resolved') is True)} "
                       f"base={sum(1 for i in grp if base[i].get('resolved') is True)}")
 
@@ -162,7 +172,8 @@ def main():
         json.dump({"pairs": len(pairs), "baseline_resolved": br, "arm_resolved": ar,
                    "baseline_mean": st.mean(bc), "arm_mean": st.mean(ac),
                    "baseline_median": st.median(bc), "arm_median": st.median(ac),
-                   "paired_delta_mean": st.mean(deltas), "paired_delta_median": st.median(deltas),
+                   "paired_delta_mean": delta_mean, "paired_delta_median": delta_median,
+                   "paired_delta_tasks": len(deltas),
                    "flips_lost": flips_lost, "flips_won": flips_won,
                    "tasks_with_prefix": with_prefix}, open(args.json, "w"), indent=1)
 
