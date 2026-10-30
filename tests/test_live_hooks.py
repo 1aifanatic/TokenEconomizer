@@ -14,11 +14,16 @@ import io
 import json
 import os
 import time
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tokeneconomizer.plugin import denylist, fold, hook, hosts, toolcheck
 from tokeneconomizer.plugin.context import LiveContext
+from tokeneconomizer.plugin.config import LiveConfig
+from tokeneconomizer.plugin.denylist import codex_project_trusted
 from tokeneconomizer.plugin.controller import LiveController
 from tokeneconomizer.plugin.paths import repo_identity, repo_state_dir
 from tokeneconomizer.plugin.store import Store
@@ -1463,3 +1468,138 @@ def test_an_answer_to_a_failed_call_names_the_failure_event(env, repo):
             answered.append((p["hook_event_name"], o["hookSpecificOutput"]["hookEventName"]))
     assert answered and all(sent == named for sent, named in answered)
     assert any(sent == "PostToolUseFailure" for sent, _ in answered)
+
+
+@pytest.mark.parametrize('host,items,catalog,pattern,expected', [
+    ('claude', ['Unused', 'KeepMe'], ['Unused', 'KeepMe'], 'Keep*', ['Unused']),
+    ('claude', ['KeepMe'], ['KeepMe'], 'KeepMe', []),
+    ('copilot', ['docs', 'other'], ['docs-search', 'docs-list', 'other-search'], 'docs-*', ['other']),
+    ('codex', ['collaboration'], [], '*', ['collaboration']),
+])
+def test_pending_list_rechecks_current_tool_protection(tmp_path, monkeypatch, host, items, catalog, pattern, expected):
+    ctx = SimpleNamespace(store=Store(tmp_path), repo=SimpleNamespace(root=str(tmp_path)),
+                          config=LiveConfig(toolprune_protect=[pattern], toolprune_quiet_minutes=0),
+                          host=hosts.HOSTS[host](), env={})
+    ctx.store.write('untool.json', {'proposal': items, 'catalog_tools': catalog,
+                                  'auto_pending': {'items': items, 'since': 1}})
+    applied = []
+    monkeypatch.setattr(fold.denylist, 'applied_for', lambda *args: [])
+    monkeypatch.setattr(fold.denylist, 'kept_for', lambda *args: [])
+    def apply(root, items, store, **kwargs):
+        applied.extend(items)
+        return items
+    monkeypatch.setattr(fold.denylist, 'apply', apply)
+    assert fold.apply_pending(ctx, now=100) is None
+    assert applied == expected
+    state = ctx.store.read('untool.json')
+    assert not state.get('auto_pending')
+    assert not state['proposal']
+
+
+@pytest.mark.parametrize("user", [
+    '[features]\ngoals = true\n',
+    'features.goals = false\n',
+    'features = { hooks = true }\n',
+])
+def test_user_owned_codex_settings_are_not_recorded_as_added(tmp_path, monkeypatch, user):
+    repo = tmp_path / "repo"
+    path = Path(denylist.settings_path(str(repo), "codex"))
+    path.parent.mkdir(parents=True)
+    path.write_text(user)
+    store = Store(str(tmp_path / "state"))
+    monkeypatch.setattr(denylist, "_git_tracked", lambda *args: False)
+    def unexpected(*args, **kwargs):
+        pytest.fail("a no-op must not rewrite or validate the user's file")
+    monkeypatch.setattr(denylist, "_write_text", unexpected)
+    monkeypatch.setattr(denylist, "codex_config_error", unexpected)
+    assert denylist.apply(str(repo), ["goals"], store, host="codex") == []
+    assert denylist.applied_for(store, str(repo), "codex") == []
+    assert path.read_text() == user
+
+
+def test_mixed_codex_apply_records_only_changed_capabilities(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    path = Path(denylist.settings_path(str(repo), "codex"))
+    path.parent.mkdir(parents=True)
+    user = '[features]\ngoals = true\n'
+    path.write_text(user)
+    store = Store(str(tmp_path / "state"))
+    monkeypatch.setattr(denylist, "_git_tracked", lambda *args: False)
+    monkeypatch.setattr(denylist, "codex_config_error", lambda *args: None)
+    assert denylist.apply(str(repo), ["goals", "image_media"], store, host="codex") == ["image_media"]
+    assert denylist.applied_for(store, str(repo), "codex") == ["image_media"]
+    assert denylist.restore(str(repo), store, host="codex") == ["image_media"]
+    assert path.read_text() == user
+
+
+@pytest.mark.parametrize("host,settings", [
+    ("claude", {"permissions": "Workflow"}),
+    ("claude", {"permissions": {"deny": "Workflow"}}),
+    ("claude", {"permissions": {"deny": None}}),
+    ("claude", {"permissions": {"deny": ["Workflow", {"tool": "Read"}]}}),
+    ("copilot", {"disabledMcpServers": "Workflow"}),
+    ("copilot", {"disabledMcpServers": ["Workflow", 42]}),
+])
+@pytest.mark.parametrize("operation", ["apply", "restore"])
+def test_invalid_deny_settings_are_preserved(tmp_path, host, settings, operation):
+    repo = str(tmp_path / "repo")
+    path = Path(denylist.settings_path(repo, host))
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(settings))
+    original = path.read_bytes()
+    store = Store(str(tmp_path / "state"))
+    denylist.write_applied(store, {str(path): ["Workflow"]})
+    state = Path(store.path(denylist.APPLIED)).read_bytes()
+    with pytest.raises(RuntimeError, match="refusing to edit"):
+        if operation == "apply":
+            denylist.apply(repo, ["Other"], store, host=host)
+        else:
+            denylist.restore(repo, store, host=host)
+    assert path.read_bytes() == original
+    assert Path(store.path(denylist.APPLIED)).read_bytes() == state
+
+
+@pytest.mark.parametrize("host", ["claude", "copilot"])
+@pytest.mark.parametrize("comment", ["# {entry}\n", "# Keep {entry} local\n"])
+def test_commented_exclude_does_not_count_as_an_ignore_rule(tmp_path, host, comment):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    rel = denylist._SETTINGS[host].replace("\\", "/")
+    exclude = repo / ".git/info/exclude"
+    original = comment.format(entry="/" + rel)
+    exclude.write_text(original)
+    store = Store(str(tmp_path / "state"))
+    assert denylist.apply(str(repo), ["Example"], store, host=host) == ["Example"]
+    result = subprocess.run(["git", "-c", "core.excludesFile=" + os.devnull, "check-ignore", "--", rel], cwd=repo,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, "generated settings remain visible to git add"
+    assert exclude.read_text().startswith(original)
+    before = exclude.read_bytes()
+    assert denylist._exclude_from_git(str(repo), denylist._SETTINGS[host])
+    assert exclude.read_bytes() == before
+
+
+@pytest.mark.parametrize("header_comment,value", [
+    (" # my project", '"trusted"'),
+    ("", "'trusted'"),
+    (" # my project", "'trusted' # reviewed locally"),
+    ("", '"trusted" # reviewed locally'),
+])
+def test_trusted_project_with_toml_comments_and_literal_values(tmp_path, header_comment, value):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    home = tmp_path / "codex"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        f"[projects.'{repo}']{header_comment}\ntrust_level = {value}\n")
+    assert codex_project_trusted(str(repo), {"CODEX_HOME": str(home)}) is True
+
+
+@pytest.mark.parametrize("value", ['"untrusted"', "'untrusted'", '"trusted-extra"'])
+def test_other_trust_values_are_not_accepted(tmp_path, value):
+    home = tmp_path / "codex"
+    home.mkdir()
+    repo = tmp_path / "project"
+    (home / "config.toml").write_text(
+        f"[projects.'{repo}'] # project\ntrust_level = {value}\n")
+    assert codex_project_trusted(str(repo), {"CODEX_HOME": str(home)}) is False
