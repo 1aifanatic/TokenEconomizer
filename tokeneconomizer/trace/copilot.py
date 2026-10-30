@@ -41,9 +41,10 @@ def copilot_event_calls(lines):
             info = pend.get(d.get("toolCallId"), {"name": "?", "args": {}})
             res = d.get("result") or {}
             content = res.get("content") if isinstance(res, dict) else ""
-            out.append((info["name"], info["args"],
-                        content if isinstance(content, str) else "",
-                        d.get("success")))
+            text = content if isinstance(content, str) else ""
+            if not d.get("success", True) and isinstance(d.get("error"), (str, dict)):
+                text += "\n" + json.dumps(d["error"])
+            out.append((info["name"], info["args"], text, d.get("success")))
     return out
 
 
