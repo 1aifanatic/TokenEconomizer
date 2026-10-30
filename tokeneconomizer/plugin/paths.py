@@ -263,7 +263,13 @@ def repo_identity(cwd, env=None):
     checkout's folder), not the folder one particular checkout sits in."""
     found = find_repo_root(cwd, env)
     root = found or os.path.abspath(cwd or os.getcwd())
-    remote = normalize_remote(origin_url(root)) if found else ""
+    origin = origin_url(root) if found else None
+    if origin and (os.path.isabs(origin) or ":" not in origin):
+        # Local remotes resolve from this checkout. Unlike hosted URL paths, the
+        # .git suffix and platform-specific filename case are part of their identity.
+        remote = os.path.normcase(os.path.realpath(os.path.join(root, origin))).replace(os.sep, "/")
+    else:
+        remote = normalize_remote(origin)
     if remote:
         how, canon, name = BY_REMOTE, remote, remote.rstrip("/").rsplit("/", 1)[-1]
         label = "/".join(remote.split("/")[-2:])
