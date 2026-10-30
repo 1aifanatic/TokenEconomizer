@@ -210,6 +210,9 @@ class LiveConfig:
                 v = value if isinstance(value, bool) else str(value).strip().lower() in (
                     "1", "true", "yes", "on")
             elif isinstance(cur, int):
+                if isinstance(value, bool) or (isinstance(value, float)
+                                               and not value.is_integer()):
+                    raise ValueError("must be an integer")
                 v = int(value)
                 lo = self._MIN.get(key, 1)
                 if v < lo:
@@ -238,6 +241,8 @@ class LiveConfig:
                 raise ValueError("not a number")
             if not math.isfinite(float(value)):
                 raise ValueError("must be finite")
+            if kind is int and not float(value).is_integer():
+                raise ValueError("must be an integer")
             v = kind(float(value)) if kind is int and float(value).is_integer() else kind(value)
         except (TypeError, ValueError, OverflowError) as e:
             self.warnings.append(f"{source}: loopguard.{name}={value!r} rejected ({e})")
