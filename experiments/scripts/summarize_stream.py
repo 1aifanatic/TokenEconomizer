@@ -102,10 +102,9 @@ def summarize(path, raw=False, exclude_init=False):
     for r in rows:
         rec = _row_breakdown(r, path)
         raw_exec = _num(r.get("tokens_total"))
-        eff_exec = pricing.effective_tokens(rec)
         if pricing.has_breakdown(rec):
             n_with_breakdown += 1
-        exec_t = raw_exec if raw else eff_exec
+        exec_t = raw_exec if raw else pricing.effective_tokens(rec)
         # OPTIMIZER + MECHANISM-INTERNAL overhead. optimizer_tokens is the note-writing
         # call; untool_classify_tokens is the one-shot tool-classifier LLM call;
         # untool_judge_tokens is the per-task instruction-aware tool judge; spiral_judge_tokens
