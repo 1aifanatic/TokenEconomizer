@@ -112,7 +112,7 @@ class Store:
             return
         fh = open(self.path(f".{name}.lock"), "a+", encoding="utf-8")
         got = False
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         try:
             while True:
                 try:
@@ -120,7 +120,7 @@ class Store:
                     got = True
                     break
                 except OSError:
-                    if time.time() >= deadline:
+                    if time.monotonic() >= deadline:
                         break
                     time.sleep(0.05)
             yield got
