@@ -33,6 +33,12 @@ IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
 def build(out):
     out = os.path.abspath(out)
     plugin_out = os.path.join(out, "tokeneconomizer")
+    destination = os.path.realpath(plugin_out)
+    for name in ("plugin", "tokeneconomizer", ".claude-plugin"):
+        source = os.path.realpath(os.path.join(REPO, name))
+        common = os.path.commonpath((destination, source))
+        if common in (destination, source):
+            raise ValueError("bundle output must not overlap source directories")
     if os.path.exists(plugin_out):
         shutil.rmtree(plugin_out)
     # plugin/lib holds a symlink to the package for an install from a checkout (see
