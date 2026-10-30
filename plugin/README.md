@@ -151,7 +151,11 @@ start, once it has been quiet for ten minutes. `codex exec` sessions are learned
 end.
 
 **Update.** `git pull` in the clone, then `codex plugin add tokeneconomizer@tokeneconomizer`
-again to refresh Codex's installed copy (your hook approval is kept).
+again to refresh Codex's installed copy. Your hook approval is kept unless the update changed the
+hooks themselves; then Codex asks again (**Hooks need review**, or `/hooks`).
+
+**On Windows,** Codex runs each hook's `commandWindows` in its native shell rather than `sh`; it
+starts the hook with the `python` on PATH (3.10 or later), which `TE_PYTHON` does not change.
 
 **Uninstall.**
 

@@ -66,8 +66,45 @@ def test_hook_files_run_the_launcher_on_every_event(name, host):
             assert f"--host {host}" in h["command"]
         if host == "copilot":
             assert h["command"].startswith('"${PLUGIN_ROOT}/scripts/te-hook"')
-            if event == "SessionEnd" and host == "codex":
+        if host == "codex":
+            assert h["commandWindows"] == CODEX_WINDOWS
+            if event == "SessionEnd":
                 assert h["timeout"] <= 3                  # Codex's cap for SessionEnd
+        else:
+            assert "commandWindows" not in h
+
+
+# Codex on Windows runs a hook's `commandWindows` in a native shell, cmd.exe or PowerShell, where
+# `command`'s sh syntax means nothing (0.164.0). This one reads the same in both: Python finds the
+# plugin in the environment Codex sets, so no path or variable is on the line; the code has no
+# space, double quote, `%` or `$`; and `--%`, PowerShell's stop-parsing token, keeps its `;` and
+# parentheses from PowerShell, while cmd.exe passes it on to Python as `-X --%`, which Python
+# ignores (PowerShell drops it, so there `-X` takes the `-u` instead).
+CODEX_WINDOWS = (
+    "python -X --% -u -X utf8 -c e=__import__('os').environ;r=e.get('PLUGIN_ROOT')"
+    "or(e['CLAUDE_PLUGIN_ROOT']);s=__import__('sys');"
+    "s.argv[:]=[r+'/scripts/te_bootstrap.py','hook','--host','codex'];"
+    "__import__('runpy').run_path(s.argv[0],run_name='__main__')")
+
+
+@pytest.mark.parametrize("shell", ["cmd", "powershell"])
+def test_codex_windows_command_runs_the_hook_as_either_shell_passes_it(tmp_path, shell):
+    """Each shell's reading of `commandWindows`, as the argv Python receives: cmd.exe passes the
+    line on as it is, PowerShell without its `--%`. Neither has a quote to strip."""
+    argv = CODEX_WINDOWS.split()
+    if shell == "powershell":
+        argv.remove("--%")
+    assert argv[0] == "python"
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = {"hook_event_name": "SessionStart", "session_id": "s", "cwd": str(work),
+               "source": "startup", "turn_id": "t"}
+    p = subprocess.run([sys.executable] + argv[1:], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=60,
+                       env=_hook_env(tmp_path, PLUGIN_ROOT=PLUGIN))
+    assert p.returncode == 0 and json.loads(p.stdout) == {}, p.stderr[-1000:]
+    assert list((tmp_path / "home" / "repos").glob("*/codex/sessions/s.json"))   # it ran
+    assert not os.path.exists(tmp_path / "home" / "errors.log")
 
 
 def test_marketplace_lists_the_plugin_directory():
@@ -352,15 +389,20 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
     (copy / "lib").mkdir()
 
-    def te(source):
+    def te(source, literal=False):
+        # As Codex writes it: a TOML basic string (a JSON string is one), or on Windows, for a
+        # path with backslashes, a literal one (0.163.0).
+        value = f"'{source}'" if literal else json.dumps(source, ensure_ascii=False)
         (home / "config.toml").write_text(
             'check_for_update_on_startup = false\n\n[marketplaces.tokeneconomizer]\n'
-            f'source_type = "local"\nsource = "{source}"\n')
+            f'source_type = "local"\nsource = {value}\n')
         return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
                               text=True, timeout=60, cwd=str(tmp_path),
                               env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
                                        TE_CORE_PATH="", PYTHONPATH=""))
     out = te(REPO)
+    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+    out = te(REPO, literal=True)
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
     out = te(str(tmp_path / "nowhere"))
     assert out.returncode == 1 and "core package was not found" in out.stderr
@@ -374,6 +416,32 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
         pytest.skip("symlinks need privileges on Windows")
     out = te("https://github.com/microsoft/TokenEconomizer.git")
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+
+
+def test_the_codex_marketplace_source_is_read_in_either_toml_string_form(tmp_path):
+    r"""Codex on Windows writes a local marketplace's `source` as a TOML literal string, with the
+    extended-length prefix (0.163.0): `source = '\\?\C:\src\TokenEconomizer'`. A basic string
+    has its escapes undone, and another marketplace's `source` is not this one's."""
+    sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+    try:
+        import te_bootstrap
+    finally:
+        sys.path.pop(0)
+    home = tmp_path / "codex"
+    home.mkdir()
+    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
+
+    def source(line):
+        (home / "config.toml").write_text(
+            "[marketplaces.other]\nsource = '/elsewhere'\n\n"
+            f'[marketplaces.tokeneconomizer]\nsource_type = "local"\n{line}\n', encoding="utf-8")
+        return te_bootstrap._marketplace_sources(str(copy))[1:]   # after Codex's git checkout
+
+    assert source(r"source = '\\?\C:\src\TokenEconomizer'") == [r"C:\src\TokenEconomizer"]
+    assert source(r"source = '\\?\UNC\server\share\TokenEconomizer'") == [
+        r"\\server\share\TokenEconomizer"]
+    assert source(r'source = "C:\\src\\Token \"Economizer\""') == [r'C:\src\Token "Economizer"']
+    assert source('source = "/home/me/TokenEconomizer"') == ["/home/me/TokenEconomizer"]
 
 
 def test_a_claude_install_copy_without_symlinks_finds_the_core_in_its_marketplace(tmp_path):

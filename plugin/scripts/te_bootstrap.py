@@ -31,6 +31,28 @@ import sys
 
 MIN_VERSION = (3, 10)
 
+# `source = ...` in Codex's config.toml: a TOML basic string ("...", with escapes) or a literal
+# one ('...', as written), which Codex writes for a path with backslashes (0.163.0, Windows).
+_SOURCE = re.compile(r'''source\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')''')
+
+
+def _toml_string(basic, literal):
+    r"""A `source` value: a literal string as written; a basic string with its `\\` and `\"`
+    undone, any other backslash kept, as a path pasted between double quotes has them."""
+    if literal is not None:
+        return literal
+    return re.sub(r'\\([\\"])', r'\1', basic)
+
+
+def _without_long_prefix(path):
+    r"""`path` without the extended-length prefix Codex puts on a local source on Windows:
+    `\\?\C:\src` is `C:\src`, and `\\?\UNC\server\share` is `\\server\share`."""
+    if path.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + path[8:]
+    if path.startswith("\\\\?\\"):
+        return path[4:]
+    return path
+
 
 def _marketplace_sources(plugin_root):
     """For a Codex install copy (`<home>/plugins/cache/<marketplace>/<plugin>/<version>`), the
@@ -63,11 +85,13 @@ def _marketplace_sources(plugin_root):
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("["):
-            section = line.strip("[]").strip().replace('"', "")
+            section = line.strip("[]").strip().replace('"', "").replace("'", "")
             continue
-        m = re.match(r'source\s*=\s*"([^"]+)"', line)
+        m = _SOURCE.match(line)
         if m and section == "marketplaces." + market:
-            out.append(m.group(1))
+            source = _without_long_prefix(_toml_string(m.group(1), m.group(2)))
+            if source:
+                out.append(source)
     return out
 
 
