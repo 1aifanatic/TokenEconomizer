@@ -2,14 +2,18 @@
 the repository, and put in context once per session -- ranked toward the first prompt where the
 agent's prompt hook can carry context, at session start where it cannot."""
 import os
+import runpy
 import stat
 import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tokeneconomizer.plugin import repomap
 from tokeneconomizer.plugin.config import LiveConfig
+from tokeneconomizer.plugin.store import Store
 from tests.test_live_hooks import call, env, repo  # noqa: F401
 
 FAKE = """#!/bin/sh
@@ -130,3 +134,63 @@ def test_a_real_map_comes_from_tracked_files_and_leaves_the_repository_clean(tmp
     assert "big.min.js" not in out.stdout                    # vendored assets are not mapped
     assert not any(n.startswith(".aider") for n in os.listdir(root))
     assert cache.exists()
+
+
+def _repomap_context(tmp_path):
+    return SimpleNamespace(store=Store(tmp_path / 'host'), repo=SimpleNamespace(root=str(tmp_path)),
+                           config=LiveConfig(repomap_tokens=4096, repomap_python='chosen-python'), env={})
+
+@pytest.mark.parametrize('python', [None, 'python'])
+def test_failed_refresh_preserves_map_provenance(tmp_path, monkeypatch, python):
+    ctx = _repomap_context(tmp_path)
+    prior = dict(map='old map', chars=7, commit='old', tokens_budget=2048, python='old-python')
+    repomap._write_state(ctx, prior)
+    monkeypatch.setattr(repomap, 'head_commit', lambda root: 'new')
+    monkeypatch.setattr(repomap, 'find_python', lambda ctx: python)
+    monkeypatch.setattr(repomap, 'generate', lambda *args: ('', 'failed'))
+    result = repomap.refresh(ctx)
+    for key in prior:
+        assert result[key] == prior[key]
+    assert result['error']
+    assert repomap.stale(ctx)
+
+
+def test_prompt_does_not_run_cached_interpreter_after_explicit_change(tmp_path, monkeypatch):
+    ctx = _repomap_context(tmp_path)
+    repomap._write_state(ctx, dict(map='cached', python='old-python'))
+    calls = []
+    def generate(ctx, python, *args, **kwargs):
+        calls.append(python)
+        return '', 'unavailable'
+    monkeypatch.setattr(repomap, 'generate', generate)
+    block, how = repomap.for_prompt(ctx, 'Fix `parse_config`')
+    assert calls == []
+    assert how == 'cached'
+    assert block.endswith('cached')
+
+
+@pytest.mark.parametrize('use_git', [False, True])
+def test_map_filters_directory_components_relative_to_repo(tmp_path, monkeypatch, capsys, use_git):
+    # An excluded name outside the repository must not exclude the whole tree.
+    repo = tmp_path / 'docs' / 'checkout'
+    repo.mkdir(parents=True)
+    for name in ['core.py', 'builders.py', 'distribution.py', 'docs_api/module.py', 'build/generated.py', 'docs/manual.py']:
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('def example(): pass\n')
+    if use_git:
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+    class RepoMap:
+        def __init__(self, **kwargs):
+            pass
+        def get_repo_map(self, chat, files, **kwargs):
+            return '\n'.join(sorted(os.path.relpath(p, repo) for p in files))
+    monkeypatch.setitem(sys.modules, 'aider', SimpleNamespace())
+    monkeypatch.setitem(sys.modules, 'aider.io', SimpleNamespace(InputOutput=lambda: None))
+    monkeypatch.setitem(sys.modules, 'aider.models', SimpleNamespace(Model=lambda *args: None))
+    monkeypatch.setitem(sys.modules, 'aider.repomap', SimpleNamespace(RepoMap=RepoMap))
+    script = Path(__file__).resolve().parents[1] / 'tokeneconomizer/plugin/repomap_gen.py'
+    monkeypatch.setattr(sys, 'argv', [str(script), str(repo), '100'] + (['--git'] if use_git else []))
+    runpy.run_path(str(script), run_name='__main__')
+    assert set(capsys.readouterr().out.splitlines()) == {'core.py', 'builders.py', 'distribution.py', os.path.join('docs_api', 'module.py')}
