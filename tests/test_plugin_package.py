@@ -352,15 +352,20 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "lib"))
     (copy / "lib").mkdir()
 
-    def te(source):
+    def te(source, literal=False):
+        # As Codex writes it: a TOML basic string (a JSON string is one), or on Windows, for a
+        # path with backslashes, a literal one (0.163.0).
+        value = f"'{source}'" if literal else json.dumps(source, ensure_ascii=False)
         (home / "config.toml").write_text(
             'check_for_update_on_startup = false\n\n[marketplaces.tokeneconomizer]\n'
-            f'source_type = "local"\nsource = "{source}"\n')
+            f'source_type = "local"\nsource = {value}\n')
         return subprocess.run(SH + [str(copy / "scripts" / "te"), "doctor"], capture_output=True,
                               text=True, timeout=60, cwd=str(tmp_path),
                               env=dict(os.environ, TOKENECONOMIZER_HOME=str(tmp_path / "h"),
                                        TE_CORE_PATH="", PYTHONPATH=""))
     out = te(REPO)
+    assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+    out = te(REPO, literal=True)
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
     out = te(str(tmp_path / "nowhere"))
     assert out.returncode == 1 and "core package was not found" in out.stderr
@@ -374,6 +379,32 @@ def test_a_codex_install_copy_finds_the_core_in_the_marketplace_it_came_from(tmp
         pytest.skip("symlinks need privileges on Windows")
     out = te("https://github.com/microsoft/TokenEconomizer.git")
     assert out.returncode == 0 and "python" in out.stdout, out.stderr[-500:]
+
+
+def test_the_codex_marketplace_source_is_read_in_either_toml_string_form(tmp_path):
+    r"""Codex on Windows writes a local marketplace's `source` as a TOML literal string, with the
+    extended-length prefix (0.163.0): `source = '\\?\C:\src\TokenEconomizer'`. A basic string
+    has its escapes undone, and another marketplace's `source` is not this one's."""
+    sys.path.insert(0, os.path.join(PLUGIN, "scripts"))
+    try:
+        import te_bootstrap
+    finally:
+        sys.path.pop(0)
+    home = tmp_path / "codex"
+    home.mkdir()
+    copy = home / "plugins" / "cache" / "tokeneconomizer" / "tokeneconomizer" / "0.1.0"
+
+    def source(line):
+        (home / "config.toml").write_text(
+            "[marketplaces.other]\nsource = '/elsewhere'\n\n"
+            f'[marketplaces.tokeneconomizer]\nsource_type = "local"\n{line}\n', encoding="utf-8")
+        return te_bootstrap._marketplace_sources(str(copy))[1:]   # after Codex's git checkout
+
+    assert source(r"source = '\\?\C:\src\TokenEconomizer'") == [r"C:\src\TokenEconomizer"]
+    assert source(r"source = '\\?\UNC\server\share\TokenEconomizer'") == [
+        r"\\server\share\TokenEconomizer"]
+    assert source(r'source = "C:\\src\\Token \"Economizer\""') == [r'C:\src\Token "Economizer"']
+    assert source('source = "/home/me/TokenEconomizer"') == ["/home/me/TokenEconomizer"]
 
 
 def test_a_claude_install_copy_without_symlinks_finds_the_core_in_its_marketplace(tmp_path):
