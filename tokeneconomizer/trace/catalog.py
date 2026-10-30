@@ -81,14 +81,32 @@ def parse_tool_catalog(debug_log_text, max_desc=200):
     a run using the flat catalog would still claim it had parsed schemas."""
     if not debug_log_text:
         return {}
-    s = (debug_log_text.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\'))
-    out = {}
-    for m in _CATALOG_RE.finditer(s):
-        name = m.group(1)
-        if name in out:
+    # Decode a JSON-in-JSON body before inspecting its description strings. Global
+    # unescaping destroys quoted text and Windows paths inside those descriptions.
+    sources = [debug_log_text]
+    for token in re.finditer(r'"(?:\\.|[^"\\])*"', debug_log_text):
+        try:
+            value = json.loads(token.group())
+        except ValueError:
             continue
-        desc = s[m.end():m.end() + max_desc + 40].split('\n')[0][:max_desc]
-        out[name] = desc
+        if '"name"' in value and '"description"' in value:
+            sources.append(value)
+    # Older debug logs carry escaped schema fragments rather than a valid outer JSON
+    # string. Keep that input form as a fallback, after lossless decoding above.
+    sources.append(debug_log_text.replace('\\"', '"').replace('\\n', '\n')
+                   .replace('\\\\', '\\'))
+    decoder = json.JSONDecoder()
+    out = {}
+    for source in sources:
+        for m in _CATALOG_RE.finditer(source):
+            name = m.group(1)
+            if name in out:
+                continue
+            try:
+                desc, _ = decoder.raw_decode(source, m.end() - 1)
+            except ValueError:
+                continue
+            out[name] = desc.split("\n", 1)[0][:max_desc]
     return out
 
 
