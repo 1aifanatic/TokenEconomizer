@@ -21,16 +21,23 @@ from aider.repomap import RepoMap
 # Directories that are not the library under test. Their contents rank well (many files,
 # many symbols) while never containing the fix, so leaving them in spends the token budget
 # on documentation and benchmarks instead of on the code the agent has to change.
-SKIP = ("/.git", "/__pycache__", "/.tox", "/build", "/dist", "/.eggs", ".egg-info",
-        "/doc/", "/docs/", "/examples/", "/benchmarks/", "/tutorial/", "/asv_benchmarks/")
+SKIP = frozenset((".git", "__pycache__", ".tox", "build", "dist", ".eggs",
+                  "doc", "docs", "examples", "benchmarks", "tutorial", "asv_benchmarks"))
 
 
 # Across every language a repository also carries code it did not write: vendored libraries
 # and minified assets rank high (big, symbol-dense) and are never what a session works on.
-VENDORED = ("/vendor/", "/vendors/", "/third_party/", "/third-party/", "/node_modules/",
-            "/bower_components/", "/static/", "/assets/")
+VENDORED = frozenset(("vendor", "vendors", "third_party", "third-party", "node_modules",
+                      "bower_components", "static", "assets"))
 MINIFIED = (".min.js", ".min.css", ".bundle.js", "-min.js")
 MAX_BYTES = 256 * 1024
+
+
+def _excluded_dir(relative, vendored=False):
+    """Match repository-relative directory components, never ancestors or file prefixes."""
+    excluded = SKIP | VENDORED if vendored else SKIP
+    return any(part in excluded or part.endswith(".egg-info")
+               for part in relative.replace(os.sep, "/").split("/"))
 
 
 def _git_files(repo):
@@ -39,8 +46,8 @@ def _git_files(repo):
                          encoding="utf-8", errors="replace")
     files = []
     for f in out.stdout.split("\0"):
-        path = "/" + f
-        if (not f or any(s in path for s in SKIP + VENDORED) or f.endswith(MINIFIED)):
+        if (not f or _excluded_dir(os.path.dirname(f), vendored=True)
+                or f.endswith(MINIFIED)):
             continue
         full = os.path.join(repo, f)
         try:
@@ -67,7 +74,8 @@ def main():
     else:
         files = []
         for dirpath, _dirnames, filenames in os.walk(repo):
-            if any(s in dirpath for s in SKIP):
+            if _excluded_dir(os.path.relpath(dirpath, repo)):
+                _dirnames[:] = []
                 continue
             files.extend(os.path.join(dirpath, f) for f in filenames if f.endswith(".py"))
     if cache:
