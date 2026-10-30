@@ -367,3 +367,23 @@ def test_config_lock_timeout_preserves_file(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='busy'):
         config.write_config(str(path), {'toolprune': 'off'})
     assert path.read_text() == '{"loopguard":"off"}'
+
+
+@pytest.mark.parametrize("table", ["loopguard_thresholds", "spiral_thresholds"])
+@pytest.mark.parametrize("value", [None, [], [1], "invalid"])
+@pytest.mark.parametrize("operation", ["set", "unset"])
+def test_malformed_threshold_table_is_refused_without_rewriting(tmp_path, table, value, operation):
+    path = tmp_path / "config.json"
+    original = json.dumps({table: value, "shadow": True})
+    path.write_text(original)
+    with pytest.raises(ValueError, match=table):
+        if operation == "set":
+            write_config(str(path), {"loopguard.min_turns": 12})
+        else:
+            unset_config(str(path), ["loopguard.min_turns"])
+    assert path.read_text() == original
+    # Removing the whole setting remains a way to repair the invalid table.
+    unset_config(str(path), [table])
+    assert json.loads(path.read_text()) == {"shadow": True}
+    write_config(str(path), {"loopguard.min_turns": 12})
+    assert load_config(str(tmp_path), env={}).loopguard_thresholds == {"min_turns": 12}

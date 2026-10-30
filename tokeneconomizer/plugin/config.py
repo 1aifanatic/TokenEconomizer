@@ -358,6 +358,13 @@ def _drop_flat_thresholds(current, names=None):
             current.pop(key)
 
 
+def _validate_threshold_tables(current):
+    for table in ("loopguard_thresholds", "spiral_thresholds"):
+        if table in current and not isinstance(current[table], dict):
+            raise ValueError(f"{table} must be a JSON object; remove it with "
+                             f"`config unset {table}` before editing thresholds")
+
+
 @_serialized_edit
 def write_config(path, updates):
     """Merge `updates` into the JSON config at `path` (validating each key first), under the
@@ -371,6 +378,7 @@ def write_config(path, updates):
     if bad:
         raise ValueError("; ".join(probe.warnings))
     current = _read(path, for_write=True)
+    _validate_threshold_tables(current)
     # an old file's thresholds move to the new name, so nothing pinned is lost
     if "spiral_thresholds" in current:
         old = current.pop("spiral_thresholds")
@@ -404,6 +412,8 @@ def unset_config(path, keys):
     if bad:
         raise ValueError(f"unknown key(s): {', '.join(bad)}")
     current = _read(path, for_write=True)
+    if any(_threshold_name(k) is not None for k in keys):
+        _validate_threshold_tables(current)
     for k in keys:
         name = _threshold_name(k)
         if name is not None:
