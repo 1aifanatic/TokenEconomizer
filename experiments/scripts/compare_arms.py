@@ -41,6 +41,8 @@ def load_cell(cell):
         if not inst:
             continue
         rows[inst] = r
+        # Metadata belongs to this attempt, even when its config is missing or incomplete.
+        cfgs.pop(inst, None)
         cf = os.path.join(os.path.dirname(rowf), "run_config.json")
         if os.path.exists(cf):
             try:
