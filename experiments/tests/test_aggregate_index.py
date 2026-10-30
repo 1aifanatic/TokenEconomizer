@@ -122,3 +122,34 @@ def test_superseded_run_dirs_are_not_double_counted(tree):
     with open(os.path.join(tree, "index", "all_rows.csv")) as f:
         kept = [r for r in csv.DictReader(f) if r["arm"] == "repomap"]
     assert [r["num_turns"] for r in kept] == ["99"]
+
+
+@pytest.mark.parametrize("alias", ["explicit", "relative", "symlink"])
+def test_explicit_canonical_output_preserves_existing_index(tree, tmp_path, monkeypatch, alias):
+    from pathlib import Path
+
+    _run([tree])
+    index = Path(tree) / "index"
+    before = {p.name: p.read_bytes() for p in index.iterdir()}
+    if alias == "relative":
+        monkeypatch.chdir(tree)
+        out = "./index"
+    elif alias == "symlink":
+        link = tmp_path / "index_alias"
+        try:
+            link.symlink_to(index, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlinks unavailable")
+        out = str(link)
+    else:
+        out = str(index)
+    with pytest.raises(SystemExit) as exc:
+        _run([tree, "--arms", "repomap", "--out", out])
+    assert exc.value.code != 0
+    assert {p.name: p.read_bytes() for p in index.iterdir()} == before
+
+
+def test_explicit_canonical_output_allows_all_arms(tree):
+    _run([tree, "--arms", "baseline", "repomap", "--out", os.path.join(tree, "index")])
+    assert _cells(os.path.join(tree, "index")) == [
+        ("baseline", "sympy", "2"), ("repomap", "sympy", "1")]
