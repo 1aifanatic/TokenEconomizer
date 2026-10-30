@@ -323,7 +323,21 @@ def apply_pending(ctx, now=None):
         root = pend.get("root") or ctx.repo.root
         done = set(denylist.applied_for(ctx.store, root, ctx.host.name))
         done |= set(denylist.kept_for(ctx.store, root, ctx.host.name))
-        items = [t for t in pend.get("items") or [] if t not in done]
+        protected_items = set()
+        if ctx.host.name in ("claude", "copilot"):
+            protected = LiveAdapter(ctx.host, root,
+                                    protect=ctx.config.toolprune_protect).protected_tools()
+            if ctx.host.name == "claude":
+                protected_items = {t for t in pend.get("items") or [] if t in protected}
+            else:
+                # Copilot removes whole servers: one protected tool protects its server.
+                servers = trace.copilot_mcp_servers(ctx.env) | set(pend.get("items") or [])
+                protected_items = {trace.mcp_server_of(t, servers)
+                                   for t in unt.get("catalog_tools") or [] if t in protected}
+            unt["proposal"] = [t for t in unt.get("proposal") or []
+                               if t not in protected_items]
+        items = [t for t in pend.get("items") or []
+                 if t not in done and t not in protected_items]
         if items and ctx.config.toolprune == "auto" and not ctx.config.shadow:
             idle = now - last_activity(ctx)
             quiet_s = ctx.config.toolprune_quiet_minutes * 60
